@@ -80,6 +80,8 @@ Codex 与 Bambu 首次运行默认关闭，不会在用户启用前自动安装�
 
 ## 常见问题
 
+大多数软件问题可以借助 Codex 等 AI 工具排查和解决；如果需要增加新功能，也可以借助 AI 完成开发。
+
 <details>
 <summary><strong>管理页面没有自动打开</strong></summary>
 
