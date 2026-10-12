@@ -5,6 +5,8 @@ idf_component_register(
         "connectivity.c"
         "codex_bridge_client.c"
         "codex_bridge_protocol.c"
+        "codex_snapshot_merge.c"
+        "management_snapshot.c"
         "device_identity.c"
         "device_config.c"
         "ble_bridge.c"

@@ -1,0 +1,35 @@
+#pragma once
+
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+
+#include "app_state.h"
+#include "cJSON.h"
+
+void codex_snapshot_merge_status(codex_snapshot_t *target, const cJSON *data);
+void codex_snapshot_merge_tasks(
+    codex_snapshot_t *target,
+    const cJSON *data,
+    codex_task_detail_t *tasks,
+    size_t *count,
+    size_t capacity
+);
+void codex_snapshot_merge_result(codex_snapshot_t *target, const cJSON *data);
+void codex_snapshot_attach_result(
+    codex_task_detail_t *tasks,
+    size_t count,
+    const char *thread_id,
+    const char *message_id
+);
+void codex_snapshot_apply_read_state(
+    codex_snapshot_t *target,
+    codex_task_detail_t *tasks,
+    size_t count,
+    const cJSON *data
+);
+void codex_snapshot_apply_source_state(
+    codex_snapshot_t *target,
+    bool codex_online,
+    bool management_online
+);

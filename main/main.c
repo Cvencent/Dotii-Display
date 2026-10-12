@@ -97,7 +97,10 @@ void app_main(void)
        display claims its internal DMA buffers so coexistence has contiguous
        controller memory without sacrificing the screen pipeline. */
     connectivity_start();
-    esp_err_t codex_bridge_error = codex_bridge_client_start(NULL, NULL);
+    esp_err_t codex_bridge_error = codex_bridge_client_start(
+        connectivity_apply_codex_bridge_message,
+        NULL
+    );
     if (codex_bridge_error != ESP_OK) {
         ESP_LOGW(TAG, "CodexBridge client unavailable: %s",
                  esp_err_to_name(codex_bridge_error));

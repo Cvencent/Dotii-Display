@@ -61,10 +61,13 @@ typedef struct {
     codex_conversation_mode_t conversation_mode;
     char thread_id[64];
     char title[96];
+    char message_id[80];
+    char result_message_id[80];
     char *last_user_message;
     char *conversation_text;
     uint32_t duration_seconds;
     uint32_t message_count;
+    uint32_t read_count;
     time_t started_at;
     time_t updated_at;
 } codex_task_detail_t;
@@ -73,6 +76,8 @@ typedef struct {
     bool valid;
     bool preview_data;
     bool source_online;
+    bool codex_source_online;
+    bool management_source_online;
     bool stale;
     bool five_hour_available;
     bool weekly_available;
@@ -107,6 +112,9 @@ typedef struct {
     char plan_type[32];
     codex_task_status_t status;
     char title[96];
+    char thread_id[64];
+    char message_id[80];
+    uint32_t read_count;
     char last_user_message[1536];
     char last_assistant_message[256];
     char conversation_text[3073];

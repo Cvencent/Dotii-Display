@@ -1,9 +1,14 @@
 idf_component_register(
     SRCS
         "test_codex_bridge_protocol.c"
+        "test_codex_snapshot_merge.c"
+        "test_management_snapshot.c"
         "device_config.c"
         "../../../main/codex_bridge_client.c"
         "../../../main/codex_bridge_protocol.c"
+        "../../../main/codex_snapshot_merge.c"
+        "../../../main/management_snapshot.c"
+        "../../../main/app_state.c"
         "../../../main/device_identity.c"
     INCLUDE_DIRS
         "."
@@ -19,4 +24,5 @@ idf_component_register(
         lwip
         nvs_flash
         unity
+    WHOLE_ARCHIVE
 )

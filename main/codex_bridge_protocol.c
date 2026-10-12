@@ -165,6 +165,10 @@ esp_err_t codex_bridge_protocol_feed(
         clear_message_fields(message);
         strlcpy(message->type, type->valuestring, sizeof(message->type));
         copy_capabilities(root, message);
+        if (strcmp(type->valuestring, "read_state") == 0) {
+            copy_string(root, "message_id", message->message_id, sizeof(message->message_id));
+            message->data = cJSON_Duplicate(root, true);
+        }
         if (strcmp(type->valuestring, "bridge_ready") != 0 &&
             strcmp(type->valuestring, "capabilities_update") != 0 &&
             strcmp(type->valuestring, "read_state") != 0 &&

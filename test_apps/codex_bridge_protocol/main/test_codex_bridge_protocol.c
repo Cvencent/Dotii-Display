@@ -265,6 +265,26 @@ TEST_CASE("unknown message type is ignored without closing", "[codex_bridge]")
     codex_bridge_protocol_reset_message(&message);
 }
 
+TEST_CASE("read_state exposes message identity and readers", "[codex_bridge]")
+{
+    codex_bridge_message_t message = {0};
+    const char *line =
+        "{\"type\":\"read_state\",\"message_id\":\"task:thread-1\","
+        "\"read_by\":[\"dotii-a\",\"dotii-b\"]}\n";
+    TEST_ESP_OK(codex_bridge_protocol_feed(line, strlen(line), &message));
+    TEST_ASSERT_EQUAL_STRING("read_state", message.type);
+    TEST_ASSERT_NOT_NULL(message.data);
+    TEST_ASSERT_EQUAL_STRING(
+        "task:thread-1",
+        cJSON_GetObjectItemCaseSensitive(message.data, "message_id")->valuestring
+    );
+    TEST_ASSERT_EQUAL_INT(
+        2,
+        cJSON_GetArraySize(cJSON_GetObjectItemCaseSensitive(message.data, "read_by"))
+    );
+    codex_bridge_protocol_reset_message(&message);
+}
+
 TEST_CASE("message chunks reassemble in sequence order", "[codex_bridge]")
 {
     codex_bridge_message_t message = {0};
@@ -387,5 +407,7 @@ void app_main(void)
     esp_netif_create_default_wifi_sta();
     UNITY_BEGIN();
     unity_run_tests_by_tag("[codex_bridge]", false);
+    unity_run_tests_by_tag("[codex_merge]", false);
+    unity_run_tests_by_tag("[management_merge]", false);
     UNITY_END();
 }
