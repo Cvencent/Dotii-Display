@@ -1,6 +1,7 @@
 idf_component_register(
     SRCS
         "test_codex_bridge_protocol.c"
+        "test_codex_read_tracker.c"
         "test_codex_snapshot_merge.c"
         "test_management_snapshot.c"
         "device_config.c"
@@ -10,6 +11,7 @@ idf_component_register(
         "../../../main/management_snapshot.c"
         "../../../main/app_state.c"
         "../../../main/device_identity.c"
+        "../../../main/codex_read_tracker.c"
     INCLUDE_DIRS
         "."
         "../../../main"

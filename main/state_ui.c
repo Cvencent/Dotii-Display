@@ -9,6 +9,7 @@
 #include "board_input.h"
 #include "bsp/display.h"
 #include "codex_bridge_client.h"
+#include "codex_read_tracker.h"
 #include "connectivity.h"
 #include "device_config.h"
 #include "esp_attr.h"
@@ -43,7 +44,6 @@ LV_FONT_DECLARE(ui_font_fixed_20);
 #define COLOR_WARNING 0xF2C66D
 #define COLOR_DANGER 0xFF766F
 #define PAGE_COUNT 4
-#define READ_ACK_DELAY_MS 2000
 #define TITLE_HEIGHT 30
 #define DISPLAY_ANGLE_DEFAULT_TENTHS 840
 #define DISPLAY_ANGLE_MIN_TENTHS 800
@@ -177,10 +177,6 @@ static size_t s_detail_task_count;
 static char s_detail_thread_id[64];
 static char s_read_ack_message_id[80];
 static char s_read_ack_result_message_id[80];
-static char s_read_ack_pending_id[80];
-static char s_read_ack_pending_result_id[80];
-static uint32_t s_read_ack_started_ms;
-static bool s_read_ack_pending;
 static uint32_t s_dotii_touch_started;
 static uint32_t s_dotii_state_started;
 static uint32_t s_dotii_state_token;
@@ -1293,21 +1289,23 @@ static void render_codex_detail(void)
                         previous_updated_at != s_detail_task->updated_at;
     strlcpy(s_detail_thread_id, s_detail_task->thread_id, sizeof(s_detail_thread_id));
 
-    if (entering_detail || thread_changed ||
-        strcmp(s_read_ack_pending_id, s_detail_task->message_id) != 0 ||
-        strcmp(s_read_ack_pending_result_id, s_detail_task->result_message_id) != 0) {
-        strlcpy(s_read_ack_pending_id, s_detail_task->message_id,
-                sizeof(s_read_ack_pending_id));
-        strlcpy(s_read_ack_pending_result_id, s_detail_task->result_message_id,
-                sizeof(s_read_ack_pending_result_id));
-        s_read_ack_started_ms = lv_tick_get();
-        s_read_ack_pending = true;
-    }
+    codex_read_tracker_visit(
+        s_detail_task->message_id,
+        s_detail_task->result_message_id,
+        lv_tick_get()
+    );
 
     lv_label_set_text(s_detail_title, s_detail_task->title[0] ? s_detail_task->title : "暂无任务");
-    lv_label_set_text_fmt(s_detail_meta, "%s · %lu 分钟",
-                          app_state_status_text(s_detail_task->status),
-                          (unsigned long)(s_detail_task->duration_seconds / 60));
+    if (s_detail_task->read_count > 0) {
+        lv_label_set_text_fmt(s_detail_meta, "%s · %lu 分钟 · %lu 人已读",
+                              app_state_status_text(s_detail_task->status),
+                              (unsigned long)(s_detail_task->duration_seconds / 60),
+                              (unsigned long)s_detail_task->read_count);
+    } else {
+        lv_label_set_text_fmt(s_detail_meta, "%s · %lu 分钟",
+                              app_state_status_text(s_detail_task->status),
+                              (unsigned long)(s_detail_task->duration_seconds / 60));
+    }
     lv_label_set_text(s_user_message, s_detail_task->last_user_message != NULL &&
                       s_detail_task->last_user_message[0] ?
                       s_detail_task->last_user_message : "暂无用户消息");
@@ -2359,31 +2357,42 @@ static void ui_timer(lv_timer_t *timer)
     if (xQueueReceive(s_snapshot_queue, &s_snapshot, 0) == pdTRUE) update_snapshot(&s_snapshot);
 
     if (s_current == s_detail && s_screen_on && !s_screen_saver_active &&
-        s_read_ack_pending &&
-        lv_tick_elaps(s_read_ack_started_ms) >= READ_ACK_DELAY_MS) {
+        s_detail_task != NULL &&
+        codex_read_tracker_take_due(
+            s_detail_task->message_id,
+            s_detail_task->result_message_id,
+            lv_tick_get()
+        )) {
         bool acknowledged = true;
-        if (s_read_ack_pending_id[0] != '\0' &&
-            strcmp(s_read_ack_message_id, s_read_ack_pending_id) != 0 &&
-            codex_bridge_client_send_read_ack(s_read_ack_pending_id) == ESP_OK) {
-            strlcpy(s_read_ack_message_id, s_read_ack_pending_id,
+        if (s_detail_task->message_id[0] != '\0' &&
+            strcmp(s_read_ack_message_id, s_detail_task->message_id) != 0 &&
+            codex_bridge_client_send_read_ack(s_detail_task->message_id) == ESP_OK) {
+            strlcpy(s_read_ack_message_id, s_detail_task->message_id,
                     sizeof(s_read_ack_message_id));
-        } else if (s_read_ack_pending_id[0] != '\0' &&
-                   strcmp(s_read_ack_message_id, s_read_ack_pending_id) != 0) {
+        } else if (s_detail_task->message_id[0] != '\0' &&
+                   strcmp(s_read_ack_message_id, s_detail_task->message_id) != 0) {
             acknowledged = false;
         }
-        if (acknowledged && s_read_ack_pending_result_id[0] != '\0' &&
-            strcmp(s_read_ack_result_message_id, s_read_ack_pending_result_id) != 0 &&
-            codex_bridge_client_send_read_ack(s_read_ack_pending_result_id) == ESP_OK) {
-            strlcpy(s_read_ack_result_message_id, s_read_ack_pending_result_id,
+        if (s_detail_task->result_message_id[0] != '\0' &&
+            strcmp(s_read_ack_result_message_id, s_detail_task->result_message_id) != 0 &&
+            acknowledged &&
+            codex_bridge_client_send_read_ack(s_detail_task->result_message_id) == ESP_OK) {
+            strlcpy(s_read_ack_result_message_id, s_detail_task->result_message_id,
                     sizeof(s_read_ack_result_message_id));
-        } else if (acknowledged && s_read_ack_pending_result_id[0] != '\0' &&
+        } else if (s_detail_task->result_message_id[0] != '\0' &&
                    strcmp(s_read_ack_result_message_id,
-                          s_read_ack_pending_result_id) != 0) {
+                          s_detail_task->result_message_id) != 0) {
             acknowledged = false;
         }
-        if (acknowledged) s_read_ack_pending = false;
+        if (!acknowledged) {
+            codex_read_tracker_rearm(
+                s_detail_task->message_id,
+                s_detail_task->result_message_id,
+                lv_tick_get()
+            );
+        }
     } else if (s_current != s_detail) {
-        s_read_ack_pending = false;
+        codex_read_tracker_reset();
     }
 
     time_t now = time(NULL);

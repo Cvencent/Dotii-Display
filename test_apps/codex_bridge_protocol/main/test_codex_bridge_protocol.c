@@ -407,6 +407,7 @@ void app_main(void)
     esp_netif_create_default_wifi_sta();
     UNITY_BEGIN();
     unity_run_tests_by_tag("[codex_bridge]", false);
+    unity_run_tests_by_tag("[codex_read]", false);
     unity_run_tests_by_tag("[codex_merge]", false);
     unity_run_tests_by_tag("[management_merge]", false);
     UNITY_END();
