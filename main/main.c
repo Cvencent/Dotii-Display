@@ -3,6 +3,7 @@
 #include "ble_bridge.h"
 #include "bsp/esp-bsp.h"
 #include "connectivity.h"
+#include "codex_bridge_client.h"
 #include "device_config.h"
 #include "device_identity.h"
 #include "esp_app_desc.h"
@@ -96,6 +97,11 @@ void app_main(void)
        display claims its internal DMA buffers so coexistence has contiguous
        controller memory without sacrificing the screen pipeline. */
     connectivity_start();
+    esp_err_t codex_bridge_error = codex_bridge_client_start(NULL, NULL);
+    if (codex_bridge_error != ESP_OK) {
+        ESP_LOGW(TAG, "CodexBridge client unavailable: %s",
+                 esp_err_to_name(codex_bridge_error));
+    }
     esp_err_t ble_error = ble_bridge_prepare();
     if (ble_error == ESP_OK) ble_error = ble_bridge_start();
     if (ble_error != ESP_OK) {

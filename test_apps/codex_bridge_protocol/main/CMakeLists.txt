@@ -1,0 +1,22 @@
+idf_component_register(
+    SRCS
+        "test_codex_bridge_protocol.c"
+        "device_config.c"
+        "../../../main/codex_bridge_client.c"
+        "../../../main/codex_bridge_protocol.c"
+        "../../../main/device_identity.c"
+    INCLUDE_DIRS
+        "."
+        "../../../main"
+    REQUIRES
+        esp_app_format
+        esp_event
+        esp_netif
+        esp_timer
+        esp_wifi
+        espressif__cjson
+        freertos
+        lwip
+        nvs_flash
+        unity
+)
