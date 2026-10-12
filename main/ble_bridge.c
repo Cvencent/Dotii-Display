@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "cJSON.h"
+#include "device_identity.h"
 #include "connectivity.h"
 #include "device_config.h"
 #include "esp_app_desc.h"
@@ -134,8 +135,10 @@ static void apply_configuration(void)
                  copy_required_string(root, "password", next.wifi_password, sizeof(next.wifi_password), true) &&
                  copy_required_string(root, "bridge_url", next.bridge_url, sizeof(next.bridge_url), false) &&
                  copy_required_string(root, "bridge_token", next.bridge_token, sizeof(next.bridge_token), false) &&
+                 copy_required_string(root, "codex_bridge_token", next.codex_bridge_token, sizeof(next.codex_bridge_token), false) &&
                  (strncmp(next.bridge_url, "http://", 7) == 0 || strncmp(next.bridge_url, "https://", 8) == 0) &&
-                 strlen(next.bridge_token) >= 16;
+                 strlen(next.bridge_token) >= 16 &&
+                 strlen(next.codex_bridge_token) >= 16;
     if (!valid) {
         set_response("{\"ok\":false,\"error\":\"invalid_config\"}");
         cJSON_Delete(root);
@@ -209,7 +212,9 @@ static int gatt_access(uint16_t conn_handle, uint16_t attr_handle,
         connectivity_get_bridge_summary(bridge, sizeof(bridge));
         char status[RESPONSE_MAX];
         snprintf(status, sizeof(status),
-                 "{\"v\":1,\"name\":\"Dotii\",\"firmware\":\"%s\",\"provisioned\":%s,\"wifi\":%s,\"bridge\":\"%s\"}",
+                 "{\"v\":1,\"device_id\":\"%s\",\"name\":\"Dotii\",\"firmware\":\"%s\","
+                 "\"provisioned\":%s,\"wifi\":%s,\"bridge\":\"%s\"}",
+                 device_identity_get(),
                  esp_app_get_description()->version,
                  device_config_get()->provisioned ? "true" : "false",
                  connectivity_is_wifi_connected() ? "true" : "false", bridge);

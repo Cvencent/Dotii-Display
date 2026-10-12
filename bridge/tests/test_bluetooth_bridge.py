@@ -21,6 +21,8 @@ from bluetooth_bridge import (
     _is_stale_windows_pairing_error,
 )
 from platforms.macos import MacOSPlatformAdapter
+import codex_bridge
+from codex_bridge_link import PairingToken
 
 
 class BluetoothPacketTests(unittest.TestCase):
@@ -28,6 +30,7 @@ class BluetoothPacketTests(unittest.TestCase):
         body = _configuration_payload(
             ssid="Studio", password="secret", bridge_url="http://192.168.1.2:8787/api/v1/snapshot",
             bridge_token="0123456789abcdef0123456789abcdef",
+            codex_bridge_token="codex-token-1234567890",
         )
         packets = _configuration_packets(body, 11)
         self.assertEqual(packets[0][0], 1)
@@ -42,12 +45,14 @@ class BluetoothPacketTests(unittest.TestCase):
             _configuration_payload(
                 ssid="x" * 33, password="", bridge_url="http://host/api/v1/snapshot",
                 bridge_token="0123456789abcdef",
+                codex_bridge_token="codex-token-1234567890",
             )
 
     def test_rejects_short_token(self):
         with self.assertRaisesRegex(ValueError, "令牌"):
             _configuration_payload(
                 ssid="Studio", password="", bridge_url="http://host/api/v1/snapshot", bridge_token="short",
+                codex_bridge_token="codex-token-1234567890",
             )
 
     def test_existing_device_token_can_authorize_management_token_migration(self):
@@ -56,12 +61,34 @@ class BluetoothPacketTests(unittest.TestCase):
             password="secret",
             bridge_url="http://host/api/v1/snapshot",
             bridge_token="new-management-token-1234",
+            codex_bridge_token="codex-token-1234567890",
             current_token="current-device-token-1234",
         )
         payload = json.loads(body)
 
         self.assertEqual(payload["auth"], "current-device-token-1234")
         self.assertEqual(payload["bridge_token"], "new-management-token-1234")
+
+    def test_configuration_includes_codex_bridge_token(self):
+        body = _configuration_payload(
+            ssid="Studio",
+            password="secret",
+            bridge_url="http://host/api/v1/snapshot",
+            bridge_token="management-token-1234",
+            codex_bridge_token="codex-token-1234567890",
+        )
+        payload = json.loads(body)
+        self.assertEqual(payload["codex_bridge_token"], "codex-token-1234567890")
+
+    def test_configuration_rejects_short_codex_bridge_token(self):
+        with self.assertRaisesRegex(ValueError, "Codex Bridge 令牌"):
+            _configuration_payload(
+                ssid="Studio",
+                password="",
+                bridge_url="http://host/api/v1/snapshot",
+                bridge_token="management-token-1234",
+                codex_bridge_token="short",
+            )
 
     def test_rejects_invalid_current_device_token(self):
         with self.assertRaisesRegex(ValueError, "当前设备令牌"):
@@ -70,6 +97,7 @@ class BluetoothPacketTests(unittest.TestCase):
                 password="",
                 bridge_url="http://host/api/v1/snapshot",
                 bridge_token="new-management-token-1234",
+                codex_bridge_token="codex-token-1234567890",
                 current_token="short",
             )
 
@@ -368,6 +396,7 @@ class BluetoothPairingRecoveryTests(unittest.IsolatedAsyncioTestCase):
             password="secret",
             bridge_url="http://192.168.1.2:8787/api/v1/snapshot",
             bridge_token="0123456789abcdef0123456789abcdef",
+            codex_bridge_token="codex-token-1234567890",
         )
 
         response = await service._configure_async("AA:BB", body)
@@ -385,6 +414,70 @@ class BluetoothPairingRecoveryTests(unittest.IsolatedAsyncioTestCase):
             )
         )
         self.assertFalse(_is_stale_windows_pairing_error(OSError("Device disconnected")))
+
+
+class CodexBridgeConfigureRouteTests(unittest.TestCase):
+    def test_configure_route_claims_codex_token_from_scanned_device_id(self):
+        bluetooth = SimpleNamespace(
+            device_status={"device_id": "dotii-001122334455"},
+            start_configure=mock.Mock(return_value=True),
+        )
+        server = SimpleNamespace(
+            bluetooth=bluetooth,
+            token="management-token-1234",
+            server_port=8787,
+        )
+        pairing = PairingToken(
+            device_id="dotii-001122334455",
+            token="codex-token-1234567890",
+            port=8765,
+        )
+        with mock.patch.object(
+            codex_bridge, "local_ipv4", return_value="192.168.1.2"
+        ), mock.patch.object(
+            codex_bridge,
+            "claim_codex_bridge_token",
+            return_value=pairing,
+        ) as claim:
+            started = codex_bridge.configure_bluetooth(server, {
+                "address": "AA:BB",
+                "ssid": "Studio",
+                "password": "secret",
+            })
+
+        self.assertTrue(started)
+        claim.assert_called_once_with("dotii-001122334455")
+        bluetooth.start_configure.assert_called_once_with(
+            address="AA:BB",
+            ssid="Studio",
+            password="secret",
+            bridge_url="http://192.168.1.2:8787/api/v1/snapshot",
+            bridge_token="management-token-1234",
+            codex_bridge_token="codex-token-1234567890",
+            current_token="",
+        )
+
+    def test_configure_route_rejects_missing_device_id(self):
+        bluetooth = SimpleNamespace(
+            device_status={"name": "Dotii"},
+            start_configure=mock.Mock(),
+        )
+        server = SimpleNamespace(
+            bluetooth=bluetooth,
+            token="management-token-1234",
+            server_port=8787,
+        )
+        with mock.patch.object(
+            codex_bridge, "claim_codex_bridge_token"
+        ) as claim, self.assertRaisesRegex(ValueError, "device_id"):
+            codex_bridge.configure_bluetooth(server, {
+                "address": "AA:BB",
+                "ssid": "Studio",
+                "password": "secret",
+            })
+
+        claim.assert_not_called()
+        bluetooth.start_configure.assert_not_called()
 
 
 if __name__ == "__main__":

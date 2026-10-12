@@ -33,6 +33,7 @@ from urllib.parse import unquote, urlparse
 from codex_app_server import probe_app_server, run_collector
 from bambu_client import BambuConfigStore, BambuService
 from bluetooth_bridge import BluetoothBridge
+from codex_bridge_link import claim_codex_bridge_token
 from firmware_flasher import FirmwareFlasher
 from platforms import current_platform
 from runtime_paths import (
@@ -262,6 +263,25 @@ def local_ipv4() -> str:
         return "127.0.0.1"
     finally:
         sock.close()
+
+
+def configure_bluetooth(server: Any, payload: dict[str, Any]) -> bool:
+    if not isinstance(payload, dict):
+        raise ValueError("配置请求无效")
+    device_id = server.bluetooth.device_status.get("device_id")
+    if not isinstance(device_id, str) or not device_id:
+        raise ValueError("未读取到 device_id，请重新扫描 Dotii")
+    pairing = claim_codex_bridge_token(device_id)
+    address = local_ipv4()
+    return server.bluetooth.start_configure(
+        address=payload.get("address"),
+        ssid=payload.get("ssid"),
+        password=payload.get("password"),
+        bridge_url=f"http://{address}:{server.server_port}/api/v1/snapshot",
+        bridge_token=server.token,
+        codex_bridge_token=pairing.token,
+        current_token=payload.get("current_token", ""),
+    )
 
 
 def _unbounded_text(value: Any, field: str) -> str:
@@ -1278,14 +1298,7 @@ class BridgeHandler(BaseHTTPRequestHandler):
                 return
             try:
                 payload = self._read_admin_action()
-                address = local_ipv4()
-                bridge_url = f"http://{address}:{self.bridge.server_port}/api/v1/snapshot"
-                started = self.bridge.bluetooth.start_configure(
-                    address=payload.get("address"), ssid=payload.get("ssid"),
-                    password=payload.get("password"), bridge_url=bridge_url,
-                    bridge_token=self.bridge.token,
-                    current_token=payload.get("current_token", ""),
-                )
+                started = configure_bluetooth(self.bridge, payload)
                 status = HTTPStatus.ACCEPTED if started else HTTPStatus.CONFLICT
                 self._send_json(status, {"ok": started})
             except (OSError, ValueError, UnicodeDecodeError, json.JSONDecodeError) as error:

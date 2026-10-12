@@ -38,6 +38,7 @@ esp_err_t device_config_init(void)
     load_string(handle, "wifi_pass", s_config.wifi_password, sizeof(s_config.wifi_password));
     load_string(handle, "bridge_url", s_config.bridge_url, sizeof(s_config.bridge_url));
     load_string(handle, "bridge_tok", s_config.bridge_token, sizeof(s_config.bridge_token));
+    load_string(handle, "codex_tok", s_config.codex_bridge_token, sizeof(s_config.codex_bridge_token));
     uint8_t provisioned = 0;
     (void)nvs_get_u8(handle, "provisioned", &provisioned);
     s_config.provisioned = provisioned == 1;
@@ -61,6 +62,7 @@ esp_err_t device_config_save(const device_config_values_t *values)
         (error = nvs_set_str(handle, "wifi_pass", values->wifi_password)) == ESP_OK &&
         (error = nvs_set_str(handle, "bridge_url", values->bridge_url)) == ESP_OK &&
         (error = nvs_set_str(handle, "bridge_tok", values->bridge_token)) == ESP_OK &&
+        (error = nvs_set_str(handle, "codex_tok", values->codex_bridge_token)) == ESP_OK &&
         (error = nvs_set_u8(handle, "provisioned", 1)) == ESP_OK) {
         error = nvs_commit(handle);
     }

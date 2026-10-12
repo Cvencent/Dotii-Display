@@ -8,6 +8,7 @@ typedef struct {
     char wifi_password[65];
     char bridge_url[256];
     char bridge_token[65];
+    char codex_bridge_token[65];
     bool provisioned;
 } device_config_values_t;
 

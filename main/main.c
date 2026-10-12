@@ -4,6 +4,7 @@
 #include "bsp/esp-bsp.h"
 #include "connectivity.h"
 #include "device_config.h"
+#include "device_identity.h"
 #include "esp_app_desc.h"
 #include "esp_err.h"
 #include "esp_log.h"
@@ -86,6 +87,7 @@ void app_main(void)
     }
     log_reset_diagnostics();
     board_input_prepare_after_wake();
+    ESP_ERROR_CHECK(device_identity_init());
     ESP_ERROR_CHECK(device_config_init());
 
     QueueHandle_t queue = app_state_queue_create();

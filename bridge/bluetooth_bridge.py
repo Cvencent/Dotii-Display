@@ -73,6 +73,7 @@ def _configuration_payload(
     password: Any,
     bridge_url: str,
     bridge_token: str,
+    codex_bridge_token: str,
     current_token: Any = "",
 ) -> bytes:
     if not isinstance(ssid, str) or not 1 <= len(ssid.encode("utf-8")) <= 32:
@@ -85,6 +86,8 @@ def _configuration_payload(
         raise ValueError("管理中心地址过长")
     if not isinstance(bridge_token, str) or not 16 <= len(bridge_token) <= 64:
         raise ValueError("设备访问令牌无效")
+    if not isinstance(codex_bridge_token, str) or not 16 <= len(codex_bridge_token) <= 64:
+        raise ValueError("Codex Bridge 令牌无效")
     if not isinstance(current_token, str):
         raise ValueError("当前设备令牌无效")
     if current_token and not 16 <= len(current_token) <= 64:
@@ -98,6 +101,7 @@ def _configuration_payload(
             "password": password,
             "bridge_url": bridge_url,
             "bridge_token": bridge_token,
+            "codex_bridge_token": codex_bridge_token,
         },
         ensure_ascii=False,
         separators=(",", ":"),
@@ -376,6 +380,7 @@ class BluetoothBridge:
         password: Any,
         bridge_url: str,
         bridge_token: str,
+        codex_bridge_token: str,
         current_token: Any = "",
     ) -> bool:
         if not self.platform.bluetooth_available:
@@ -392,6 +397,7 @@ class BluetoothBridge:
             password=password,
             bridge_url=bridge_url,
             bridge_token=bridge_token,
+            codex_bridge_token=codex_bridge_token,
             current_token=current_token,
         )
         return self._start_worker(self._configure, address, body, name="dotii-ble-configure")

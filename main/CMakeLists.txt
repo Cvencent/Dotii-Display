@@ -3,6 +3,7 @@ idf_component_register(
         "main.c"
         "app_state.c"
         "connectivity.c"
+        "device_identity.c"
         "device_config.c"
         "ble_bridge.c"
         "board_input.c"
