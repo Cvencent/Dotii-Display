@@ -1,6 +1,7 @@
 #include "connectivity.h"
 
 #include <ctype.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -485,6 +486,15 @@ void connectivity_get_ip(char *buffer, size_t buffer_size)
 
 void connectivity_get_bridge_summary(char *buffer, size_t buffer_size)
 {
-    (void)s_bridge_online;
+    if (buffer == NULL || buffer_size == 0) return;
+    if (s_codex_was_online) {
+        const size_t count = codex_bridge_client_capability_count();
+        if (count > 0) {
+            snprintf(buffer, buffer_size, "CodexBridge 在线 · %u 项能力", (unsigned)count);
+        } else {
+            strlcpy(buffer, "CodexBridge 在线", buffer_size);
+        }
+        return;
+    }
     strlcpy(buffer, s_bridge_note, buffer_size);
 }

@@ -67,7 +67,12 @@ static void copy_string(cJSON *root, const char *name, char *target, size_t size
 
 static void copy_capabilities(cJSON *root, codex_bridge_message_t *message)
 {
+    /* bridge_ready carries "capabilities"; capabilities_update carries the
+       recomputed effective set in "enabled". */
     cJSON *capabilities = cJSON_GetObjectItemCaseSensitive(root, "capabilities");
+    if (!cJSON_IsArray(capabilities)) {
+        capabilities = cJSON_GetObjectItemCaseSensitive(root, "enabled");
+    }
     if (!cJSON_IsArray(capabilities)) return;
     cJSON *item = NULL;
     cJSON_ArrayForEach(item, capabilities) {

@@ -4,7 +4,7 @@ Dotii 是一套由 ESP32-S3 圆形 AMOLED 桌面屏、CodexBridge 与小智 AI �
 
 ![Dotii 桌面交互屏产品渲染图](assets/dotii-product-render.png)
 
-[Windows 下载](https://github.com/Cvencent/Dotii-Display/releases/tag/management-center-v1.1.2) · [MakerWorld 模型与打印文件](https://makerworld.com.cn/zh/models/2918764-dotii-zhuo-mian-jiao-hu-ping#profileId-3421401) · [开发指南](开发指南.md)
+[Windows 下载](https://github.com/Cvencent/Dotii-Display/releases/tag/management-center-v1.1.3) · [MakerWorld 模型与打印文件](https://makerworld.com.cn/zh/models/2918764-dotii-zhuo-mian-jiao-hu-ping#profileId-3421401) · [开发指南](开发指南.md)
 
 ## 选择你的系统
 
@@ -42,8 +42,8 @@ macOS 预览版目前不支持 Intel Mac。由于尚未经过苹果公证，首�
 
 ## macOS 快速上手
 
-1. 从 [macOS Release](https://github.com/Cvencent/Dotii-Display/releases/tag/management-center-v1.1.2) 下载 DMG。当前版本仅支持 Apple Silicon Mac 和 macOS 13 及以上。
-2. 打开 DMG，将 `DotiiManagementCenter-1.1.2.app` 拖到“应用程序”。
+1. 从 [macOS Release](https://github.com/Cvencent/Dotii-Display/releases/tag/management-center-v1.1.3) 下载 DMG。当前版本仅支持 Apple Silicon Mac 和 macOS 13 及以上。
+2. 打开 DMG，将 `DotiiManagementCenter-1.1.3.app` 拖到“应用程序”。
 3. 从“应用程序”打开 Dotii 管理中心。如果系统阻止启动，请打开“系统设置 > 隐私与安全性”，在对应提示旁选择“仍要打开”，然后再次确认。
 4. 首次扫描 Dotii 时允许蓝牙权限；连接 Dotii 时按系统提示允许本地网络权限。
 5. 应用启动后会驻留在菜单栏。后续烧录、蓝牙配网及模块设置均在管理页面中完成。
@@ -55,7 +55,7 @@ macOS 预览版目前不支持 Intel Mac。由于尚未经过苹果公证，首�
 将 DMG 和 `.dmg.sha256` 文件放在同一目录，在终端进入该目录并执行：
 
 ```bash
-shasum -a 256 -c DotiiManagementCenter-macOS-arm64-1.1.2.dmg.sha256
+shasum -a 256 -c DotiiManagementCenter-macOS-arm64-1.1.3.dmg.sha256
 ```
 
 结果应显示 `OK`；如果校验失败，请不要打开该 DMG。
@@ -89,6 +89,7 @@ Dotii 固件内置一套通用设备协议客户端，任何实现同一协议�
 - 小智对话、表情、自定义页面、显示与配网由 Dotii 管理中心负责，写入设备本地配置。
 - Codex 数据不再由管理中心采集，也不会经过管理中心转发，而是由设备直接从 CodexBridge 读取。
 - 该协议保持通用，后续的 AI Passport 等设备同样可以按能力接入。
+- 传输层固定为 UDP `8764` 设备发现与 TCP `8765` 会话，消息为每行一条 UTF-8 JSON，由 CodexBridge 主动连接设备。
 
 ## 常见问题
 

@@ -39,6 +39,8 @@ static int s_client_socket = -1;
 static int s_server_socket = -1;
 static codex_bridge_message_handler_t s_handler;
 static void *s_handler_context;
+static char s_capabilities[CODEX_BRIDGE_CAPABILITY_MAX][CODEX_BRIDGE_CAPABILITY_LEN];
+static size_t s_capability_count;
 
 static void close_socket(int *socket_fd)
 {
@@ -91,6 +93,19 @@ static cJSON *capabilities_array(void)
         cJSON_AddItemToArray(array, cJSON_CreateString(CAPABILITIES[index]));
     }
     return array;
+}
+
+static void store_capabilities(const codex_bridge_message_t *message)
+{
+    if (message == NULL) return;
+    size_t count = message->capability_count;
+    if (count > CODEX_BRIDGE_CAPABILITY_MAX) count = CODEX_BRIDGE_CAPABILITY_MAX;
+    s_capability_count = 0;
+    for (size_t index = 0; index < count; ++index) {
+        strlcpy(s_capabilities[index], message->capabilities[index],
+                CODEX_BRIDGE_CAPABILITY_LEN);
+        s_capability_count++;
+    }
 }
 
 static void udp_task(void *context)
@@ -231,6 +246,7 @@ static void tcp_session(int client_socket)
         return;
     }
     s_online = true;
+    store_capabilities(&message);
     ESP_LOGI(TAG, "Online with CodexBridge");
     if (s_handler != NULL) s_handler(&message, s_handler_context);
     codex_bridge_protocol_reset_message(&message);
@@ -243,11 +259,16 @@ static void tcp_session(int client_socket)
             codex_bridge_protocol_reset_message(&message);
             break;
         }
+        if (strcmp(message.type, "bridge_ready") == 0 ||
+            strcmp(message.type, "capabilities_update") == 0) {
+            store_capabilities(&message);
+        }
         if (s_handler != NULL && !message.ignored) {
             s_handler(&message, s_handler_context);
         }
     }
     codex_bridge_protocol_reset_message(&message);
+    s_capability_count = 0;
 }
 
 static void tcp_task(void *context)
@@ -359,6 +380,25 @@ void codex_bridge_client_stop(void)
 bool codex_bridge_client_is_online(void)
 {
     return s_online;
+}
+
+size_t codex_bridge_client_capability_count(void)
+{
+    return s_capability_count;
+}
+
+const char *codex_bridge_client_capability_at(size_t index)
+{
+    return index < s_capability_count ? s_capabilities[index] : NULL;
+}
+
+bool codex_bridge_client_has_capability(const char *capability)
+{
+    if (capability == NULL) return false;
+    for (size_t index = 0; index < s_capability_count; ++index) {
+        if (strcmp(s_capabilities[index], capability) == 0) return true;
+    }
+    return false;
 }
 
 esp_err_t codex_bridge_client_send_read_ack(const char *message_id)

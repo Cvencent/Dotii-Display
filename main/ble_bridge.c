@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "cJSON.h"
+#include "codex_bridge_client.h"
 #include "device_identity.h"
 #include "connectivity.h"
 #include "device_config.h"
@@ -221,6 +222,21 @@ static int gatt_access(uint16_t conn_handle, uint16_t attr_handle,
         cJSON_AddBoolToObject(status, "provisioned", device_config_get()->provisioned);
         cJSON_AddBoolToObject(status, "wifi", connectivity_is_wifi_connected());
         cJSON_AddStringToObject(status, "bridge", bridge);
+        cJSON *codex_bridge = cJSON_AddObjectToObject(status, "codex_bridge");
+        if (codex_bridge != NULL) {
+            cJSON_AddBoolToObject(codex_bridge, "online", codex_bridge_client_is_online());
+            cJSON_AddStringToObject(codex_bridge, "device_id", device_identity_get());
+            cJSON *capabilities = cJSON_AddArrayToObject(codex_bridge, "capabilities");
+            if (capabilities != NULL) {
+                const size_t count = codex_bridge_client_capability_count();
+                for (size_t index = 0; index < count; ++index) {
+                    const char *capability = codex_bridge_client_capability_at(index);
+                    if (capability != NULL) {
+                        cJSON_AddItemToArray(capabilities, cJSON_CreateString(capability));
+                    }
+                }
+            }
+        }
         const xiaozhi_client_t *client = state_ui_xiaozhi_client();
         cJSON *xiaozhi = cJSON_AddObjectToObject(status, "xiaozhi");
         if (xiaozhi != NULL) {

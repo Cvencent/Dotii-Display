@@ -45,7 +45,7 @@ class ModuleOnDemandTests(unittest.TestCase):
         self.assertEqual(info["LSMinimumSystemVersion"], "13.0")
         self.assertIn("Dotii", info["NSBluetoothAlwaysUsageDescription"])
         self.assertIn("Dotii", info["NSLocalNetworkUsageDescription"])
-        self.assertEqual(info["CFBundleShortVersionString"], "1.1.2")
+        self.assertEqual(info["CFBundleShortVersionString"], "1.1.3")
         self.assertEqual(info["CFBundleIconName"], "AppIcon")
 
     def test_macos_brand_icons_are_complete_and_used_by_native_host(self):
