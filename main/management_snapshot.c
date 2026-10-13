@@ -8,7 +8,6 @@
 #include "esp_log.h"
 
 #define CUSTOM_IMAGE_BYTES (466 * 466 * 2)
-#define BAMBU_CAMERA_BYTES (320 * 180 * 2)
 
 static const char *TAG = "management";
 
@@ -85,6 +84,24 @@ static void copy_custom_config(cJSON *root, codex_snapshot_t *snapshot)
     }
 }
 
+static void copy_xiaozhi_config(cJSON *root, codex_snapshot_t *snapshot)
+{
+    snapshot->xiaozhi_server_url[0] = '\0';
+    snapshot->xiaozhi_wake_word[0] = '\0';
+    snapshot->xiaozhi_voice[0] = '\0';
+    snapshot->xiaozhi_mcp_enabled = true;
+    cJSON *xiaozhi = cJSON_GetObjectItemCaseSensitive(root, "xiaozhi");
+    if (!cJSON_IsObject(xiaozhi)) return;
+    copy_json_string(xiaozhi, "server_url", snapshot->xiaozhi_server_url,
+                     sizeof(snapshot->xiaozhi_server_url));
+    copy_json_string(xiaozhi, "wake_word", snapshot->xiaozhi_wake_word,
+                     sizeof(snapshot->xiaozhi_wake_word));
+    copy_json_string(xiaozhi, "voice", snapshot->xiaozhi_voice,
+                     sizeof(snapshot->xiaozhi_voice));
+    cJSON *mcp = cJSON_GetObjectItemCaseSensitive(xiaozhi, "mcp_enabled");
+    if (cJSON_IsBool(mcp)) snapshot->xiaozhi_mcp_enabled = cJSON_IsTrue(mcp);
+}
+
 static void copy_module_config(cJSON *root, codex_snapshot_t *snapshot)
 {
     /* Codex capabilities are owned by CodexBridge, not the management center.
@@ -139,10 +156,6 @@ static int dotii_business_state_index(const char *state_id)
     if (strcmp(state_id, "codex_working") == 0) return DOTII_STATE_CODEX_WORKING;
     if (strcmp(state_id, "codex_completed") == 0) return DOTII_STATE_CODEX_COMPLETED;
     if (strcmp(state_id, "codex_failure") == 0) return DOTII_STATE_CODEX_FAILURE;
-    if (strcmp(state_id, "bambu_paused") == 0) return DOTII_STATE_BAMBU_PAUSED;
-    if (strcmp(state_id, "bambu_printing") == 0) return DOTII_STATE_BAMBU_PRINTING;
-    if (strcmp(state_id, "bambu_completed") == 0) return DOTII_STATE_BAMBU_COMPLETED;
-    if (strcmp(state_id, "bambu_failure") == 0) return DOTII_STATE_BAMBU_FAILURE;
     return -1;
 }
 
@@ -234,7 +247,8 @@ static void copy_dotii_state(cJSON *root, codex_snapshot_t *snapshot)
     copy_dotii_animation_map(dotii, snapshot);
     copy_dotii_fixed_states(dotii, snapshot);
     /* The management snapshot only carries the mapping. The live expression is
-       resolved locally from CodexBridge and Bambu status so this merge cannot
+       resolved locally from CodexBridge and the xiaozhi session so this merge
+       cannot
        overwrite CodexBridge-driven state. */
     codex_snapshot_refresh_dotii_state(snapshot);
 }
@@ -331,88 +345,6 @@ static void copy_display_config(cJSON *root, codex_snapshot_t *snapshot)
     }
 }
 
-static void reset_bambu_status(codex_snapshot_t *snapshot)
-{
-    snapshot->bambu_configured = false;
-    snapshot->bambu_connected = false;
-    snapshot->bambu_commandable = false;
-    snapshot->bambu_camera_available = false;
-    snapshot->bambu_camera_revision = 0;
-    snapshot->bambu_camera_size = 0;
-    snapshot->bambu_status = BAMBU_STATUS_OFFLINE;
-    snapshot->bambu_progress = 0;
-    snapshot->bambu_remaining_minutes = 0;
-    snapshot->bambu_layer_current = 0;
-    snapshot->bambu_layer_total = 0;
-    snapshot->bambu_nozzle_temperature = 0;
-    snapshot->bambu_bed_temperature = 0;
-    snapshot->bambu_finish_at = 0;
-    snapshot->bambu_updated_at = 0;
-    strlcpy(snapshot->bambu_status_text, "离线", sizeof(snapshot->bambu_status_text));
-    snapshot->bambu_name[0] = '\0';
-    snapshot->bambu_filename[0] = '\0';
-    snapshot->bambu_filament[0] = '\0';
-}
-
-static void copy_bambu_status(cJSON *root, codex_snapshot_t *snapshot)
-{
-    reset_bambu_status(snapshot);
-    cJSON *bambu = cJSON_GetObjectItemCaseSensitive(root, "bambu");
-    if (!cJSON_IsObject(bambu)) return;
-
-    snapshot->bambu_configured = cJSON_IsTrue(
-        cJSON_GetObjectItemCaseSensitive(bambu, "configured")
-    );
-    snapshot->bambu_connected = cJSON_IsTrue(
-        cJSON_GetObjectItemCaseSensitive(bambu, "connected")
-    );
-    snapshot->bambu_commandable = cJSON_IsTrue(
-        cJSON_GetObjectItemCaseSensitive(bambu, "commandable")
-    );
-    copy_json_string(bambu, "name", snapshot->bambu_name, sizeof(snapshot->bambu_name));
-    copy_json_string(bambu, "status_text", snapshot->bambu_status_text,
-                     sizeof(snapshot->bambu_status_text));
-    copy_json_string(bambu, "filename", snapshot->bambu_filename,
-                     sizeof(snapshot->bambu_filename));
-    copy_json_string(bambu, "filament", snapshot->bambu_filament,
-                     sizeof(snapshot->bambu_filament));
-    cJSON *status = cJSON_GetObjectItemCaseSensitive(bambu, "status");
-    snapshot->bambu_status = app_state_bambu_status_from_string(
-        cJSON_IsString(status) ? status->valuestring : "offline"
-    );
-    cJSON *progress = cJSON_GetObjectItemCaseSensitive(bambu, "progress");
-    cJSON *remaining = cJSON_GetObjectItemCaseSensitive(bambu, "remaining_minutes");
-    cJSON *finish = cJSON_GetObjectItemCaseSensitive(bambu, "finish_epoch");
-    cJSON *updated = cJSON_GetObjectItemCaseSensitive(bambu, "updated_at_epoch");
-    cJSON *layer_current = cJSON_GetObjectItemCaseSensitive(bambu, "layer_current");
-    cJSON *layer_total = cJSON_GetObjectItemCaseSensitive(bambu, "layer_total");
-    cJSON *nozzle = cJSON_GetObjectItemCaseSensitive(bambu, "nozzle_temperature");
-    cJSON *bed = cJSON_GetObjectItemCaseSensitive(bambu, "bed_temperature");
-    snapshot->bambu_progress = cJSON_IsNumber(progress) ? (uint8_t)progress->valueint : 0;
-    snapshot->bambu_remaining_minutes =
-        cJSON_IsNumber(remaining) ? (uint16_t)remaining->valueint : 0;
-    snapshot->bambu_finish_at = cJSON_IsNumber(finish) ? (time_t)finish->valuedouble : 0;
-    snapshot->bambu_updated_at = cJSON_IsNumber(updated) ? (time_t)updated->valuedouble : 0;
-    snapshot->bambu_layer_current =
-        cJSON_IsNumber(layer_current) ? (uint16_t)layer_current->valueint : 0;
-    snapshot->bambu_layer_total =
-        cJSON_IsNumber(layer_total) ? (uint16_t)layer_total->valueint : 0;
-    snapshot->bambu_nozzle_temperature =
-        cJSON_IsNumber(nozzle) ? (int16_t)nozzle->valuedouble : 0;
-    snapshot->bambu_bed_temperature =
-        cJSON_IsNumber(bed) ? (int16_t)bed->valuedouble : 0;
-
-    cJSON *camera_available = cJSON_GetObjectItemCaseSensitive(bambu, "camera_available");
-    cJSON *camera_revision = cJSON_GetObjectItemCaseSensitive(bambu, "camera_revision");
-    cJSON *camera_size = cJSON_GetObjectItemCaseSensitive(bambu, "camera_size");
-    if (cJSON_IsTrue(camera_available) && cJSON_IsNumber(camera_revision) &&
-        cJSON_IsNumber(camera_size) && camera_size->valuedouble == BAMBU_CAMERA_BYTES) {
-        snapshot->bambu_camera_available = true;
-        snapshot->bambu_camera_revision = (uint32_t)camera_revision->valuedouble;
-        snapshot->bambu_camera_size = (uint32_t)camera_size->valuedouble;
-    }
-}
-
 bool management_snapshot_merge(codex_snapshot_t *target, const cJSON *root)
 {
     if (target == NULL || !cJSON_IsObject(root)) return false;
@@ -425,9 +357,9 @@ bool management_snapshot_merge(codex_snapshot_t *target, const cJSON *root)
         cJSON_GetObjectItemCaseSensitive(root, "preview_data")
     );
     copy_module_config((cJSON *)root, target);
+    copy_xiaozhi_config((cJSON *)root, target);
     copy_display_config((cJSON *)root, target);
     copy_custom_config((cJSON *)root, target);
-    copy_bambu_status((cJSON *)root, target);
     copy_dotii_state((cJSON *)root, target);
     target->management_source_online = true;
     target->source_online = target->codex_source_online || target->management_source_online;
@@ -451,7 +383,14 @@ void management_snapshot_apply(codex_snapshot_t *target, const codex_snapshot_t 
     target->preview_data = source->preview_data;
     target->stale = false;
     target->codex_enabled = source->codex_enabled;
-    target->bambu_enabled = source->bambu_enabled;
+    target->xiaozhi_enabled = source->xiaozhi_enabled;
+    memcpy(target->xiaozhi_server_url, source->xiaozhi_server_url,
+           sizeof(target->xiaozhi_server_url));
+    memcpy(target->xiaozhi_wake_word, source->xiaozhi_wake_word,
+           sizeof(target->xiaozhi_wake_word));
+    memcpy(target->xiaozhi_voice, source->xiaozhi_voice,
+           sizeof(target->xiaozhi_voice));
+    target->xiaozhi_mcp_enabled = source->xiaozhi_mcp_enabled;
     target->custom_enabled = source->custom_enabled;
     target->dotii_enabled = source->dotii_enabled;
     target->custom_image_available = source->custom_image_available;
@@ -485,26 +424,6 @@ void management_snapshot_apply(codex_snapshot_t *target, const codex_snapshot_t 
     memcpy(target->dotii_state_duration_for_state, source->dotii_state_duration_for_state,
            sizeof(target->dotii_state_duration_for_state));
     codex_snapshot_refresh_dotii_state(target);
-    target->bambu_configured = source->bambu_configured;
-    target->bambu_connected = source->bambu_connected;
-    target->bambu_commandable = source->bambu_commandable;
-    target->bambu_camera_available = source->bambu_camera_available;
-    target->bambu_camera_revision = source->bambu_camera_revision;
-    target->bambu_camera_size = source->bambu_camera_size;
-    target->bambu_status = source->bambu_status;
-    target->bambu_progress = source->bambu_progress;
-    target->bambu_remaining_minutes = source->bambu_remaining_minutes;
-    target->bambu_layer_current = source->bambu_layer_current;
-    target->bambu_layer_total = source->bambu_layer_total;
-    target->bambu_nozzle_temperature = source->bambu_nozzle_temperature;
-    target->bambu_bed_temperature = source->bambu_bed_temperature;
-    target->bambu_finish_at = source->bambu_finish_at;
-    target->bambu_updated_at = source->bambu_updated_at;
-    memcpy(target->bambu_name, source->bambu_name, sizeof(target->bambu_name));
-    memcpy(target->bambu_status_text, source->bambu_status_text,
-           sizeof(target->bambu_status_text));
-    memcpy(target->bambu_filename, source->bambu_filename, sizeof(target->bambu_filename));
-    memcpy(target->bambu_filament, source->bambu_filament, sizeof(target->bambu_filament));
     target->management_source_online = source->management_source_online;
     target->source_online = target->codex_source_online || target->management_source_online;
 }

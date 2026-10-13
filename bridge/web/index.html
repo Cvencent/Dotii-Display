@@ -29,20 +29,25 @@
     </header>
 
     <nav class="module-nav" aria-label="模块">
-      <button class="module-tab active" type="button" data-panel="bambu" aria-selected="true">
-        <img src="/assets/bambulab.svg" alt="">
-        <span>Bambu</span>
-        <span class="module-meta" id="bambu-nav-state">读取中</span>
+      <button class="module-tab active" type="button" data-panel="xiaozhi" aria-selected="true">
+        <span class="nav-icon xiaozhi-icon" aria-hidden="true"></span>
+        <span>小智</span>
+        <span class="module-meta" id="xiaozhi-nav-state">读取中</span>
+      </button>
+      <button class="module-tab" type="button" data-panel="dotii" aria-selected="false">
+        <img src="/assets/dotii.svg" alt="">
+        <span>小智表情</span>
+        <span class="module-meta" id="dotii-nav-state">读取中</span>
       </button>
       <button class="module-tab" type="button" data-panel="custom" aria-selected="false">
         <span class="nav-icon custom-icon" aria-hidden="true"></span>
         <span>自定义</span>
         <span class="module-meta" id="custom-nav-state">读取中</span>
       </button>
-      <button class="module-tab" type="button" data-panel="dotii" aria-selected="false">
-        <img src="/assets/dotii.svg" alt="">
-        <span>Dotii</span>
-        <span class="module-meta" id="dotii-nav-state">读取中</span>
+      <button class="module-tab" type="button" data-panel="codex" aria-selected="false">
+        <img src="/assets/openai.svg" alt="">
+        <span>Codex</span>
+        <span class="module-meta" id="codex-nav-state">由 CodexBridge 提供</span>
       </button>
       <button class="module-tab system-tab" type="button" data-panel="system" aria-selected="false">
         <span class="nav-icon settings-icon" aria-hidden="true"></span>
@@ -51,66 +56,46 @@
     </nav>
 
     <main>
-      <section class="panel active" id="panel-bambu" aria-labelledby="bambu-heading">
+      <section class="panel active" id="panel-xiaozhi" aria-labelledby="xiaozhi-heading">
         <div class="section-heading">
           <div>
-            <h2 id="bambu-heading">Bambu</h2>
-            <p>集中查看当前打印进度、设备状态和相机画面。</p>
+            <h2 id="xiaozhi-heading">小智 AI</h2>
+            <p>设备固件内原生运行小智语音助手，唤醒词、服务地址与会话能力都在这里配置。</p>
           </div>
+          <label class="module-switch">
+            <span>启用小智</span>
+            <input id="xiaozhi-enabled" type="checkbox">
+            <span class="switch-track" aria-hidden="true"></span>
+          </label>
         </div>
-        <div class="module-content" id="bambu-content">
-          <article class="bambu-empty" id="bambu-empty">
-            <img src="/assets/bambulab.svg" alt="">
-            <h3>添加你的 Bambu 打印机</h3>
-            <p>连接后即可在这里查看打印进度、相机画面和设备状态。</p>
-            <button class="primary-button" id="bambu-empty-settings" type="button">添加打印机</button>
-          </article>
-          <article class="bambu-card bambu-live bambu-dashboard" id="bambu-dashboard" hidden>
-            <div class="card-heading bambu-dashboard-heading">
-              <div><span class="dashboard-eyebrow">当前任务</span><h3 id="bambu-dashboard-name">Bambu Lab</h3><p id="bambu-updated">尚未收到数据</p></div>
-              <div class="dashboard-heading-state"><span class="status-pill" id="bambu-dashboard-connection">正在连接</span><strong class="bambu-progress" id="bambu-progress">--</strong></div>
+
+        <div class="module-content xiaozhi-content" id="xiaozhi-content">
+          <form class="settings-panel xiaozhi-form" id="xiaozhi-form">
+            <div class="card-heading">
+              <div><h3>小智连接</h3><p>填写小智服务端地址，Dotii 会通过 WebSocket 直接建立语音会话。</p></div>
+              <span class="status-pill" id="xiaozhi-connection">未启用</span>
             </div>
-            <div class="bambu-progress-track" aria-hidden="true"><span id="bambu-progress-fill"></span></div>
-            <div class="bambu-dashboard-grid">
-              <div class="dashboard-visual">
-              <div class="bambu-camera"><img id="bambu-camera" alt="打印机相机画面" hidden><div id="bambu-camera-empty"><img src="/assets/bambulab.svg" alt=""><span>相机画面暂不可用</span></div></div>
-                <div class="dashboard-file"><span>打印文件</span><strong id="bambu-filename">--</strong></div>
-              </div>
-              <div class="dashboard-summary">
-              <dl class="bambu-metrics">
-                <div><dt>状态</dt><dd id="bambu-status">离线</dd></div><div><dt>剩余</dt><dd id="bambu-remaining">--</dd></div>
-                <div class="wide"><dt>预计完成</dt><dd id="bambu-finish">--</dd></div>
-                <div><dt>层数</dt><dd id="bambu-layer">--</dd></div><div><dt>耗材</dt><dd id="bambu-filament">--</dd></div>
-                <div><dt>喷嘴</dt><dd id="bambu-nozzle">--</dd></div><div><dt>热床</dt><dd id="bambu-bed">--</dd></div>
-              </dl>
-              <div class="bambu-actions"><button class="quiet-button" id="bambu-pause" type="button">暂停</button><button class="danger-button" id="bambu-stop" type="button">停止打印</button></div>
-              <p class="error-detail" id="bambu-error" hidden></p>
-              </div>
+            <div class="settings-grid xiaozhi-fields">
+              <label><span>服务端地址</span><input id="xiaozhi-server-url" maxlength="192" autocomplete="off" placeholder="wss://api.tenclass.net/xiaozhi/v1/"></label>
+              <label><span>唤醒词</span><input id="xiaozhi-wake-word" maxlength="32" autocomplete="off" placeholder="你好小智"></label>
+              <label><span>音色</span><input id="xiaozhi-voice" maxlength="32" autocomplete="off" placeholder="default"></label>
+              <label class="check-row"><input id="xiaozhi-mcp-enabled" type="checkbox"><span>启用 MCP 工具调用</span></label>
             </div>
-          </article>
-        </div>
-        <section class="module-preferences bambu-preferences" aria-labelledby="bambu-preferences-heading">
-          <div class="module-preferences-heading">
-            <div><h3 id="bambu-preferences-heading">Bambu 设置</h3><p>使用局域网连接打印机，配置会安全保存在 Dotii 管理中心。</p></div>
-            <label class="module-switch">
-              <span>启用功能</span>
-              <input id="bambu-enabled" type="checkbox">
-              <span class="switch-track" aria-hidden="true"></span>
-            </label>
-          </div>
-          <form class="bambu-card bambu-config module-preference-card" id="bambu-form">
-            <div class="card-heading"><div><h3>Bambu 打印机</h3><p>添加或更换连接到 Dotii 的打印机。</p></div><span class="status-pill" id="bambu-connection">尚未添加</span></div>
-            <div class="bambu-fields settings-bambu-fields">
-              <label><span>打印机名称</span><input id="bambu-name" maxlength="40" autocomplete="off" placeholder="例如 工作室 P1S"></label>
-              <label><span>局域网 IP</span><input id="bambu-host" inputmode="decimal" autocomplete="off" placeholder="192.168.1.120"></label>
-              <label><span>打印机序列号</span><input id="bambu-serial" maxlength="32" autocomplete="off" placeholder="设备设置中查看"></label>
-              <label><span>局域网访问码</span><input id="bambu-access-code" type="password" maxlength="64" autocomplete="new-password" placeholder="留空表示不修改"></label>
+            <p class="network-note"><strong>保持连接稳定</strong><span>建议使用局域网或官方小智服务。设备内原生解析表情指令，无需电脑端中转。</span></p>
+            <div class="form-actions">
+              <button class="primary-button" type="submit">保存小智设置</button>
+              <span class="save-state" id="xiaozhi-save-state" role="status" aria-live="polite">尚未修改</span>
             </div>
-            <p class="network-note"><strong>保持连接稳定</strong><span>建议在路由器中为打印机设置DHCP地址保留或将IP与MAC地址绑定，避免IP变化后连接中断。</span></p>
-            <label class="bambu-camera-toggle"><input id="bambu-camera-enabled" type="checkbox"><span>显示打印机相机画面</span></label>
-            <div class="form-actions"><button class="primary-button" type="submit">保存并连接</button><button class="quiet-button" id="bambu-reconnect" type="button">重新连接</button></div>
           </form>
-        </section>
+
+          <article class="settings-panel xiaozhi-info">
+            <h3>工作原理</h3>
+            <div class="runtime-row"><span>对话</span><strong>设备麦克风采集，小智服务端识别</strong></div>
+            <div class="runtime-row"><span>表情</span><strong>固件原生渲染，随对话与触摸切换</strong></div>
+            <div class="runtime-row"><span>形象</span><strong>到“小智表情”页切换</strong></div>
+            <div class="runtime-row"><span>Codex 数据</span><strong>由 CodexBridge 独立下发</strong></div>
+          </article>
+        </div>
       </section>
 
       <section class="panel" id="panel-custom" aria-labelledby="custom-heading" hidden>
@@ -263,8 +248,8 @@
       <section class="panel" id="panel-dotii" aria-labelledby="dotii-heading" hidden>
         <div class="section-heading">
           <div>
-            <h2 id="dotii-heading">Dotii</h2>
-            <p>用表情回应任务状态和你的操作</p>
+            <h2 id="dotii-heading">小智表情</h2>
+            <p>选择形象与动画，让 Dotii 用表情回应对话、任务状态和你的触摸。</p>
           </div>
         </div>
 
@@ -281,11 +266,28 @@
             </div>
           </article>
 
+          <section class="dotii-config-panel dotii-character-panel" aria-labelledby="dotii-character-heading">
+            <div class="dotii-library-heading">
+              <div>
+                <h3 id="dotii-character-heading">设备形象</h3>
+                <p>形象包内置于固件，切换后立即生效，无需重新烧录。</p>
+              </div>
+              <span id="dotii-character-state" role="status" aria-live="polite">正在读取形象</span>
+            </div>
+            <div class="dotii-character-grid" id="dotii-character-grid" aria-label="可切换的设备形象"></div>
+            <div class="dotii-config-actions">
+              <p>Dotii 为自研形象，Nimbo、Twinkle、Blob 来自开源项目 aora-bot。</p>
+              <div>
+                <button class="primary-button" id="dotii-character-save" type="button" disabled>保存形象</button>
+              </div>
+            </div>
+          </section>
+
           <section class="dotii-config-panel" aria-labelledby="dotii-config-heading">
             <div class="dotii-library-heading">
               <div>
                 <h3 id="dotii-config-heading">动画与状态</h3>
-                <p>Dotii 使用固定基础动画，Codex 和 Bambu 状态可自定义动画与持续时间。</p>
+                <p>选择设备形象，并把小智、Codex 等状态映射到不同的原生表情动画。</p>
               </div>
               <span id="dotii-library-state" role="status" aria-live="polite">正在加载动画</span>
             </div>
@@ -304,7 +306,7 @@
 
         <section class="module-preferences dotii-preferences" aria-labelledby="dotii-preferences-heading">
           <div class="module-preferences-heading">
-            <div><h3 id="dotii-preferences-heading">Dotii 页面设置</h3></div>
+            <div><h3 id="dotii-preferences-heading">小智表情页面设置</h3></div>
             <label class="module-switch">
               <span>启用页面</span>
               <input id="dotii-enabled" type="checkbox" checked>
@@ -312,6 +314,46 @@
             </label>
           </div>
         </section>
+      </section>
+
+      <section class="panel" id="panel-codex" aria-labelledby="codex-heading" hidden>
+        <div class="section-heading">
+          <div>
+            <h2 id="codex-heading">Codex 连接</h2>
+            <p>Codex 配额、近 7 日 Token 与额度重置通过 CodexBridge 通用协议下发，管理中心只做展示与样式设置。</p>
+          </div>
+          <span class="status-pill" id="codex-bridge-state">由 CodexBridge 同步</span>
+        </div>
+
+        <div class="codex-content">
+          <form class="settings-panel codex-ui-panel" id="codex-form">
+            <div class="card-heading">
+              <div><h3>额度显示样式</h3><p>决定 Dotii 的 Codex 页面显示哪些额度信息。</p></div>
+            </div>
+            <div class="time-field codex-ui-field">
+              <span class="time-field-label" id="codex-ui-label">Dotii 主页面额度样式</span>
+              <div class="ui-select" data-ui-select="codex-ui">
+                <input id="codex-ui" type="hidden" value="classic">
+                <button class="ui-select-trigger" id="codex-ui-trigger" type="button" aria-haspopup="listbox" aria-expanded="false" aria-labelledby="codex-ui-label codex-ui-value">
+                  <span id="codex-ui-value">仅显示周剩余</span><span class="ui-select-chevron" aria-hidden="true"></span>
+                </button>
+                <div class="ui-select-menu" role="listbox" aria-labelledby="codex-ui-label" hidden>
+                  <button type="button" role="option" data-value="classic">仅显示周剩余</button>
+                  <button type="button" role="option" data-value="dual_limit">显示 5 小时及周剩余</button>
+                </div>
+              </div>
+              <small id="codex-ui-state" role="status" aria-live="polite">仅显示周剩余额度</small>
+            </div>
+          </form>
+
+          <article class="settings-panel codex-info-panel">
+            <div class="card-heading"><div><h3>数据来源</h3><p>CodexBridge 是通用协议主机，任何设备都可以按能力订阅这些数据。</p></div></div>
+            <div class="runtime-row"><span>周剩余额度</span><strong>来自 CodexBridge 会话快照</strong></div>
+            <div class="runtime-row"><span>近 7 日 Token</span><strong>按能力 <code>quota</code> 下发</strong></div>
+            <div class="runtime-row"><span>额度重置时间</span><strong>随 <code>codex_status</code> 消息推送</strong></div>
+            <p class="network-note"><strong>配对方式</strong><span>在 CodexBridge 托盘中为这台 Dotii 启用 Codex 能力，并复制配对密钥到设备；配额数据不经过本管理中心。</span></p>
+          </article>
+        </div>
       </section>
 
       <section class="panel" id="panel-system" aria-labelledby="system-heading" hidden>
@@ -444,23 +486,6 @@
                   </div>
                 </div>
               </div>
-              <div class="screen-off-page-setting">
-                <div class="screen-off-page-heading">
-                  <span class="time-field-label" id="codex-ui-label">Dotii 主页面额度样式</span>
-                  <small>Codex 页面在 Dotii 上只显示周剩余，或同时显示 5 小时与周剩余。</small>
-                </div>
-                <div class="ui-select" data-ui-select="codex-ui">
-                  <input id="codex-ui" type="hidden" value="classic">
-                  <button class="ui-select-trigger" id="codex-ui-trigger" type="button" aria-haspopup="listbox" aria-expanded="false" aria-labelledby="codex-ui-label codex-ui-value">
-                    <span id="codex-ui-value">仅显示周剩余</span><span class="ui-select-chevron" aria-hidden="true"></span>
-                  </button>
-                  <div class="ui-select-menu" role="listbox" aria-labelledby="codex-ui-label" hidden>
-                    <button type="button" role="option" data-value="classic">仅显示周剩余</button>
-                    <button type="button" role="option" data-value="dual_limit">显示 5 小时及周剩余</button>
-                  </div>
-                </div>
-                <small id="codex-ui-state" role="status" aria-live="polite">仅显示周剩余额度</small>
-              </div>
               <div class="display-settings-actions">
                 <button class="primary-button" type="submit">保存并同步</button>
                 <span id="display-save-state" role="status" aria-live="polite">使用默认角度</span>
@@ -485,7 +510,7 @@
                   <div class="ui-select-menu" role="listbox" aria-labelledby="bluetooth-device-label" hidden></div>
                 </div>
               </div>
-              <div class="bambu-fields settings-bambu-fields bluetooth-fields">
+              <div class="settings-grid settings-fields bluetooth-fields">
                 <label><span>Wi-Fi 名称</span><input id="bluetooth-ssid" maxlength="32" autocomplete="off" placeholder="Dotii 要连接的 2.4 GHz 网络"></label>
                 <label><span>Wi-Fi 密码</span><input id="bluetooth-password" type="password" maxlength="64" autocomplete="new-password" placeholder="只发送给所选 Dotii"></label>
               </div>
@@ -496,8 +521,8 @@
                 <button class="quiet-button" id="bluetooth-scan" type="button">扫描 Dotii</button>
                 <button class="primary-button" id="bluetooth-configure" type="button" disabled>保存并连接</button>
               </div>
-              <p class="bambu-help">Wi-Fi 密码只用于本次加密蓝牙配置，不会保存在电脑端。配置成功后 Dotii 会重启并继续使用局域网高速数据链路。</p>
-              <p class="bambu-help bluetooth-recovery-help"><strong>更换电脑：</strong>请长按 Dotii 右侧按钮进入设置，并在设置页面长按“重置配网”。设备会清除 Wi-Fi、管理中心绑定和蓝牙配对后重启，然后即可在这台电脑上重新配网。</p>
+              <p class="settings-help">Wi-Fi 密码只用于本次加密蓝牙配置，不会保存在电脑端。配置成功后 Dotii 会重启并继续使用局域网高速数据链路。</p>
+              <p class="settings-help bluetooth-recovery-help"><strong>更换电脑：</strong>请长按 Dotii 右侧按钮进入设置，并在设置页面长按“重置配网”。设备会清除 Wi-Fi、管理中心绑定和蓝牙配对后重启，然后即可在这台电脑上重新配网。</p>
             </article>
 
             <article class="dependency-panel firmware-panel">

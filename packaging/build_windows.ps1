@@ -131,7 +131,7 @@ Copy-Item -LiteralPath $HostExe -Destination $ReleaseRoot -Force
 
 $ReleaseTools = Join-Path $ReleaseRoot "tools"
 New-Item -ItemType Directory -Force -Path $ReleaseTools | Out-Null
-foreach ($ToolName in @("node", "codex-cli", "ffmpeg")) {
+foreach ($ToolName in @("node", "codex-cli")) {
     $ToolPath = Join-Path $ProjectRoot "tools\$ToolName"
     if (-not (Test-Path -LiteralPath $ToolPath -PathType Container)) {
         throw "Required bundled tool is missing: $ToolPath"

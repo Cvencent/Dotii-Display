@@ -15,10 +15,6 @@ static const dotii_business_state_definition_t DOTII_BUSINESS_STATES[DOTII_STATE
     {"codex_working", DOTII_EXPRESSION_WORKING, 0},
     {"codex_completed", DOTII_EXPRESSION_COMPLETE, 0},
     {"codex_failure", DOTII_EXPRESSION_FAILURE, 0},
-    {"bambu_paused", DOTII_EXPRESSION_CURIOUS, 0},
-    {"bambu_printing", DOTII_EXPRESSION_WORKING, 0},
-    {"bambu_completed", DOTII_EXPRESSION_COMPLETE, 0},
-    {"bambu_failure", DOTII_EXPRESSION_FAILURE, 0},
 };
 
 void codex_snapshot_reset_dotii_mapping(codex_snapshot_t *target)
@@ -69,36 +65,19 @@ static void dotii_set_state(codex_snapshot_t *target, int state_index,
 void codex_snapshot_refresh_dotii_state(codex_snapshot_t *target)
 {
     if (target == NULL) return;
-    const bool bambu_connected = target->bambu_configured && target->bambu_connected;
-
     if (target->status == CODEX_STATUS_FAILED) {
         dotii_set_state(target, DOTII_STATE_CODEX_FAILURE, "codex_failure", true,
-                        DOTII_EXPRESSION_FAILURE);
-    } else if (bambu_connected && target->bambu_status == BAMBU_STATUS_FAULT) {
-        dotii_set_state(target, DOTII_STATE_BAMBU_FAILURE, "bambu_failure", true,
                         DOTII_EXPRESSION_FAILURE);
     } else if (target->status == CODEX_STATUS_OFFLINE) {
         dotii_set_state(target, -1, "connecting", true, DOTII_EXPRESSION_CONNECTING);
     } else if (target->status == CODEX_STATUS_WORKING) {
         dotii_set_state(target, DOTII_STATE_CODEX_WORKING, "codex_working", true,
                         DOTII_EXPRESSION_WORKING);
-    } else if (bambu_connected &&
-               (target->bambu_status == BAMBU_STATUS_PREPARING ||
-                target->bambu_status == BAMBU_STATUS_PRINTING ||
-                target->bambu_status == BAMBU_STATUS_CANCELLING)) {
-        dotii_set_state(target, DOTII_STATE_BAMBU_PRINTING, "bambu_printing", true,
-                        DOTII_EXPRESSION_WORKING);
     } else if (target->status == CODEX_STATUS_COMPLETED) {
         dotii_set_state(target, DOTII_STATE_CODEX_COMPLETED, "codex_completed", true,
                         DOTII_EXPRESSION_COMPLETE);
-    } else if (bambu_connected && target->bambu_status == BAMBU_STATUS_COMPLETED) {
-        dotii_set_state(target, DOTII_STATE_BAMBU_COMPLETED, "bambu_completed", true,
-                        DOTII_EXPRESSION_COMPLETE);
     } else if (target->status == CODEX_STATUS_WAITING) {
         dotii_set_state(target, DOTII_STATE_CODEX_WAITING_USER, "codex_waiting_user", true,
-                        DOTII_EXPRESSION_CURIOUS);
-    } else if (bambu_connected && target->bambu_status == BAMBU_STATUS_PAUSED) {
-        dotii_set_state(target, DOTII_STATE_BAMBU_PAUSED, "bambu_paused", true,
                         DOTII_EXPRESSION_CURIOUS);
     } else {
         dotii_set_state(target, -1, "idle", false, DOTII_EXPRESSION_IDLE_BREATH);

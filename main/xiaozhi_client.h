@@ -39,6 +39,8 @@ typedef struct {
     char last_emotion[24];
     char last_text[192];
     char session_id[64];
+    void *transport;
+    xiaozhi_config_t config;
 } xiaozhi_client_t;
 
 /* Returns true when the firmware was built with xiaozhi support enabled. */

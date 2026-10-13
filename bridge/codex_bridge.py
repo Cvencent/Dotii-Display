@@ -30,7 +30,6 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlparse
 
-from bambu_client import BambuConfigStore, BambuService
 from bluetooth_bridge import BluetoothBridge
 from codex_bridge_link import claim_codex_bridge_token
 from firmware_flasher import FirmwareFlasher
@@ -75,18 +74,67 @@ CUSTOM_DEFAULTS = {
     "ring_start": "#F2C66D",
     "ring_end": "#5DA9FF",
 }
-MODULE_DEFAULTS = {"bambu": False, "dotii": True}
+MODULE_DEFAULTS = {"xiaozhi": True, "dotii": True}
+
+DOTII_CHARACTERS = (
+    {"id": "dotii", "label": "Dotii", "source": "dotii", "description": "Dotii 自研形象"},
+    {"id": "nimbo", "label": "Nimbo", "source": "aora-bot", "description": "aora-bot 圆润形象"},
+    {"id": "twinkle", "label": "Twinkle", "source": "aora-bot", "description": "aora-bot 明亮形象"},
+    {"id": "blob", "label": "Blob", "source": "aora-bot", "description": "aora-bot 软团形象"},
+)
+DOTII_CHARACTER_IDS = tuple(character["id"] for character in DOTII_CHARACTERS)
+
+XIAOZHI_DEFAULTS = {
+    "enabled": False,
+    "server_url": "wss://api.tenclass.net/xiaozhi/v1/",
+    "wake_word": "你好小智",
+    "voice": "default",
+    "mcp_enabled": True,
+}
 
 
-def resolve_ffmpeg(runtime_folder: Path) -> str | None:
-    """Resolve the bundled FFmpeg executable, with legacy user fallbacks."""
-    platform = current_platform()
-    candidates = platform.ffmpeg_candidates(runtime_folder, tools_root())
-    candidate = next((path for path in candidates if path.is_file()), None)
-    if candidate:
-        return str(candidate.resolve())
-    executable_name = "ffmpeg.exe" if platform.name == "windows" else "ffmpeg"
-    return shutil.which(executable_name)
+def default_xiaozhi_config() -> dict[str, Any]:
+    return dict(XIAOZHI_DEFAULTS)
+
+
+def validate_xiaozhi_config(payload: Any) -> dict[str, Any]:
+    if payload is None:
+        payload = {}
+    if not isinstance(payload, dict):
+        raise ValueError("xiaozhi config must be an object")
+    defaults = default_xiaozhi_config()
+
+    def bounded(value: Any, field: str, maximum: int, fallback: str = "") -> str:
+        if value is None:
+            return fallback
+        if not isinstance(value, str):
+            raise ValueError(f"xiaozhi.{field} must be a string")
+        return value.strip()[:maximum]
+
+    enabled = payload.get("enabled", defaults["enabled"])
+    if not isinstance(enabled, bool):
+        raise ValueError("xiaozhi.enabled must be a boolean")
+    mcp_enabled = payload.get("mcp_enabled", defaults["mcp_enabled"])
+    if not isinstance(mcp_enabled, bool):
+        raise ValueError("xiaozhi.mcp_enabled must be a boolean")
+
+    server_url = bounded(payload.get("server_url"), "server_url", 192,
+                         defaults["server_url"]) or defaults["server_url"]
+    parsed = urlparse(server_url)
+    if parsed.scheme not in {"ws", "wss"} or not parsed.hostname:
+        raise ValueError("xiaozhi.server_url must be a ws:// or wss:// URL")
+
+    return {
+        "enabled": enabled,
+        "server_url": server_url,
+        "wake_word": bounded(payload.get("wake_word"), "wake_word", 32,
+                             defaults["wake_word"]) or defaults["wake_word"],
+        "voice": bounded(payload.get("voice"), "voice", 32,
+                         defaults["voice"]) or defaults["voice"],
+        "mcp_enabled": mcp_enabled,
+    }
+
+
 DOTII_EXPRESSION_IDS = (
     "idle_breath", "blink", "curious", "sleepy_yawn",
     "touch_response", "connecting", "working", "complete", "failure",
@@ -101,7 +149,6 @@ DOTII_BUSINESS_EXPRESSION_IDS = (
 )
 DOTII_STATE_GROUPS = (
     {"id": "codex", "label": "Codex 状态"},
-    {"id": "bambu", "label": "Bambu 状态"},
 )
 DOTII_FIXED_STATE_DEFINITIONS = (
     {"id": "idle", "label": "空闲", "expression": "idle_breath"},
@@ -115,10 +162,6 @@ DOTII_BUSINESS_STATE_DEFINITIONS = (
     {"id": "codex_working", "label": "工作中", "group": "codex"},
     {"id": "codex_completed", "label": "任务完成", "group": "codex"},
     {"id": "codex_failure", "label": "失败或异常", "group": "codex"},
-    {"id": "bambu_paused", "label": "已暂停", "group": "bambu"},
-    {"id": "bambu_printing", "label": "打印中", "group": "bambu"},
-    {"id": "bambu_completed", "label": "打印完成", "group": "bambu"},
-    {"id": "bambu_failure", "label": "故障或异常", "group": "bambu"},
 )
 DOTII_FIXED_STATE_EXPRESSIONS = {
     definition["id"]: definition["expression"]
@@ -129,17 +172,16 @@ DOTII_BUSINESS_STATE_LABELS = {
     for definition in DOTII_BUSINESS_STATE_DEFINITIONS
 }
 DOTII_LEGACY_STATE_EXPANSIONS = {
-    "waiting_user": ("codex_waiting_user", "bambu_paused"),
-    "working": ("codex_working", "bambu_printing"),
+    "waiting_user": ("codex_waiting_user",),
+    "working": ("codex_working",),
     "completed": ("codex_completed",),
-    "print_completed": ("bambu_completed",),
-    "failure": ("codex_failure", "bambu_failure"),
+    "failure": ("codex_failure",),
 }
 DOTII_DEFAULT_BUSINESS_ASSIGNMENTS = {
-    "curious": ("codex_waiting_user", "bambu_paused"),
-    "working": ("codex_working", "bambu_printing"),
-    "complete": ("codex_completed", "bambu_completed"),
-    "failure": ("codex_failure", "bambu_failure"),
+    "curious": ("codex_waiting_user",),
+    "working": ("codex_working",),
+    "complete": ("codex_completed",),
+    "failure": ("codex_failure",),
 }
 DOTII_DEFAULT_BUSINESS_EXPRESSION = {
     state_id: expression_id
@@ -400,6 +442,7 @@ def validate_module_config(payload: Any) -> dict[str, bool]:
 def default_dotii_config() -> dict[str, Any]:
     return {
         "revision": 0,
+        "character": "dotii",
         "animations": {
             expression_id: {
                 "states": list(DOTII_DEFAULT_BUSINESS_ASSIGNMENTS.get(expression_id, ())),
@@ -431,6 +474,10 @@ def validate_dotii_config(payload: Any) -> dict[str, Any]:
     animations = payload.get("animations")
     if not isinstance(animations, dict):
         raise ValueError("dotii.animations must be an object")
+
+    character = payload.get("character", defaults["character"])
+    if not isinstance(character, str) or character not in DOTII_CHARACTER_IDS:
+        raise ValueError(f"dotii.character must be one of {', '.join(DOTII_CHARACTER_IDS)}")
 
     unknown_animations = set(animations) - DOTII_EXPRESSIONS - DOTII_LEGACY_EXPRESSIONS
     if unknown_animations:
@@ -499,6 +546,7 @@ def validate_dotii_config(payload: Any) -> dict[str, Any]:
 
     return {
         "revision": _non_negative_int(payload.get("revision", 0), "dotii.revision"),
+        "character": character,
         "animations": validated_animations,
         "available_states": defaults["available_states"],
         "state_groups": defaults["state_groups"],
@@ -578,11 +626,13 @@ def validate_snapshot(payload: Any) -> dict[str, Any]:
     """Validate the device-facing management envelope.
 
     Codex data is owned by CodexBridge and travels over the device protocol,
-    so this snapshot intentionally carries only Bambu, custom page, display
+    so this snapshot intentionally carries only custom page, display
     and Dotii configuration.
     """
     if not isinstance(payload, dict) or payload.get("schema_version") != SCHEMA_VERSION:
         raise ValueError("schema_version must be 1")
+    if "bambu" in payload or "bambu" in (payload.get("modules") or {}):
+        raise ValueError("bambu is no longer supported")
     return {
         "schema_version": SCHEMA_VERSION,
         "generated_at_epoch": _non_negative_int(
@@ -794,6 +844,33 @@ class DotiiConfigStore:
         return validated
 
 
+class XiaozhiConfigStore:
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        self.lock = threading.RLock()
+
+    def read(self) -> dict[str, Any]:
+        with self.lock:
+            if not self.path.is_file():
+                return default_xiaozhi_config()
+            return validate_xiaozhi_config(json.loads(self.path.read_text(encoding="utf-8")))
+
+    def write(self, config: dict[str, Any]) -> dict[str, Any]:
+        validated = validate_xiaozhi_config(config)
+        with self.lock:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            handle, temporary_name = tempfile.mkstemp(prefix="xiaozhi-", suffix=".json", dir=self.path.parent)
+            try:
+                with os.fdopen(handle, "w", encoding="utf-8") as stream:
+                    json.dump(validated, stream, ensure_ascii=False, indent=2)
+                    stream.write("\n")
+                os.replace(temporary_name, self.path)
+            finally:
+                if os.path.exists(temporary_name):
+                    os.unlink(temporary_name)
+        return validated
+
+
 class DisplayConfigStore:
     def __init__(self, path: Path) -> None:
         self.path = path
@@ -934,11 +1011,11 @@ class BridgeHandler(BaseHTTPRequestHandler):
             "snapshot": snapshot,
             "dotii_config": self.bridge.dotii.read(),
             "display_config": self.bridge.display.read(),
-            "bambu_config": self.bridge.bambu_config.public(),
+            "xiaozhi_config": self.bridge.xiaozhi.read(),
             "bluetooth": self.bridge.bluetooth.snapshot(),
             "firmware": self.bridge.firmware.snapshot(),
             "modules": [
-                {"id": "bambu", "name": "Bambu", "enabled": snapshot["modules"]["bambu"], "available": True, "locked": False},
+                {"id": "xiaozhi", "name": "小智", "enabled": snapshot["modules"]["xiaozhi"], "available": True, "locked": False},
                 {"id": "custom", "name": "自定义", "enabled": snapshot["custom"]["enabled"], "available": True, "locked": False},
                 {"id": "dotii", "name": "Dotii", "enabled": snapshot["modules"]["dotii"], "available": True, "locked": False},
             ],
@@ -977,23 +1054,6 @@ class BridgeHandler(BaseHTTPRequestHandler):
                 self._send_json(HTTPStatus.NOT_FOUND, {"error": "尚未上传背景图片"})
             except (OSError, ValueError, json.JSONDecodeError) as error:
                 self._send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": str(error)})
-        elif path == "/api/v1/admin/bambu/camera.jpg":
-            if self._deny_nonlocal():
-                return
-            body = self.bridge.bambu.get_camera_jpeg()
-            if body:
-                self._send_bytes(HTTPStatus.OK, body, "image/jpeg")
-            else:
-                self._send_json(HTTPStatus.NOT_FOUND, {"error": "打印机相机暂不可用"})
-        elif path == "/api/v1/bambu-camera.rgb565":
-            if not self._authorized():
-                self._send_json(HTTPStatus.UNAUTHORIZED, {"error": "invalid bridge token"})
-                return
-            body = self.bridge.bambu.get_camera_rgb565()
-            if body:
-                self._send_bytes(HTTPStatus.OK, body, "application/octet-stream")
-            else:
-                self._send_json(HTTPStatus.NOT_FOUND, {"error": "camera unavailable"})
         elif path == "/api/v1/custom-screen.rgb565":
             if not self._authorized():
                 self._send_json(HTTPStatus.UNAUTHORIZED, {"error": "invalid bridge token"})
@@ -1065,38 +1125,18 @@ class BridgeHandler(BaseHTTPRequestHandler):
             except (OSError, ValueError, UnicodeDecodeError, json.JSONDecodeError) as error:
                 self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
             return
-        if path == "/api/v1/admin/bambu/config":
+        if path == "/api/v1/admin/xiaozhi":
             if self._deny_nonlocal():
-                return
-            try:
-                config = self.bridge.bambu_config.write(self._read_admin_action(), preserve_secret=True)
-                self.bridge.bambu.reconfigure()
-                self._send_json(HTTPStatus.OK, {"ok": True, "bambu_config": config})
-            except (OSError, ValueError, UnicodeDecodeError, json.JSONDecodeError) as error:
-                self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
-            return
-        if path == "/api/v1/admin/bambu/refresh":
-            if self._deny_nonlocal():
-                return
-            try:
-                self._read_admin_action()
-                self.bridge.bambu.reconfigure()
-                self._send_json(HTTPStatus.ACCEPTED, {"ok": True})
-            except (ValueError, UnicodeDecodeError, json.JSONDecodeError) as error:
-                self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
-            return
-        if path in {"/api/v1/admin/bambu/command", "/api/v1/bambu/command"}:
-            if path.startswith("/api/v1/admin/"):
-                if self._deny_nonlocal():
-                    return
-            elif not self._authorized():
-                self._send_json(HTTPStatus.UNAUTHORIZED, {"error": "invalid bridge token"})
                 return
             try:
                 payload = self._read_admin_action()
-                result = self.bridge.bambu.command(payload.get("action"))
-                self._send_json(HTTPStatus.ACCEPTED, {"ok": True, **result})
-            except (ValueError, UnicodeDecodeError, json.JSONDecodeError) as error:
+                current = self.bridge.xiaozhi.read()
+                candidate = {**current, **payload}
+                if payload.get("enabled") is True:
+                    candidate["enabled"] = True
+                config = self.bridge.xiaozhi.write(candidate)
+                self._send_json(HTTPStatus.OK, {"ok": True, "xiaozhi_config": config})
+            except (OSError, ValueError, UnicodeDecodeError, json.JSONDecodeError) as error:
                 self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
             return
         if path == "/api/v1/admin/custom/source":
@@ -1154,14 +1194,15 @@ class BridgeHandler(BaseHTTPRequestHandler):
                 module_id = payload.get("id")
                 enabled = payload.get("enabled")
                 if module_id not in MODULE_DEFAULTS or not isinstance(enabled, bool):
-                    raise ValueError("id must be bambu or dotii and enabled must be boolean")
+                    raise ValueError("id must be xiaozhi or dotii and enabled must be boolean")
                 modules = self.bridge.modules.read()
                 candidate = {**modules, module_id: enabled}
                 if not any(candidate.values()) and not self.bridge.custom.read()["enabled"]:
                     raise ValueError("至少保留一个启用页面")
                 saved = self.bridge.modules.write(candidate)
-                if module_id == "bambu":
-                    self.bridge.bambu.set_enabled(enabled)
+                if module_id == "xiaozhi":
+                    xiaozhi = self.bridge.xiaozhi.read()
+                    self.bridge.xiaozhi.write({**xiaozhi, "enabled": enabled})
                 self._send_json(HTTPStatus.OK, {"ok": True, "modules": saved})
             except (OSError, ValueError, UnicodeDecodeError, json.JSONDecodeError) as error:
                 self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
@@ -1234,8 +1275,7 @@ class BridgeServer(ThreadingHTTPServer):
         dotii: DotiiConfigStore,
         display: DisplayConfigStore,
         assets: CustomAssetStore,
-        bambu_config: BambuConfigStore,
-        bambu: BambuService,
+        xiaozhi: XiaozhiConfigStore,
         bluetooth: BluetoothBridge,
         firmware: FirmwareFlasher,
         runtime_folder: Path,
@@ -1250,8 +1290,7 @@ class BridgeServer(ThreadingHTTPServer):
         self.dotii = dotii
         self.display = display
         self.assets = assets
-        self.bambu_config = bambu_config
-        self.bambu = bambu
+        self.xiaozhi = xiaozhi
         self.bluetooth = bluetooth
         self.firmware = firmware
         self.runtime_folder = runtime_folder
@@ -1263,11 +1302,13 @@ class BridgeServer(ThreadingHTTPServer):
         custom.update(self.assets.source_info())
         custom.update(self.assets.render_info())
         snapshot["custom"] = custom
-        snapshot["bambu"] = self.bambu.snapshot()
         modules = self.modules.read()
         snapshot["modules"] = {**modules, "custom": custom["enabled"]}
-        snapshot["dotii"] = self.dotii.read()
+        dotii_config = self.dotii.read()
+        snapshot["dotii"] = dotii_config
+        snapshot["character"] = dotii_config.get("character", "dotii")
         snapshot["display"] = self.display.read()
+        snapshot["xiaozhi"] = self.xiaozhi.read()
         return snapshot
 
 
@@ -1293,12 +1334,6 @@ def main() -> None:
 
     token = arguments.token or load_or_create_token(writable_root / "bridge-token")
     modules = ModuleConfigStore(writable_root / "modules.json")
-    bambu_config = BambuConfigStore(writable_root / "bambu.json")
-    bambu = BambuService(
-        bambu_config,
-        lambda: modules.read()["bambu"],
-        lambda: resolve_ffmpeg(writable_root),
-    )
     bluetooth = BluetoothBridge(writable_root)
     firmware = FirmwareFlasher(project_root(), writable_root)
     server = BridgeServer(
@@ -1311,14 +1346,12 @@ def main() -> None:
         DotiiConfigStore(writable_root / "dotii.json"),
         DisplayConfigStore(writable_root / "display.json"),
         CustomAssetStore(writable_root),
-        bambu_config,
-        bambu,
+        XiaozhiConfigStore(writable_root / "xiaozhi.json"),
         bluetooth,
         firmware,
         writable_root,
         arguments.parent_pid,
     )
-    bambu.start()
     bluetooth.start()
     stop = threading.Event()
     if arguments.parent_pid > 1:
@@ -1338,7 +1371,6 @@ def main() -> None:
         pass
     finally:
         stop.set()
-        server.bambu.stop()
         server.bluetooth.stop()
         server.firmware.stop()
         server.server_close()

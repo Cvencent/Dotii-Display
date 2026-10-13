@@ -1,6 +1,6 @@
 # Dotii 桌面交互屏
 
-Dotii 是一套由 ESP32-S3 圆形 AMOLED 桌面屏和 PC 端 CodexBridge 组成的开源状态显示系统。CodexBridge 负责 Codex 状态、任务、结果与多设备已读同步；Dotii 管理页继续提供 Bambu Lab 打印进度、自定义内容、显示设置、BLE 配网与烧录。设备通过 Dotii 表情提供轻量互动。
+Dotii 是一套由 ESP32-S3 圆形 AMOLED 桌面屏、CodexBridge 与小智 AI 组成的开源桌面对话终端。设备固件原生运行小智语音助手，内置可切换形象与表情状态机，既能随对话与触摸切换表情，也能显示 Codex 状态。CodexBridge 以通用设备协议提供 Codex 额度、近 7 日 Token、任务状态与多设备已读同步；管理页则负责小智连接、小智表情、自定义页面、Codex 显示、显示设置、BLE 配网与烧录。
 
 ![Dotii 桌面交互屏产品渲染图](assets/dotii-product-render.png)
 
@@ -13,7 +13,7 @@ Dotii 是一套由 ESP32-S3 圆形 AMOLED 桌面屏和 PC 端 CodexBridge 组成
 | Windows | Windows 10/11 x64 | [CodexBridge Releases](https://github.com/Cvencent/CodexBridge/releases) | 正式版 |
 | macOS | Apple Silicon、macOS 13 及以上 | 当前预览包仍由 Dotii-Display Release 提供 | 迁移到 CodexBridge 打包前的过渡版本 |
 
-macOS 预览版目前不支持 Intel Mac。由于尚未经过苹果公证，首次打开时需要在“系统设置 > 隐私与安全性”中手动允许。发布包会包含运行所需组件，普通用户无需安装 Python、Node.js、Codex CLI、FFmpeg 或 ESP-IDF。
+macOS 预览版目前不支持 Intel Mac。由于尚未经过苹果公证，首次打开时需要在“系统设置 > 隐私与安全性”中手动允许。发布包会包含运行所需组件，普通用户无需安装 Python、Node.js、Codex CLI 或 ESP-IDF。
 
 ## 使用前准备
 
@@ -32,20 +32,21 @@ macOS 预览版目前不支持 Intel Mac。由于尚未经过苹果公证，首�
 2. 运行 `CodexBridge.exe`。它会驻留在系统托盘，并托管 Dotii 管理页；默认地址为 `http://127.0.0.1:8787`。
 3. 用 USB 线连接 Dotii，在管理页“设置”中识别设备。首次使用时可通过“一键烧录”写入随包固件。
 4. 使用蓝牙配网，将 2.4 GHz Wi-Fi 和 CodexBridge 连接信息同步到 Dotii。
-5. 在 CodexBridge 托盘中按设备启用 Codex 能力；Bambu 等非 Codex 功能继续在管理页配置。
+5. 在管理页“小智”中填写小智服务端地址与唤醒词，设备即可直接进行语音对话。
+6. 在 CodexBridge 托盘中按设备启用 `quota` 能力，Codex 额度与近 7 日 Token 会通过通用协议下发到设备。
 
 请保持解压后的目录结构不变。关闭浏览器不会退出程序；重新打开管理页、查看日志或退出程序时，请使用系统托盘中的 CodexBridge 图标。不要单独启动内部管理进程。
 
 ### 更新 Windows 便携包
 
-先从系统托盘彻底退出旧版程序，再安装新版 CodexBridge。CodexBridge 的设备配对、能力与语音设置保存在 `%LOCALAPPDATA%\CodexBridge`；Dotii 的 Bambu、自定义页、显示、配网与烧录配置继续保存在 `%LOCALAPPDATA%\StateDisplay`。若新版本包含 Dotii 固件更新，请在管理页中重新执行“一键烧录”。
+先从系统托盘彻底退出旧版程序，再安装新版 CodexBridge。CodexBridge 的设备配对、能力与语音设置保存在 `%LOCALAPPDATA%\CodexBridge`；Dotii 的小智连接、小智表情、自定义页、显示、配网与烧录配置继续保存在 `%LOCALAPPDATA%\StateDisplay`。若新版本包含 Dotii 固件更新，请在管理页中重新执行“一键烧录”。
 
 ## macOS 快速上手
 
 1. 从 [macOS Release](https://github.com/ZeroOne000011/Dotii-Display/releases/tag/v1.1.1-macos-preview.1) 下载 DMG。当前版本仅支持 Apple Silicon Mac 和 macOS 13 及以上。
 2. 打开 DMG，将 `DotiiManagementCenter-1.1.1.app` 拖到“应用程序”。
 3. 从“应用程序”打开 Dotii 管理中心。如果系统阻止启动，请打开“系统设置 > 隐私与安全性”，在对应提示旁选择“仍要打开”，然后再次确认。
-4. 首次扫描 Dotii 时允许蓝牙权限；连接 Dotii 或 Bambu 时按系统提示允许本地网络权限。
+4. 首次扫描 Dotii 时允许蓝牙权限；连接 Dotii 时按系统提示允许本地网络权限。
 5. 应用启动后会驻留在菜单栏。后续烧录、蓝牙配网及模块设置均在管理页面中完成。
 
 不需要也不建议全局关闭 macOS 的安全检查。受管理的公司或学校 Mac 可能禁止打开未经公证的应用。
@@ -64,17 +65,31 @@ shasum -a 256 -c DotiiManagementCenter-macOS-arm64-1.1.1.dmg.sha256
 
 更新前先从菜单栏退出 Dotii 管理中心，再用新版 App 替换“应用程序”中的旧版。运行配置保存在 `~/Library/Application Support/Dotii`，替换或删除 App 不会自动清除配置。
 
-卸载时先退出应用，再将 App 移到废纸篓。如果不再需要原有配置，可以手动删除上述运行目录；其中可能包含 Bambu 访问码和设备连接信息，请勿上传或分享。
+卸载时先退出应用，再将 App 移到废纸篓。如果不再需要原有配置，可以手动删除上述运行目录；其中可能包含 Wi-Fi 密码、小智服务地址和设备连接信息，请勿上传或分享。
 
 ## 主要功能
 
-- **Codex 状态**：由 CodexBridge 采集并广播额度、用量、任务状态、计划进度和用户可见消息；多台设备共享已读状态。
-- **Bambu 打印状态**：通过局域网读取打印进度、温度、耗材和图层，并在打印机支持时显示相机画面。
+- **小智 AI**：设备固件内原生运行小智语音助手，直接与配置的小智服务端建立 WebSocket 会话，不依赖电脑端中转。
+- **小智表情**：内置表情状态机，随对话、连接和触摸切换不同表情；支持在管理页切换 Dotii、Nimbo、Twinkle、Blob 四种形象。
+- **Codex 状态**：由 CodexBridge 通用协议采集并广播额度、近 7 日 Token、额度重置、任务状态、计划进度和用户可见消息；多台设备共享已读状态。
 - **自定义页面**：编辑文字、颜色、图片和圆环，保存后同步到 466 × 466 圆屏。
-- **Dotii 表情**：显示待机、眨眼、连接、工作、完成、失败等状态动画。
 - **设备管理**：提供蓝牙配网、重置配网、显示设置、休眠设置、登录自启动和受保护的一键烧录。
 
-Codex 能力与 Bambu 首次运行默认关闭，不会在用户启用前自动安装、登录或连接外部服务。
+小智默认关闭，Codex 能力首次运行也默认关闭，都不会在用户启用前自动安装、登录或连接外部服务。
+
+## 形象与表情来源
+
+Dotii 的原生表情引擎与可切换形象参考并移植自开源项目 [aora-bot](https://github.com/sam70361/aora-bot)（其 `mood-mates` 角色资料）。其中 Dotii 形象为本项目自研，Nimbo、Twinkle、Blob 三个形象与对应表情几何来自 aora-bot。
+
+本项目为个人开源固件项目，仅用于非商业用途。使用或二次分发时，请一并遵守 aora-bot 仓库的授权与署名要求；如 aora-bot 后续更新许可，请以原仓库为准。
+
+## 与 CodexBridge 的分工
+
+Dotii 固件内置一套通用设备协议客户端，任何实现同一协议的设备都可以接入 CodexBridge。CodexBridge 是独立的数据主机，负责采集 Codex 额度、近 7 日 Token、额度重置与任务状态，并按设备订阅的能力（如 `quota`）下发 `codex_status` 消息。
+
+- 小智对话、表情、自定义页面、显示与配网由 Dotii 管理中心负责，写入设备本地配置。
+- Codex 数据不再由管理中心采集，也不会经过管理中心转发，而是由设备直接从 CodexBridge 读取。
+- 该协议保持通用，后续的 AI Passport 等设备同样可以按能力接入。
 
 ## 常见问题
 
@@ -95,9 +110,16 @@ Windows 请检查系统托盘，macOS 请检查菜单栏，然后通过 Dotii �
 </details>
 
 <details>
-<summary><strong>Bambu 页面没有打印数据或相机画面</strong></summary>
+<summary><strong>小智无法唤醒或没有回复</strong></summary>
 
-确认电脑与打印机位于同一局域网，并检查打印机 IP、序列号、访问码和局域网模式。相机不可用不会影响打印状态。
+先在管理页“小智”中确认服务端地址、唤醒词与音色，并确保设备已连接 2.4 GHz Wi-Fi。表情由设备固件本地渲染，即使语音服务暂时不可用，触摸与状态表情依然会响应。
+
+</details>
+
+<details>
+<summary><strong>Codex 额度没有出现在设备上</strong></summary>
+
+Codex 数据由 CodexBridge 提供。请在 CodexBridge 托盘中为这台 Dotii 启用 `quota` 能力，并确认设备已用配对密钥连接。接口没有提供的数值会显示为 `--`，不会自动推算。
 
 </details>
 
@@ -129,8 +151,8 @@ Windows 的 CodexBridge 日志位于 `%LOCALAPPDATA%\CodexBridge`；Dotii 管理
 ## 数据与安全
 
 - 管理网页和管理 API 只允许本机访问；Dotii 读取数据时需要设备访问令牌。
-- Wi-Fi 密码、Bambu 访问码、设备令牌和运行配置保存在本机用户目录，不应上传到公开仓库。
-- Bambu 数据通过局域网获取。暂停、继续和停止只会在打印机状态允许时开放，并需要用户明确操作。
+- Wi-Fi 密码、小智服务地址、设备令牌和运行配置保存在本机用户目录，不应上传到公开仓库。
+- Codex 额度与用量由 CodexBridge 通过通用协议下发，设备只按自身订阅的能力读取，不接触其他账号数据。
 - 常规一键烧录不会擦除 NVS。请勿对未知设备、串口或固件执行烧录。
 - Windows 首次允许局域网访问时可能显示防火墙窗口。请允许 CodexBridge 与管理后台访问专用网络，并按实际使用的网络类型授权。
 

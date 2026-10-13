@@ -40,7 +40,7 @@ class CodexUiConfigTests(unittest.TestCase):
 
     def test_display_config_rejects_unknown_screen_off_page_target(self) -> None:
         with self.assertRaises(ValueError):
-            validate_display_config({"screen_off_page": "bambu"})
+            validate_display_config({"screen_off_page": "unknown"})
 
     def test_startup_command_uses_absolute_paths_and_startup_mode(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

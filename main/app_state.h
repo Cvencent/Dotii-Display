@@ -25,17 +25,6 @@ typedef enum {
 } codex_conversation_mode_t;
 
 typedef enum {
-    BAMBU_STATUS_OFFLINE = 0,
-    BAMBU_STATUS_IDLE,
-    BAMBU_STATUS_PREPARING,
-    BAMBU_STATUS_PRINTING,
-    BAMBU_STATUS_PAUSED,
-    BAMBU_STATUS_COMPLETED,
-    BAMBU_STATUS_CANCELLING,
-    BAMBU_STATUS_FAULT,
-} bambu_status_t;
-
-typedef enum {
     DOTII_EXPRESSION_IDLE_BREATH = 0,
     DOTII_EXPRESSION_BLINK,
     DOTII_EXPRESSION_CURIOUS,
@@ -53,10 +42,6 @@ typedef enum {
     DOTII_STATE_CODEX_WORKING,
     DOTII_STATE_CODEX_COMPLETED,
     DOTII_STATE_CODEX_FAILURE,
-    DOTII_STATE_BAMBU_PAUSED,
-    DOTII_STATE_BAMBU_PRINTING,
-    DOTII_STATE_BAMBU_COMPLETED,
-    DOTII_STATE_BAMBU_FAILURE,
     DOTII_STATE_COUNT,
 } dotii_business_state_t;
 
@@ -98,16 +83,15 @@ typedef struct {
     codex_conversation_mode_t conversation_mode;
     bool codex_enabled;
     bool xiaozhi_enabled;
-    bool bambu_enabled;
+    char xiaozhi_server_url[192];
+    char xiaozhi_wake_word[33];
+    char xiaozhi_voice[33];
+    bool xiaozhi_mcp_enabled;
     bool custom_enabled;
     bool dotii_enabled;
     bool custom_image_available;
     bool custom_ring_enabled;
     bool codex_ui_dual_limit;
-    bool bambu_configured;
-    bool bambu_connected;
-    bool bambu_commandable;
-    bool bambu_camera_available;
     bool dotii_base_idle;
     bool dotii_state_assigned;
     uint32_t display_revision;
@@ -144,33 +128,19 @@ typedef struct {
     uint32_t custom_ring_end;
     uint32_t custom_image_revision;
     uint32_t custom_image_size;
-    bambu_status_t bambu_status;
     dotii_expression_t dotii_expression;
     uint32_t dotii_state_duration_ms;
     uint32_t dotii_state_token;
     /* Business-state -> expression mapping configured by the management center.
-       The firmware resolves the active state locally from CodexBridge and Bambu
-       status, so a management snapshot can never overwrite the live expression. */
+       The firmware resolves the active state locally from CodexBridge and the
+       xiaozhi session, so a management snapshot can never overwrite the live
+       expression. */
     dotii_expression_t dotii_expression_for_state[DOTII_STATE_COUNT];
     uint16_t dotii_state_duration_for_state[DOTII_STATE_COUNT];
     dotii_expression_t dotii_touch_expression;
     dotii_expression_t dotii_blink_expression;
     dotii_expression_t dotii_long_idle_expression;
     uint16_t dotii_expression_durations_ms[DOTII_EXPRESSION_COUNT];
-    uint8_t bambu_progress;
-    uint16_t bambu_remaining_minutes;
-    uint16_t bambu_layer_current;
-    uint16_t bambu_layer_total;
-    int16_t bambu_nozzle_temperature;
-    int16_t bambu_bed_temperature;
-    uint32_t bambu_camera_revision;
-    uint32_t bambu_camera_size;
-    time_t bambu_finish_at;
-    time_t bambu_updated_at;
-    char bambu_name[41];
-    char bambu_status_text[17];
-    char bambu_filename[96];
-    char bambu_filament[32];
     char custom_title[49];
     char custom_value[97];
     char custom_body[257];
@@ -187,6 +157,4 @@ bool app_state_task_copy(size_t index, codex_task_detail_t *task);
 void app_state_make_preview(codex_snapshot_t *snapshot);
 const char *app_state_status_text(codex_task_status_t status);
 codex_task_status_t app_state_status_from_string(const char *status);
-const char *app_state_bambu_status_text(bambu_status_t status);
-bambu_status_t app_state_bambu_status_from_string(const char *status);
 dotii_expression_t app_state_dotii_expression_from_string(const char *expression);

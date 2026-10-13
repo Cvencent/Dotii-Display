@@ -12,18 +12,21 @@ from unittest import mock
 BRIDGE = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BRIDGE))
 
-import bambu_client  # noqa: E402
 import codex_bridge  # noqa: E402
-from platforms.macos import MacOSPlatformAdapter  # noqa: E402
 from platforms.windows import WindowsPlatformAdapter  # noqa: E402
-from bambu_client import BambuConfigStore, BambuService  # noqa: E402
+
 from codex_bridge import (  # noqa: E402
     CUSTOM_DEFAULTS,
-    resolve_ffmpeg,
+    DOTII_CHARACTER_IDS,
+    default_dotii_config,
     validate_custom_config,
+    validate_dotii_config,
     validate_module_config,
+    validate_snapshot,
+    validate_xiaozhi_config,
     watch_parent,
 )
+
 
 
 class ModuleOnDemandTests(unittest.TestCase):
@@ -91,11 +94,42 @@ class ModuleOnDemandTests(unittest.TestCase):
 
         self.assertIn("BrokenPipeError, ConnectionAbortedError, ConnectionResetError", backend)
 
-    def test_first_run_defaults_keep_codex_and_bambu_off(self):
+    def test_first_run_defaults_enable_xiaozhi_and_dotii(self):
         self.assertEqual(
             validate_module_config(None),
-            {"bambu": False, "dotii": True},
+            {"xiaozhi": True, "dotii": True},
         )
+
+    def test_xiaozhi_config_defaults_and_requires_websocket_url(self):
+        defaults = validate_xiaozhi_config(None)
+        self.assertFalse(defaults["enabled"])
+        self.assertEqual(defaults["server_url"], "wss://api.tenclass.net/xiaozhi/v1/")
+        with self.assertRaises(ValueError):
+            validate_xiaozhi_config({"server_url": "https://example.com"})
+
+    def test_snapshot_validation_rejects_bambu_module(self):
+        with self.assertRaises(ValueError):
+            validate_snapshot({"schema_version": 1, "bambu": {"configured": True}})
+
+    def test_dotii_config_supports_switchable_characters(self):
+        defaults = default_dotii_config()
+        self.assertEqual(defaults["character"], "dotii")
+        for character in DOTII_CHARACTER_IDS:
+            self.assertEqual(validate_dotii_config({**defaults, "character": character})["character"], character)
+        with self.assertRaises(ValueError):
+            validate_dotii_config({**defaults, "character": "unknown"})
+
+    def test_xiaozhi_config_preserves_websocket_settings(self):
+        saved = validate_xiaozhi_config({
+            "server_url": "wss://example.test/xiaozhi",
+            "wake_word": "嗨小智",
+            "voice": "sweet",
+            "mcp_enabled": False,
+        })
+        self.assertEqual(saved["server_url"], "wss://example.test/xiaozhi")
+        self.assertEqual(saved["wake_word"], "嗨小智")
+        self.assertEqual(saved["voice"], "sweet")
+        self.assertFalse(saved["mcp_enabled"])
 
     def test_first_run_defaults_enable_custom_and_dotii_pages(self):
         self.assertTrue(CUSTOM_DEFAULTS["enabled"])
@@ -140,119 +174,28 @@ class ModuleOnDemandTests(unittest.TestCase):
             asset = BRIDGE / "web" / animation["src"].lstrip("/")
             self.assertTrue(asset.is_file(), animation["id"])
 
-    def test_bundled_ffmpeg_is_preferred_over_path(self):
-        with tempfile.TemporaryDirectory(dir=BRIDGE.parent / ".codx") as temporary:
-            folder = Path(temporary)
-            bundled = folder / "tools" / "ffmpeg" / "bin" / "ffmpeg.exe"
-            bundled.parent.mkdir(parents=True)
-            bundled.touch()
+    def test_frontend_has_xiaozhi_navigation_without_bambu(self):
+        html = (BRIDGE / "web" / "index.html").read_text(encoding="utf-8")
+        self.assertIn('data-panel="xiaozhi"', html)
+        self.assertIn('data-panel="codex"', html)
+        self.assertIn("小智表情", html)
+        self.assertNotIn("Bambu", html)
 
-            with (
-                mock.patch.object(codex_bridge, "tools_root", return_value=folder / "tools"),
-                mock.patch.object(codex_bridge, "current_platform", return_value=WindowsPlatformAdapter()),
-                mock.patch.object(codex_bridge.shutil, "which") as which,
-            ):
-                resolved = resolve_ffmpeg(folder / "runtime")
+    def test_frontend_snapshot_does_not_expose_bambu_status(self):
+        script = (BRIDGE / "web" / "app.js").read_text(encoding="utf-8")
+        self.assertNotIn("renderBambu", script)
+        self.assertNotIn("bambu-nav-state", script)
 
-            which.assert_not_called()
-            self.assertEqual(resolved, str(bundled.resolve()))
-
-    def test_macos_bundled_ffmpeg_is_preferred_without_path_lookup(self):
-        with tempfile.TemporaryDirectory(dir=BRIDGE.parent / ".codx") as temporary:
-            folder = Path(temporary)
-            bundled = folder / "tools" / "ffmpeg" / "bin" / "ffmpeg"
-            bundled.parent.mkdir(parents=True)
-            bundled.touch()
-
-            with (
-                mock.patch.object(codex_bridge, "tools_root", return_value=folder / "tools"),
-                mock.patch.object(codex_bridge, "current_platform", return_value=MacOSPlatformAdapter()),
-                mock.patch.object(codex_bridge.shutil, "which") as which,
-            ):
-                resolved = resolve_ffmpeg(folder / "runtime")
-
-            which.assert_not_called()
-            self.assertEqual(resolved, str(bundled.resolve()))
-
-    def test_bambu_snapshot_does_not_check_ffmpeg_until_rtsps_path_runs(self):
-        with tempfile.TemporaryDirectory(dir=BRIDGE.parent / ".codx") as temporary:
-            config = BambuConfigStore(Path(temporary) / "bambu.json")
-            config.write(
-                {
-                    "host": "192.0.2.10",
-                    "access_code": "12345678",
-                    "serial": "01P00A000000000",
-                    "camera_enabled": True,
-                }
-            )
-            ffmpeg = mock.Mock(return_value=None)
-            service = BambuService(config, lambda: True, ffmpeg)
-            snapshot = service.snapshot()
-
-            self.assertFalse(snapshot["connected"])
-            self.assertFalse(snapshot["camera_available"])
-            ffmpeg.assert_not_called()
-
-    def test_disabling_bambu_closes_mqtt_and_camera_runtime(self):
-        with tempfile.TemporaryDirectory(dir=BRIDGE.parent / ".codx") as temporary:
-            config = BambuConfigStore(Path(temporary) / "bambu.json")
-            config.write({"host": "192.0.2.10", "serial": "01P00A000000000", "access_code": "12345678"})
-            enabled = {"value": True}
-            service = BambuService(config, lambda: enabled["value"], lambda: None)
-            mqtt = mock.Mock()
-            camera_process = mock.Mock()
-            camera_process.poll.return_value = None
-            service._mqtt = mqtt
-            service._camera_process = camera_process
-            enabled["value"] = False
-
-            service.set_enabled(False)
-
-            mqtt.close.assert_called_once()
-            camera_process.terminate.assert_called_once()
-
-    def test_frontend_removes_dependency_panels_and_maintenance_actions(self):
+    def test_frontend_exposes_character_switch_and_xiaozhi_form(self):
         html = (BRIDGE / "web" / "index.html").read_text(encoding="utf-8")
         script = (BRIDGE / "web" / "app.js").read_text(encoding="utf-8")
-        styles = (BRIDGE / "web" / "styles.css").read_text(encoding="utf-8")
-        backend = (BRIDGE / "codex_bridge.py").read_text(encoding="utf-8")
+        self.assertIn('id="dotii-character-grid"', html)
+        self.assertIn('id="xiaozhi-form"', html)
+        self.assertIn('id="xiaozhi-server-url"', html)
+        self.assertIn("saveDotiiCharacter", script)
+        self.assertIn("saveXiaozhi", script)
+        self.assertIn("/api/v1/admin/xiaozhi", script)
 
-        self.assertNotIn("Codex 连接", html)
-        self.assertNotIn("Bambu 模块与相机依赖", html)
-        self.assertNotIn("install-dependency", html + script)
-        self.assertNotIn("reinstall-dependency", html + script)
-        self.assertNotIn("/api/v1/admin/codex/detect", backend)
-        self.assertNotIn("Codex 运行检测", html)
-        self.assertNotIn("/api/v1/admin/codex/check", backend)
-        self.assertNotIn("/api/v1/admin/codex/check", script)
-        self.assertNotIn("overview.codex_check", script)
-        self.assertNotIn("/api/v1/admin/dependencies/install", backend)
-        self.assertNotIn("/api/v1/admin/bambu/ffmpeg/install", backend)
-        self.assertIn("保存并连接", html)
-        self.assertIn("长按“重置配网”", html)
-        self.assertIn("请长按 Dotii 右侧按钮进入设置", html)
-        self.assertIn('class="bambu-help bluetooth-recovery-help"', html)
-        self.assertIn(".bambu-help.bluetooth-recovery-help", styles)
-        self.assertIn("border-top: 0", styles)
-        self.assertNotIn("固件、显示与休眠设置不受影响", html)
-        self.assertIn("相机画面暂不可用", html)
-        self.assertIn("resolve_ffmpeg", backend)
-
-    def test_bluetooth_setup_uses_reset_flow_instead_of_migration_token(self):
-        html = (BRIDGE / "web" / "index.html").read_text(encoding="utf-8")
-        script = (BRIDGE / "web" / "app.js").read_text(encoding="utf-8")
-        backend = (BRIDGE / "codex_bridge.py").read_text(encoding="utf-8")
-
-        self.assertNotIn('id="bluetooth-current-token"', html)
-        self.assertNotIn("current_token: currentToken", script)
-        self.assertNotIn('byId("bluetooth-current-token")', script)
-        self.assertIn("长按“重置配网”", html)
-        self.assertIn('current_token=payload.get("current_token", "")', backend)
-        self.assertIn('connected ? "已连接" : recognized ? "已识别"', script)
-        self.assertIn('blocked ? "需要处理"', script)
-        self.assertIn("已识别 Dotii ESP32-S3，可执行固件烧录", script)
-        self.assertIn("登录系统后自动启动", html)
-        self.assertNotIn("登录 Windows 后自动启动", html)
 
     def test_macos_build_rejects_stale_bundled_web_assets(self):
         packaging = (BRIDGE.parent / "packaging" / "macos" / "build_macos.sh").read_text(

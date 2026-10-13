@@ -29,7 +29,6 @@
 #include "ui_icons.h"
 
 LV_FONT_DECLARE(ui_font_chinese_semibold_24);
-LV_FONT_DECLARE(ui_font_bambu_semibold_24);
 LV_FONT_DECLARE(ui_font_digits_64);
 LV_FONT_DECLARE(ui_font_detail_20);
 LV_FONT_DECLARE(ui_font_fixed_20);
@@ -46,7 +45,7 @@ LV_FONT_DECLARE(ui_font_fixed_20);
 #define COLOR_ORANGE 0xFF9D3D
 #define COLOR_CYAN 0x20D6E6
 #define COLOR_GREEN 0x42D98C
-#define COLOR_BAMBU 0x00AE42
+#define COLOR_XIAOZHI 0x20D6E6
 #define COLOR_WARNING 0xF2C66D
 #define COLOR_DANGER 0xFF766F
 #define PAGE_COUNT 4
@@ -72,8 +71,15 @@ static lv_obj_t *s_plus_time;
 static lv_obj_t *s_plus_status;
 static lv_obj_t *s_plus_status_pill;
 static lv_obj_t *s_detail;
-static lv_obj_t *s_bambu_main;
-static lv_obj_t *s_bambu_detail;
+static lv_obj_t *s_xiaozhi_page;
+static lv_obj_t *s_detail_title;
+static lv_obj_t *s_detail_meta;
+static lv_obj_t *s_user_message;
+static lv_obj_t *s_assistant_message;
+static lv_obj_t *s_assistant_speaker;
+static lv_obj_t *s_assistant_bubble;
+static lv_obj_t *s_detail_chat;
+static lv_obj_t *s_detail_footer;
 static lv_obj_t *s_custom;
 static lv_obj_t *s_dotii;
 static lv_obj_t *s_control;
@@ -93,33 +99,14 @@ static lv_obj_t *s_reset_day;
 static lv_obj_t *s_reset_time;
 static lv_obj_t *s_time_main;
 static lv_obj_t *s_time_detail;
-static lv_obj_t *s_time_bambu_main;
-static lv_obj_t *s_time_bambu_detail;
-static lv_obj_t *s_bambu_arc;
-static lv_obj_t *s_bambu_status;
-static lv_obj_t *s_bambu_percent;
-static lv_obj_t *s_bambu_remaining;
-static lv_obj_t *s_bambu_finish;
-static lv_obj_t *s_bambu_status_pill;
-static lv_obj_t *s_bambu_status_dot;
-static lv_obj_t *s_bambu_camera;
-static lv_obj_t *s_bambu_camera_empty;
-static lv_obj_t *s_bambu_filename;
-static lv_obj_t *s_bambu_filament;
-static lv_obj_t *s_bambu_layer;
-static lv_obj_t *s_bambu_pause;
-static lv_obj_t *s_bambu_pause_icon;
-static lv_obj_t *s_bambu_stop;
-static lv_obj_t *s_bambu_stop_progress;
-static lv_obj_t *s_detail_title;
-static lv_obj_t *s_detail_meta;
-static lv_obj_t *s_user_message;
-static lv_obj_t *s_assistant_message;
-static lv_obj_t *s_assistant_speaker;
-static lv_obj_t *s_assistant_bubble;
-static lv_obj_t *s_detail_chat;
+static lv_obj_t *s_time_xiaozhi;
+static lv_obj_t *s_xiaozhi_status_pill;
+static lv_obj_t *s_xiaozhi_status_dot;
+static lv_obj_t *s_xiaozhi_status;
+static lv_obj_t *s_xiaozhi_emotion;
+static lv_obj_t *s_xiaozhi_server;
+static lv_obj_t *s_xiaozhi_hint;
 static lv_obj_t *s_settings_list;
-static lv_obj_t *s_detail_footer;
 static lv_obj_t *s_battery_label;
 static lv_obj_t *s_settings_wifi;
 static lv_obj_t *s_settings_ip;
@@ -146,7 +133,7 @@ static bool s_dotii_engine_ready;
 static char s_dotii_character[16] = "dotii";
 static xiaozhi_client_t s_xiaozhi;
 static lv_obj_t *s_codex_quick;
-static lv_obj_t *s_bambu_quick;
+static lv_obj_t *s_xiaozhi_quick;
 static lv_obj_t *s_custom_quick;
 static lv_obj_t *s_dotii_quick;
 static lv_obj_t *s_page_dots[PAGE_COUNT][PAGE_COUNT];
@@ -180,8 +167,6 @@ static transition_t s_pending_transition;
 static lv_font_t s_ui_font;
 static lv_image_dsc_t s_custom_image_dsc;
 static uint32_t s_custom_image_revision;
-static lv_image_dsc_t s_bambu_camera_dsc;
-static uint32_t s_bambu_camera_revision;
 static char *s_rendered_conversation;
 static codex_task_detail_t *s_detail_task;
 static size_t s_detail_task_index;
@@ -212,6 +197,7 @@ static lv_obj_t *first_enabled_screen(void);
 static lv_obj_t *enabled_return_screen(lv_obj_t *screen);
 static void render_codex_detail(void);
 static void render_dotii_expression(void);
+static void xiaozhi_sync_config(void);
 static lv_color_t color(uint32_t hex);
 static void set_screen_background(lv_obj_t *screen);
 static void screen_off(void);
@@ -422,7 +408,6 @@ static void add_activity_event(lv_obj_t *screen)
 static void return_from_current(void)
 {
     if (s_current == s_detail) load_screen(enabled_return_screen(page_screen(0)), false);
-    else if (s_current == s_bambu_detail) load_screen(enabled_return_screen(s_bambu_main), false);
     else if (s_current == s_settings) load_screen(first_enabled_screen(), false);
     else if (s_current == s_power) load_screen(enabled_return_screen(s_before_power), false);
 }
@@ -466,8 +451,6 @@ static void swipe_event(lv_event_t *event)
         } else {
             return_from_current();
         }
-    } else if (s_current == s_bambu_main && direction == LV_DIR_LEFT) {
-        load_screen(s_bambu_detail, true);
     } else if (direction == LV_DIR_RIGHT) {
         return_from_current();
     }
@@ -787,7 +770,7 @@ static bool page_enabled(uint8_t page)
 {
     if (!s_snapshot.valid) return page < 2;
     if (page == 0) return s_snapshot.codex_enabled;
-    if (page == 1) return s_snapshot.bambu_enabled;
+    if (page == 1) return s_snapshot.xiaozhi_enabled;
     if (page == 2) return s_snapshot.custom_enabled;
     return s_snapshot.dotii_enabled;
 }
@@ -795,7 +778,7 @@ static bool page_enabled(uint8_t page)
 static lv_obj_t *page_screen(uint8_t page)
 {
     if (page == 0) return s_snapshot.codex_ui_dual_limit ? s_plus_main : s_main;
-    if (page == 1) return s_bambu_main;
+    if (page == 1) return s_xiaozhi_page;
     if (page == 2) return s_custom;
     return s_dotii;
 }
@@ -811,7 +794,7 @@ static lv_obj_t *first_enabled_screen(void)
 static bool screen_enabled(lv_obj_t *screen)
 {
     if (screen == s_main || screen == s_plus_main || screen == s_detail) return page_enabled(0);
-    if (screen == s_bambu_main || screen == s_bambu_detail) return page_enabled(1);
+    if (screen == s_xiaozhi_page) return page_enabled(1);
     if (screen == s_custom) return page_enabled(2);
     if (screen == s_dotii) return page_enabled(3);
     return true;
@@ -825,7 +808,7 @@ static lv_obj_t *enabled_return_screen(lv_obj_t *screen)
 
 static void update_page_dots(void)
 {
-    static const uint32_t active_colors[PAGE_COUNT] = {COLOR_BLUE, COLOR_BAMBU, COLOR_WARNING, COLOR_CYAN};
+    static const uint32_t active_colors[PAGE_COUNT] = {COLOR_BLUE, COLOR_XIAOZHI, COLOR_WARNING, COLOR_CYAN};
     for (uint8_t row = 0; row < PAGE_COUNT; ++row) {
         int total_width = 0;
         uint8_t count = 0;
@@ -1386,210 +1369,57 @@ static void build_detail(void)
     register_page_scroll_target(s_detail, s_detail_chat);
 }
 
-static void bambu_pause_event(lv_event_t *event)
+static void build_xiaozhi(void)
 {
-    if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
-    connectivity_bambu_command(s_snapshot.bambu_status == BAMBU_STATUS_PAUSED ? "resume" : "pause");
-}
+    s_xiaozhi_page = lv_obj_create(NULL);
+    set_screen_background(s_xiaozhi_page);
+    add_activity_event(s_xiaozhi_page);
+    lv_obj_add_event_cb(s_xiaozhi_page, swipe_event, LV_EVENT_GESTURE, NULL);
 
-static void bambu_stop_anim_done(lv_anim_t *animation)
-{
-    (void)animation;
-    connectivity_bambu_command("stop");
-    lv_bar_set_value(s_bambu_stop_progress, 0, LV_ANIM_OFF);
-}
-
-static void bambu_stop_event(lv_event_t *event)
-{
-    lv_event_code_t code = lv_event_get_code(event);
-    if (code == LV_EVENT_PRESSED && !lv_obj_has_state(s_bambu_stop, LV_STATE_DISABLED)) {
-        lv_anim_t animation;
-        lv_anim_init(&animation);
-        lv_anim_set_var(&animation, s_bambu_stop_progress);
-        lv_anim_set_values(&animation, 0, 100);
-        lv_anim_set_duration(&animation, 1200);
-        lv_anim_set_exec_cb(&animation, restart_anim_exec);
-        lv_anim_set_completed_cb(&animation, bambu_stop_anim_done);
-        lv_anim_start(&animation);
-    } else if (code == LV_EVENT_RELEASED || code == LV_EVENT_PRESS_LOST) {
-        lv_anim_delete(s_bambu_stop_progress, restart_anim_exec);
-        lv_bar_set_value(s_bambu_stop_progress, 0, LV_ANIM_OFF);
-    }
-}
-
-static lv_obj_t *make_bambu_metric(lv_obj_t *parent, const char *caption, int x)
-{
-    lv_obj_t *box = lv_obj_create(parent);
-    lv_obj_remove_style_all(box);
-    lv_obj_set_size(box, 132, 56);
-    lv_obj_set_pos(box, x, 346);
-    lv_obj_remove_flag(box, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_t *value = make_label(box, "--", &lv_font_montserrat_22, COLOR_TEXT);
-    lv_obj_set_width(value, 132);
-    lv_obj_set_style_text_align(value, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_align(value, LV_ALIGN_TOP_MID, 0, 0);
-    lv_obj_t *label = make_label(box, caption, &s_ui_font, COLOR_MUTED);
-    lv_obj_set_style_transform_scale(label, 282, 0);
-    lv_obj_align(label, LV_ALIGN_BOTTOM_MID, 0, 1);
-    return value;
-}
-
-static void build_bambu(void)
-{
-    s_bambu_main = lv_obj_create(NULL);
-    set_screen_background(s_bambu_main);
-    add_activity_event(s_bambu_main);
-    lv_obj_add_event_cb(s_bambu_main, swipe_event, LV_EVENT_GESTURE, NULL);
-    lv_obj_t *content = lv_obj_create(s_bambu_main);
+    lv_obj_t *content = lv_obj_create(s_xiaozhi_page);
     lv_obj_remove_style_all(content);
     lv_obj_set_size(content, SCREEN_SIZE, SCREEN_SIZE);
     lv_obj_center(content);
     lv_obj_remove_flag(content, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_remove_flag(content, LV_OBJ_FLAG_CLICKABLE);
 
-    s_bambu_arc = lv_arc_create(content);
-    lv_obj_set_size(s_bambu_arc, SCREEN_SIZE, SCREEN_SIZE);
-    lv_obj_center(s_bambu_arc);
-    lv_arc_set_range(s_bambu_arc, 0, 100);
-    lv_arc_set_value(s_bambu_arc, 0);
-    lv_arc_set_bg_angles(s_bambu_arc, 140, 400);
-    lv_obj_set_style_arc_width(s_bambu_arc, 26, LV_PART_MAIN);
-    lv_obj_set_style_arc_color(s_bambu_arc, color(0x092A16), LV_PART_MAIN);
-    lv_obj_set_style_arc_width(s_bambu_arc, 26, LV_PART_INDICATOR);
-    lv_obj_set_style_arc_color(s_bambu_arc, color(COLOR_BAMBU), LV_PART_INDICATOR);
-    lv_obj_remove_style(s_bambu_arc, NULL, LV_PART_KNOB);
-    lv_obj_remove_flag(s_bambu_arc, LV_OBJ_FLAG_CLICKABLE);
-
-    lv_obj_t *title = make_label(content, "Bambu", &lv_font_montserrat_28, COLOR_TEXT);
+    lv_obj_t *title = make_label(content, "小智", &lv_font_montserrat_28, COLOR_TEXT);
     lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 48);
-    s_time_bambu_main = make_label(content, "--:--", &lv_font_montserrat_20, COLOR_MUTED);
-    lv_obj_align(s_time_bambu_main, LV_ALIGN_TOP_MID, 0, 82);
+    s_time_xiaozhi = make_label(content, "--:--", &lv_font_montserrat_20, COLOR_MUTED);
+    lv_obj_align(s_time_xiaozhi, LV_ALIGN_TOP_MID, 0, 82);
 
-    lv_obj_t *kicker = make_label(content, "打印进度", &ui_font_bambu_semibold_24, COLOR_MUTED);
-    lv_obj_align(kicker, LV_ALIGN_CENTER, 0, -82);
-    s_bambu_percent = make_label(content, "--", &ui_font_digits_64, COLOR_TEXT);
-    lv_obj_set_style_transform_scale(s_bambu_percent, 282, 0);
-    lv_obj_align(s_bambu_percent, LV_ALIGN_CENTER, 0, -19);
-
-    s_bambu_status_pill = lv_obj_create(content);
-    lv_obj_set_size(s_bambu_status_pill, 138, 48);
-    lv_obj_set_style_radius(s_bambu_status_pill, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_bg_color(s_bambu_status_pill, color(0x082913), 0);
-    lv_obj_set_style_bg_opa(s_bambu_status_pill, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_width(s_bambu_status_pill, 0, 0);
-    lv_obj_set_style_pad_hor(s_bambu_status_pill, 6, 0);
-    lv_obj_set_style_pad_ver(s_bambu_status_pill, 0, 0);
-    lv_obj_set_style_pad_column(s_bambu_status_pill, 4, 0);
-    lv_obj_set_layout(s_bambu_status_pill, LV_LAYOUT_FLEX);
-    lv_obj_set_flex_flow(s_bambu_status_pill, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(s_bambu_status_pill, LV_FLEX_ALIGN_CENTER,
+    s_xiaozhi_status_pill = lv_obj_create(content);
+    lv_obj_set_size(s_xiaozhi_status_pill, 180, 48);
+    lv_obj_set_style_radius(s_xiaozhi_status_pill, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_opa(s_xiaozhi_status_pill, LV_OPA_20, 0);
+    lv_obj_set_style_border_width(s_xiaozhi_status_pill, 0, 0);
+    lv_obj_set_style_pad_column(s_xiaozhi_status_pill, 6, 0);
+    lv_obj_set_layout(s_xiaozhi_status_pill, LV_LAYOUT_FLEX);
+    lv_obj_set_flex_flow(s_xiaozhi_status_pill, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(s_xiaozhi_status_pill, LV_FLEX_ALIGN_CENTER,
                           LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_remove_flag(s_bambu_status_pill, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_remove_flag(s_bambu_status_pill, LV_OBJ_FLAG_CLICKABLE);
-    s_bambu_status_dot = lv_obj_create(s_bambu_status_pill);
-    lv_obj_remove_style_all(s_bambu_status_dot);
-    lv_obj_set_size(s_bambu_status_dot, 14, 14);
-    lv_obj_set_style_radius(s_bambu_status_dot, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_bg_color(s_bambu_status_dot, color(COLOR_BAMBU), 0);
-    lv_obj_set_style_bg_opa(s_bambu_status_dot, LV_OPA_COVER, 0);
-    s_bambu_status = make_label(s_bambu_status_pill, "离线", &s_ui_font, COLOR_BAMBU);
-    lv_obj_set_size(s_bambu_status, 82, 22);
-    lv_obj_set_style_text_align(s_bambu_status, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_transform_scale(s_bambu_status, 282, 0);
-    lv_obj_set_style_text_outline_stroke_color(s_bambu_status, color(COLOR_BAMBU), 0);
-    lv_obj_set_style_text_outline_stroke_width(s_bambu_status, 2, 0);
-    lv_obj_set_style_text_outline_stroke_opa(s_bambu_status, LV_OPA_COVER, 0);
-    lv_obj_align(s_bambu_status_pill, LV_ALIGN_CENTER, 0, 52);
+    lv_obj_remove_flag(s_xiaozhi_status_pill, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_remove_flag(s_xiaozhi_status_pill, LV_OBJ_FLAG_CLICKABLE);
+    s_xiaozhi_status_dot = lv_obj_create(s_xiaozhi_status_pill);
+    lv_obj_remove_style_all(s_xiaozhi_status_dot);
+    lv_obj_set_size(s_xiaozhi_status_dot, 14, 14);
+    lv_obj_set_style_radius(s_xiaozhi_status_dot, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_opa(s_xiaozhi_status_dot, LV_OPA_COVER, 0);
+    s_xiaozhi_status = make_label(s_xiaozhi_status_pill, "未连接", &s_ui_font, COLOR_MUTED);
+    lv_obj_set_style_transform_scale(s_xiaozhi_status, 282, 0);
+    lv_obj_align(s_xiaozhi_status_pill, LV_ALIGN_CENTER, 0, -42);
 
-    s_bambu_remaining = make_bambu_metric(content, "剩余时间", 92);
-    s_bambu_finish = make_bambu_metric(content, "预计完成", 242);
-
-    lv_obj_t *divider = lv_obj_create(content);
-    lv_obj_remove_style_all(divider);
-    lv_obj_set_size(divider, 1, 48);
-    lv_obj_set_style_bg_color(divider, color(0x38403E), 0);
-    lv_obj_set_style_bg_opa(divider, LV_OPA_COVER, 0);
-    lv_obj_set_pos(divider, 233, 350);
-    lv_obj_remove_flag(divider, LV_OBJ_FLAG_CLICKABLE);
-
+    s_xiaozhi_emotion = make_label(content, "等待对话", &ui_font_chinese_semibold_24, COLOR_TEXT);
+    lv_obj_align(s_xiaozhi_emotion, LV_ALIGN_CENTER, 0, 28);
+    s_xiaozhi_server = make_label(content, "服务端 --", &s_ui_font, COLOR_MUTED);
+    lv_obj_set_width(s_xiaozhi_server, 350);
+    lv_label_set_long_mode(s_xiaozhi_server, LV_LABEL_LONG_DOT);
+    lv_obj_set_style_text_align(s_xiaozhi_server, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_align(s_xiaozhi_server, LV_ALIGN_CENTER, 0, 88);
+    s_xiaozhi_hint = make_label(content, "说“你好小智”开始对话", &s_ui_font, COLOR_MUTED);
+    lv_obj_set_style_transform_scale(s_xiaozhi_hint, 282, 0);
+    lv_obj_align(s_xiaozhi_hint, LV_ALIGN_BOTTOM_MID, 0, -58);
     make_page_dots(content, 1);
-
-    s_bambu_detail = lv_obj_create(NULL);
-    set_screen_background(s_bambu_detail);
-    add_activity_event(s_bambu_detail);
-    lv_obj_add_event_cb(s_bambu_detail, swipe_event, LV_EVENT_GESTURE, NULL);
-    lv_obj_t *safe = make_safe(s_bambu_detail);
-    s_time_bambu_detail = make_label(safe, "--:--", &lv_font_montserrat_16, COLOR_MUTED);
-    lv_obj_align(s_time_bambu_detail, LV_ALIGN_TOP_MID, 0, -34);
-    /* The title intentionally extends above the 358 px layout box. Keep it on
-     * the full-screen layer so the safe container cannot clip its top edge. */
-    make_centered_title(s_bambu_detail, "打印详情", &ui_font_bambu_semibold_24, 336, 256, 1, 50);
-
-    lv_obj_t *camera_box = lv_obj_create(safe);
-    lv_obj_set_size(camera_box, 350, 197);
-    lv_obj_align(camera_box, LV_ALIGN_TOP_MID, 0, 34);
-    lv_obj_set_style_radius(camera_box, 18, 0);
-    lv_obj_set_style_clip_corner(camera_box, true, 0);
-    lv_obj_set_style_bg_color(camera_box, color(0x0A0F0D), 0);
-    lv_obj_set_style_border_width(camera_box, 1, 0);
-    lv_obj_set_style_border_color(camera_box, color(COLOR_BAMBU), 0);
-    lv_obj_set_style_border_opa(camera_box, LV_OPA_40, 0);
-    lv_obj_set_style_pad_all(camera_box, 0, 0);
-    lv_obj_remove_flag(camera_box, LV_OBJ_FLAG_SCROLLABLE);
-    s_bambu_camera = lv_image_create(camera_box);
-    lv_image_set_scale(s_bambu_camera, 280);
-    lv_obj_center(s_bambu_camera);
-    lv_obj_add_flag(s_bambu_camera, LV_OBJ_FLAG_HIDDEN);
-    s_bambu_camera_empty = make_label(camera_box, "相机画面暂不可用", &s_ui_font, COLOR_MUTED);
-    lv_obj_set_style_transform_scale(s_bambu_camera_empty, 282, 0);
-    lv_obj_center(s_bambu_camera_empty);
-
-    s_bambu_filename = make_label(safe, "--", &ui_font_detail_20, COLOR_TEXT);
-    lv_obj_set_size(s_bambu_filename, 320, 28);
-    lv_label_set_long_mode(s_bambu_filename, LV_LABEL_LONG_DOT);
-    lv_obj_set_style_text_align(s_bambu_filename, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_align(s_bambu_filename, LV_ALIGN_TOP_MID, 0, 239);
-    s_bambu_filament = make_label(safe, "耗材 --", &s_ui_font, COLOR_MUTED);
-    lv_obj_set_style_transform_scale(s_bambu_filament, 282, 0);
-    lv_obj_align(s_bambu_filament, LV_ALIGN_TOP_LEFT, 18, 270);
-    s_bambu_layer = make_label(safe, "层数 --", &s_ui_font, COLOR_MUTED);
-    lv_obj_set_style_transform_scale(s_bambu_layer, 282, 0);
-    lv_obj_align(s_bambu_layer, LV_ALIGN_TOP_RIGHT, -18, 270);
-
-    /* The actions intentionally sit below the layout box. Parent them to the
-     * screen while preserving their existing absolute positions. */
-    s_bambu_pause = lv_button_create(s_bambu_detail);
-    lv_obj_set_size(s_bambu_pause, 70, 70);
-    lv_obj_align(s_bambu_pause, LV_ALIGN_BOTTOM_LEFT, 144, -30);
-    lv_obj_set_style_radius(s_bambu_pause, 20, 0);
-    lv_obj_set_style_bg_color(s_bambu_pause, color(0x082913), 0);
-    lv_obj_set_style_border_width(s_bambu_pause, 1, 0);
-    lv_obj_set_style_border_color(s_bambu_pause, color(COLOR_BAMBU), 0);
-    s_bambu_pause_icon = make_label(s_bambu_pause, LV_SYMBOL_PAUSE,
-                                    &lv_font_montserrat_32, COLOR_BAMBU);
-    lv_obj_center(s_bambu_pause_icon);
-    lv_obj_add_event_cb(s_bambu_pause, bambu_pause_event, LV_EVENT_CLICKED, NULL);
-
-    s_bambu_stop = lv_button_create(s_bambu_detail);
-    lv_obj_set_size(s_bambu_stop, 70, 70);
-    lv_obj_align(s_bambu_stop, LV_ALIGN_BOTTOM_RIGHT, -144, -30);
-    lv_obj_set_style_radius(s_bambu_stop, 20, 0);
-    lv_obj_set_style_bg_color(s_bambu_stop, color(0x311A19), 0);
-    lv_obj_set_style_border_width(s_bambu_stop, 1, 0);
-    lv_obj_set_style_border_color(s_bambu_stop, color(COLOR_DANGER), 0);
-    s_bambu_stop_progress = lv_bar_create(s_bambu_stop);
-    lv_obj_set_size(s_bambu_stop_progress, 66, 66);
-    lv_obj_center(s_bambu_stop_progress);
-    lv_obj_set_style_radius(s_bambu_stop_progress, 18, 0);
-    lv_obj_set_style_bg_opa(s_bambu_stop_progress, LV_OPA_TRANSP, LV_PART_MAIN);
-    lv_obj_set_style_bg_color(s_bambu_stop_progress, color(COLOR_DANGER), LV_PART_INDICATOR);
-    lv_obj_set_style_bg_opa(s_bambu_stop_progress, LV_OPA_30, LV_PART_INDICATOR);
-    lv_bar_set_value(s_bambu_stop_progress, 0, LV_ANIM_OFF);
-    lv_obj_t *stop_icon = make_label(s_bambu_stop, LV_SYMBOL_STOP,
-                                     &lv_font_montserrat_32, COLOR_DANGER);
-    lv_obj_center(stop_icon);
-    lv_obj_move_foreground(stop_icon);
-    lv_obj_add_event_cb(s_bambu_stop, bambu_stop_event, LV_EVENT_ALL, NULL);
 }
 
 static void build_custom(void)
@@ -1764,8 +1594,19 @@ static void dotii_engine_ensure(void)
     }
     emotion_engine_init(&s_dotii_engine, lv_tick_get());
     emotion_router_init(&s_dotii_router, &s_dotii_engine);
-    xiaozhi_client_init(&s_xiaozhi);
     s_dotii_engine_ready = true;
+}
+
+static void xiaozhi_sync_config(void)
+{
+    xiaozhi_config_t config = {0};
+    strlcpy(config.server_url, s_snapshot.xiaozhi_server_url,
+            sizeof(config.server_url));
+    strlcpy(config.device_id,
+            s_snapshot.xiaozhi_wake_word[0] ? s_snapshot.xiaozhi_wake_word : "dotii",
+            sizeof(config.device_id));
+    config.mcp_enabled = s_snapshot.xiaozhi_mcp_enabled;
+    xiaozhi_client_configure(&s_xiaozhi, &config);
 }
 
 static void render_dotii_expression(void)
@@ -1820,9 +1661,22 @@ static void render_dotii_expression(void)
     lv_obj_add_flag(s_dotii_accent_right, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s_dotii_accent_center, LV_OBJ_FLAG_HIDDEN);
 }
+static void xiaozhi_listen_hold(void)
+{
+    if (!s_snapshot.xiaozhi_enabled || !s_xiaozhi.running) return;
+    s_dotii_touch_started = lv_tick_get();
+    if (s_dotii_touch_started == 0) s_dotii_touch_started = 1;
+    render_dotii_expression();
+}
+
 static void dotii_touch_event(lv_event_t *event)
 {
-    if (lv_event_get_code(event) != LV_EVENT_SHORT_CLICKED) return;
+    const lv_event_code_t code = lv_event_get_code(event);
+    if (code == LV_EVENT_LONG_PRESSED) {
+        xiaozhi_listen_hold();
+        return;
+    }
+    if (code != LV_EVENT_SHORT_CLICKED) return;
     if (s_ignore_next_dotii_click) {
         s_ignore_next_dotii_click = false;
         return;
@@ -1846,6 +1700,7 @@ static void build_dotii(void)
     add_activity_event(s_dotii);
     lv_obj_add_event_cb(s_dotii, swipe_event, LV_EVENT_GESTURE, NULL);
     lv_obj_add_event_cb(s_dotii, dotii_touch_event, LV_EVENT_SHORT_CLICKED, NULL);
+    lv_obj_add_event_cb(s_dotii, dotii_touch_event, LV_EVENT_LONG_PRESSED, NULL);
     lv_obj_add_flag(s_dotii, LV_OBJ_FLAG_CLICKABLE);
 
     s_dotii_left_eye = make_dotii_part(s_dotii, 52, 72, -78, -30, 0xF4EAD2);
@@ -1932,7 +1787,7 @@ static void build_control(void)
     lv_obj_set_flex_align(row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_column(row, 9, 0);
     s_codex_quick = make_quick_button(row, &ui_icon_openai_36, COLOR_BLUE);
-    s_bambu_quick = make_quick_button(row, &ui_icon_bambu_36, COLOR_BAMBU);
+    s_xiaozhi_quick = make_quick_button(row, &ui_icon_openai_36, COLOR_XIAOZHI);
     s_custom_quick = make_quick_button(row, NULL, COLOR_WARNING);
     s_dotii_quick = make_quick_button(row, NULL, COLOR_CYAN);
     lv_obj_clean(s_dotii_quick);
@@ -1940,7 +1795,7 @@ static void build_control(void)
     make_dotii_part(s_dotii_quick, 12, 20, 12, -2, COLOR_CYAN);
     lv_obj_add_flag(s_custom_quick, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_event_cb(s_codex_quick, quick_clicked, LV_EVENT_CLICKED, s_main);
-    lv_obj_add_event_cb(s_bambu_quick, quick_clicked, LV_EVENT_CLICKED, s_bambu_main);
+    lv_obj_add_event_cb(s_xiaozhi_quick, quick_clicked, LV_EVENT_CLICKED, s_xiaozhi_page);
     lv_obj_add_event_cb(s_custom_quick, quick_clicked, LV_EVENT_CLICKED, s_custom);
     lv_obj_add_event_cb(s_dotii_quick, quick_clicked, LV_EVENT_CLICKED, s_dotii);
 
@@ -2208,79 +2063,70 @@ static void update_snapshot(const codex_snapshot_t *snapshot)
     lv_obj_set_style_bg_opa(s_plus_status_pill, LV_OPA_20, 0);
     render_codex_detail();
 
-    bool bambu_online = snapshot->bambu_configured && snapshot->bambu_connected;
-    uint32_t bambu_status_color = !bambu_online ? COLOR_MUTED :
-        snapshot->bambu_status == BAMBU_STATUS_FAULT ? COLOR_DANGER :
-        snapshot->bambu_status == BAMBU_STATUS_PAUSED ? COLOR_WARNING : COLOR_BAMBU;
-    lv_arc_set_value(s_bambu_arc, bambu_online ? snapshot->bambu_progress : 0);
-    lv_obj_set_style_arc_color(s_bambu_arc,
-                               color(snapshot->bambu_status == BAMBU_STATUS_FAULT ? COLOR_DANGER :
-                                     snapshot->bambu_status == BAMBU_STATUS_PAUSED ? COLOR_WARNING : COLOR_BAMBU),
-                               LV_PART_INDICATOR);
-    lv_label_set_text(s_bambu_status,
-                      snapshot->bambu_status_text[0] ? snapshot->bambu_status_text :
-                      app_state_bambu_status_text(snapshot->bambu_status));
-    lv_obj_set_style_text_color(s_bambu_status, color(bambu_status_color), 0);
-    lv_obj_set_style_text_outline_stroke_color(s_bambu_status, color(bambu_status_color), 0);
-    lv_obj_set_style_bg_color(s_bambu_status_dot, color(bambu_status_color), 0);
-    lv_obj_set_style_bg_color(s_bambu_status_pill, color(bambu_status_color), 0);
-    lv_obj_set_style_bg_opa(s_bambu_status_pill, LV_OPA_20, 0);
-    if (bambu_online) lv_label_set_text_fmt(s_bambu_percent, "%u%%", snapshot->bambu_progress);
-    else lv_label_set_text(s_bambu_percent, "--");
-    if (bambu_online && snapshot->bambu_remaining_minutes > 0) {
-        if (snapshot->bambu_remaining_minutes >= 60) {
-            lv_label_set_text_fmt(s_bambu_remaining, "%uh%02um",
-                                  snapshot->bambu_remaining_minutes / 60,
-                                  snapshot->bambu_remaining_minutes % 60);
-        } else {
-            lv_label_set_text_fmt(s_bambu_remaining, "%um", snapshot->bambu_remaining_minutes);
+    const char *xiaozhi_state = "未连接";
+    const char *xiaozhi_emotion = "等待对话";
+    uint32_t xiaozhi_color = COLOR_MUTED;
+    switch (xiaozhi_client_state(&s_xiaozhi)) {
+    case XIAOZHI_STATE_CONNECTING:
+        xiaozhi_state = "连接中";
+        xiaozhi_color = COLOR_XIAOZHI;
+        break;
+    case XIAOZHI_STATE_LISTENING:
+        xiaozhi_state = "聆听中";
+        xiaozhi_emotion = "聆听";
+        xiaozhi_color = COLOR_XIAOZHI;
+        break;
+    case XIAOZHI_STATE_THINKING:
+        xiaozhi_state = "思考中";
+        xiaozhi_emotion = "思考";
+        xiaozhi_color = COLOR_XIAOZHI;
+        break;
+    case XIAOZHI_STATE_SPEAKING:
+        xiaozhi_state = "说话中";
+        xiaozhi_emotion = "回应";
+        xiaozhi_color = COLOR_XIAOZHI;
+        break;
+    case XIAOZHI_STATE_ERROR:
+        xiaozhi_state = "连接异常";
+        xiaozhi_emotion = "出错";
+        xiaozhi_color = COLOR_DANGER;
+        break;
+    case XIAOZHI_STATE_IDLE:
+        if (snapshot->xiaozhi_enabled) {
+            xiaozhi_state = "已就绪";
+            xiaozhi_color = COLOR_XIAOZHI;
         }
-    } else lv_label_set_text(s_bambu_remaining, "--");
-    struct tm finish_local;
-    if (snapshot->bambu_finish_at > 0 && localtime_r(&snapshot->bambu_finish_at, &finish_local) != NULL) {
-        lv_label_set_text_fmt(s_bambu_finish, "%02d:%02d", finish_local.tm_hour, finish_local.tm_min);
-    } else lv_label_set_text(s_bambu_finish, "--");
-    lv_label_set_text(s_bambu_filename, snapshot->bambu_filename[0] ? snapshot->bambu_filename : "--");
-    lv_label_set_text_fmt(s_bambu_filament, "耗材 %s",
-                          snapshot->bambu_filament[0] ? snapshot->bambu_filament : "--");
-    if (snapshot->bambu_layer_total > 0) {
-        lv_label_set_text_fmt(s_bambu_layer, "层数 %u/%u",
-                              snapshot->bambu_layer_current, snapshot->bambu_layer_total);
-    } else lv_label_set_text(s_bambu_layer, "层数 --");
-    lv_label_set_text(s_bambu_pause_icon,
-                      snapshot->bambu_status == BAMBU_STATUS_PAUSED ? LV_SYMBOL_PLAY : LV_SYMBOL_PAUSE);
-    bool can_pause = bambu_online && (snapshot->bambu_status == BAMBU_STATUS_PRINTING ||
-                                      snapshot->bambu_status == BAMBU_STATUS_PAUSED);
-    bool can_stop = bambu_online && snapshot->bambu_commandable &&
-                    (snapshot->bambu_status == BAMBU_STATUS_PRINTING ||
-                     snapshot->bambu_status == BAMBU_STATUS_PAUSED ||
-                     snapshot->bambu_status == BAMBU_STATUS_PREPARING);
-    if (can_pause) lv_obj_remove_state(s_bambu_pause, LV_STATE_DISABLED);
-    else lv_obj_add_state(s_bambu_pause, LV_STATE_DISABLED);
-    if (can_stop) lv_obj_remove_state(s_bambu_stop, LV_STATE_DISABLED);
-    else lv_obj_add_state(s_bambu_stop, LV_STATE_DISABLED);
-
-    const uint8_t *camera = snapshot->bambu_camera_available ?
-        connectivity_bambu_camera_data(snapshot->bambu_camera_revision) : NULL;
-    if (camera != NULL) {
-        if (s_bambu_camera_revision != snapshot->bambu_camera_revision) {
-            if (s_bambu_camera_revision != 0) lv_image_cache_drop(&s_bambu_camera_dsc);
-            memset(&s_bambu_camera_dsc, 0, sizeof(s_bambu_camera_dsc));
-            s_bambu_camera_dsc.header.magic = LV_IMAGE_HEADER_MAGIC;
-            s_bambu_camera_dsc.header.cf = LV_COLOR_FORMAT_RGB565;
-            s_bambu_camera_dsc.header.w = 320;
-            s_bambu_camera_dsc.header.h = 180;
-            s_bambu_camera_dsc.header.stride = 320 * 2;
-            s_bambu_camera_dsc.data_size = 320 * 180 * 2;
-            s_bambu_camera_dsc.data = camera;
-            lv_image_set_src(s_bambu_camera, &s_bambu_camera_dsc);
-            s_bambu_camera_revision = snapshot->bambu_camera_revision;
-        }
-        lv_obj_remove_flag(s_bambu_camera, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_add_flag(s_bambu_camera_empty, LV_OBJ_FLAG_HIDDEN);
+        break;
+    default:
+        break;
+    }
+    const char *reported_emotion = xiaozhi_client_last_emotion(&s_xiaozhi);
+    if (reported_emotion != NULL) {
+        xiaozhi_emotion = reported_emotion;
+    }
+    lv_label_set_text(s_xiaozhi_status, xiaozhi_state);
+    lv_label_set_text(s_xiaozhi_emotion, xiaozhi_emotion);
+    lv_obj_set_style_text_color(s_xiaozhi_status, color(xiaozhi_color), 0);
+    lv_obj_set_style_bg_color(s_xiaozhi_status_dot, color(xiaozhi_color), 0);
+    lv_obj_set_style_bg_color(s_xiaozhi_status_pill, color(xiaozhi_color), 0);
+    lv_obj_set_style_arc_color(s_xiaozhi_status_pill, color(xiaozhi_color), 0);
+    if (snapshot->xiaozhi_server_url[0] != '\0') {
+        lv_label_set_text_fmt(s_xiaozhi_server, "服务端 %s", snapshot->xiaozhi_server_url);
     } else {
-        lv_obj_add_flag(s_bambu_camera, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_remove_flag(s_bambu_camera_empty, LV_OBJ_FLAG_HIDDEN);
+        lv_label_set_text(s_xiaozhi_server, "服务端未配置");
+    }
+    const bool xiaozhi_wants_run = snapshot->xiaozhi_enabled &&
+                                   snapshot->xiaozhi_server_url[0] != '\0';
+    if (xiaozhi_wants_run && !s_xiaozhi.running) {
+        xiaozhi_sync_config();
+        xiaozhi_client_start(&s_xiaozhi);
+    } else if (!xiaozhi_wants_run && s_xiaozhi.running) {
+        xiaozhi_client_stop(&s_xiaozhi);
+    } else if (xiaozhi_wants_run &&
+               strcmp(s_xiaozhi.config.server_url, snapshot->xiaozhi_server_url) != 0) {
+        xiaozhi_client_stop(&s_xiaozhi);
+        xiaozhi_sync_config();
+        xiaozhi_client_start(&s_xiaozhi);
     }
 
     uint32_t custom_accent = snapshot->custom_accent ? snapshot->custom_accent : COLOR_WARNING;
@@ -2326,8 +2172,8 @@ static void update_snapshot(const codex_snapshot_t *snapshot)
     }
     if (snapshot->codex_enabled) lv_obj_remove_flag(s_codex_quick, LV_OBJ_FLAG_HIDDEN);
     else lv_obj_add_flag(s_codex_quick, LV_OBJ_FLAG_HIDDEN);
-    if (snapshot->bambu_enabled) lv_obj_remove_flag(s_bambu_quick, LV_OBJ_FLAG_HIDDEN);
-    else lv_obj_add_flag(s_bambu_quick, LV_OBJ_FLAG_HIDDEN);
+    if (snapshot->xiaozhi_enabled) lv_obj_remove_flag(s_xiaozhi_quick, LV_OBJ_FLAG_HIDDEN);
+    else lv_obj_add_flag(s_xiaozhi_quick, LV_OBJ_FLAG_HIDDEN);
     if (snapshot->custom_enabled) lv_obj_remove_flag(s_custom_quick, LV_OBJ_FLAG_HIDDEN);
     else lv_obj_add_flag(s_custom_quick, LV_OBJ_FLAG_HIDDEN);
     if (snapshot->dotii_enabled) lv_obj_remove_flag(s_dotii_quick, LV_OBJ_FLAG_HIDDEN);
@@ -2395,8 +2241,7 @@ static void ui_timer(lv_timer_t *timer)
     lv_label_set_text(s_time_main, clock);
     lv_label_set_text(s_plus_time, clock);
     lv_label_set_text(s_time_detail, clock);
-    lv_label_set_text(s_time_bambu_main, clock);
-    lv_label_set_text(s_time_bambu_detail, clock);
+    lv_label_set_text(s_time_xiaozhi, clock);
 
     char summary[80];
     connectivity_get_summary(summary, sizeof(summary));
@@ -2435,10 +2280,11 @@ void state_ui_start(QueueHandle_t snapshot_queue)
     ESP_ERROR_CHECK(bsp_display_transform_set_angle(s_display_angle_tenths));
     s_ui_font = ui_font_fixed_20;
     s_ui_font.fallback = &ui_font_detail_20;
+    xiaozhi_client_init(&s_xiaozhi);
     build_main();
     build_plus_main();
     build_detail();
-    build_bambu();
+    build_xiaozhi();
     build_custom();
     build_dotii();
     build_settings();
@@ -2477,7 +2323,7 @@ void state_ui_button_a_short(void)
         return;
     }
     int current_page = (s_current == s_main || s_current == s_plus_main) ? 0 :
-        s_current == s_bambu_main ? 1 : s_current == s_custom ? 2 :
+        s_current == s_xiaozhi_page ? 1 : s_current == s_custom ? 2 :
         s_current == s_dotii ? 3 : -1;
     if (current_page < 0) {
         load_screen(first_enabled_screen(), true);

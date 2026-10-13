@@ -44,6 +44,7 @@ void xiaozhi_client_init(xiaozhi_client_t *client)
     }
     memset(client, 0, sizeof(*client));
     client->state = XIAOZHI_STATE_DISABLED;
+    client->transport = NULL;
 }
 
 void xiaozhi_client_configure(xiaozhi_client_t *client, const xiaozhi_config_t *config)
@@ -57,6 +58,7 @@ void xiaozhi_client_configure(xiaozhi_client_t *client, const xiaozhi_config_t *
     client->last_emotion[0] = '\0';
     client->last_text[0] = '\0';
     client->session_id[0] = '\0';
+    client->config = *config;
 }
 
 xiaozhi_session_state_t xiaozhi_client_state(const xiaozhi_client_t *client)
@@ -202,9 +204,28 @@ bool xiaozhi_client_start(xiaozhi_client_t *client)
     if (client == NULL || client->running) {
         return false;
     }
+    if (client->config.server_url[0] == '\0') {
+        client->state = XIAOZHI_STATE_DISABLED;
+        return false;
+    }
     client->state = XIAOZHI_STATE_CONNECTING;
-    /* The concrete esp_websocket_client start is wired here once the xiaozhi
-       server URL and token are provisioned. Kept minimal on purpose. */
+    esp_websocket_client_config_t config = {
+        .uri = client->config.server_url,
+        .reconnect_timeout_ms = 5000,
+        .network_timeout_ms = 10000,
+    };
+    esp_websocket_client_handle_t handle = esp_websocket_client_init(&config);
+    if (handle == NULL) {
+        client->state = XIAOZHI_STATE_ERROR;
+        return false;
+    }
+    esp_websocket_register_events(handle, WEBSOCKET_EVENT_ANY, ws_event_handler, client);
+    if (esp_websocket_client_start(handle) != ESP_OK) {
+        esp_websocket_client_destroy(handle);
+        client->state = XIAOZHI_STATE_ERROR;
+        return false;
+    }
+    client->transport = handle;
     client->running = true;
     return true;
 }
@@ -213,6 +234,11 @@ void xiaozhi_client_stop(xiaozhi_client_t *client)
 {
     if (client == NULL) {
         return;
+    }
+    if (client->transport != NULL) {
+        esp_websocket_client_stop((esp_websocket_client_handle_t)client->transport);
+        esp_websocket_client_destroy((esp_websocket_client_handle_t)client->transport);
+        client->transport = NULL;
     }
     client->running = false;
     client->connected = false;

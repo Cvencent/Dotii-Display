@@ -21,7 +21,10 @@ const state = {
     lastY: 0,
   },
   moduleSaving: {},
-  bambuLoaded: false,
+  xiaozhiLoaded: false,
+  xiaozhiSaving: false,
+  characterSaving: false,
+  characterLoaded: false,
   displayDirty: false,
   displaySaving: false,
   codexUiSaving: false,
@@ -63,14 +66,16 @@ const DOTII_STATE_FALLBACK = [
   { id: "codex_working", label: "工作中", group: "codex" },
   { id: "codex_completed", label: "任务完成", group: "codex" },
   { id: "codex_failure", label: "失败或异常", group: "codex" },
-  { id: "bambu_paused", label: "已暂停", group: "bambu" },
-  { id: "bambu_printing", label: "打印中", group: "bambu" },
-  { id: "bambu_completed", label: "打印完成", group: "bambu" },
-  { id: "bambu_failure", label: "故障或异常", group: "bambu" },
 ];
 const DOTII_STATE_GROUP_FALLBACK = [
   { id: "codex", label: "Codex 状态" },
-  { id: "bambu", label: "Bambu 状态" },
+];
+
+const DOTII_CHARACTER_FALLBACK = [
+  { id: "dotii", label: "Dotii", source: "dotii", description: "Dotii 自研形象" },
+  { id: "nimbo", label: "Nimbo", source: "aora-bot", description: "aora-bot 圆润形象" },
+  { id: "twinkle", label: "Twinkle", source: "aora-bot", description: "aora-bot 明亮形象" },
+  { id: "blob", label: "Blob", source: "aora-bot", description: "aora-bot 软团形象" },
 ];
 const DOTII_FIXED_STATE_FALLBACK = [
   { id: "idle", label: "空闲", expression: "idle_breath", duration_ms: 800 },
@@ -393,7 +398,7 @@ async function saveDotiiConfig(event) {
     const response = await fetch("/api/v1/admin/dotii", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ animations: state.dotiiConfig.animations }),
+      body: JSON.stringify({ animations: state.dotiiConfig.animations, character: state.dotiiConfig.character }),
     });
     const result = await response.json();
     if (!response.ok) throw new Error(result.error || "动画设置保存失败");
@@ -606,56 +611,119 @@ function formatMinutes(value) {
   return `${Math.floor(minutes / 60)} 小时 ${minutes % 60} 分钟`;
 }
 
-function renderBambu(bambu = {}, config = {}, enabled = true) {
-  if (!state.bambuLoaded) {
-    byId("bambu-name").value = config.name || "Bambu Lab";
-    byId("bambu-host").value = config.host || "";
-    byId("bambu-serial").value = config.serial || "";
-    byId("bambu-camera-enabled").checked = config.camera_enabled !== false;
-    byId("bambu-access-code").placeholder = config.has_access_code ? "已保存，留空表示不修改" : "请输入局域网访问码";
-    state.bambuLoaded = true;
+function renderXiaozhi(config = {}, enabled = true) {
+  if (!state.xiaozhiLoaded && !state.xiaozhiSaving) {
+    byId("xiaozhi-server-url").value = config.server_url || "wss://api.tenclass.net/xiaozhi/v1/";
+    byId("xiaozhi-wake-word").value = config.wake_word || "你好小智";
+    byId("xiaozhi-voice").value = config.voice || "default";
+    byId("xiaozhi-mcp-enabled").checked = config.mcp_enabled !== false;
+    state.xiaozhiLoaded = true;
   }
-  const configured = Boolean(bambu.configured || config.configured);
-  const connected = Boolean(bambu.connected);
-  byId("bambu-empty").hidden = configured;
-  byId("bambu-dashboard").hidden = !configured;
-  const connection = byId("bambu-connection");
-  connection.dataset.state = connected ? "online" : configured ? "waiting" : "offline";
-  connection.textContent = connected ? "已连接" : configured ? "正在连接" : "尚未添加";
-  const dashboardConnection = byId("bambu-dashboard-connection");
-  dashboardConnection.dataset.state = connection.dataset.state;
-  dashboardConnection.textContent = connection.textContent;
-  setText("bambu-dashboard-name", config.name || bambu.name || "Bambu Lab");
-  setText("bambu-status", bambu.status_text || "离线");
-  setText("bambu-progress", connected ? `${Number(bambu.progress) || 0}%` : "--");
-  byId("bambu-progress-fill").style.width = connected ? `${Math.max(0, Math.min(100, Number(bambu.progress) || 0))}%` : "0%";
-  setText("bambu-remaining", formatMinutes(bambu.remaining_minutes));
-  setText("bambu-finish", formatClock(bambu.finish_epoch));
-  setText("bambu-filename", bambu.filename || "--");
-  setText("bambu-layer", bambu.layer_total ? `${bambu.layer_current || 0} / ${bambu.layer_total}` : "--");
-  setText("bambu-filament", bambu.filament || "--");
-  setText("bambu-nozzle", connected ? `${Number(bambu.nozzle_temperature || 0).toFixed(0)} °C` : "--");
-  setText("bambu-bed", connected ? `${Number(bambu.bed_temperature || 0).toFixed(0)} °C` : "--");
-  setText("bambu-updated", bambu.updated_at_epoch ? `更新于 ${formatTime(bambu.updated_at_epoch)}` : "尚未收到数据");
-  const camera = byId("bambu-camera");
-  camera.hidden = !bambu.camera_available;
-  byId("bambu-camera-empty").hidden = Boolean(bambu.camera_available);
-  if (bambu.camera_available) camera.src = `/api/v1/admin/bambu/camera.jpg?v=${encodeURIComponent(bambu.camera_revision || Date.now())}`;
-  const action = bambu.status === "paused" ? "resume" : "pause";
-  byId("bambu-pause").dataset.action = action;
-  byId("bambu-pause").textContent = action === "resume" ? "继续" : "暂停";
-  byId("bambu-pause").disabled = !connected || !["printing", "paused"].includes(bambu.status);
-  byId("bambu-stop").disabled = !connected || !["printing", "paused", "preparing"].includes(bambu.status);
-  const error = !configured
-    ? ""
-    : !connected && bambu.last_error
-      ? "暂时无法连接打印机，请确认打印机已开机并与电脑连接到同一网络。"
-      : bambu.camera_error
-        ? "相机画面暂时不可用，打印状态仍会正常更新。"
-        : "";
-  byId("bambu-error").hidden = !error;
-  setText("bambu-error", error);
-  setText("bambu-nav-state", !enabled ? "已关闭" : connected ? (bambu.status_text || "在线") : configured ? "连接中" : "添加打印机");
+  if (!state.moduleSaving.xiaozhi) byId("xiaozhi-enabled").checked = enabled;
+  byId("xiaozhi-content").hidden = !enabled;
+  const connection = byId("xiaozhi-connection");
+  const active = Boolean(config.enabled) && enabled;
+  connection.dataset.state = active ? "online" : enabled ? "waiting" : "offline";
+  connection.textContent = !enabled ? "模块已关闭" : active ? "已启用" : "已保存，未启用";
+  setText("xiaozhi-nav-state", !enabled ? "已关闭" : active ? "已启用" : "已配置");
+}
+
+function dotiiCharacters() {
+  const values = state.overview?.characters;
+  return Array.isArray(values) && values.length ? values : DOTII_CHARACTER_FALLBACK;
+}
+
+function renderDotiiCharacters(character) {
+  const grid = byId("dotii-character-grid");
+  const selectedId = typeof character === "string" && character ? character : "dotii";
+  const options = dotiiCharacters();
+  const signature = JSON.stringify([selectedId, options.map((item) => item.id)]);
+  if (grid.dataset.signature === signature) return;
+  grid.dataset.signature = signature;
+  grid.replaceChildren();
+  options.forEach((option) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "dotii-character-button";
+    button.dataset.characterId = option.id;
+    button.classList.toggle("selected", option.id === selectedId);
+    const name = document.createElement("strong");
+    name.textContent = option.label || option.id;
+    const source = document.createElement("span");
+    source.textContent = option.source === "aora-bot" ? "aora-bot" : "Dotii";
+    const description = document.createElement("small");
+    description.textContent = option.description || "";
+    button.append(name, source, description);
+    button.addEventListener("click", () => selectDotiiCharacter(option.id));
+    grid.append(button);
+  });
+  setText("dotii-character-state", options.find((item) => item.id === selectedId)?.label || selectedId);
+  byId("dotii-character-save").disabled = true;
+  state.characterLoaded = true;
+}
+
+function selectDotiiCharacter(characterId) {
+  if (!state.dotiiConfig) return;
+  state.dotiiConfig.character = characterId;
+  document.querySelectorAll(".dotii-character-button").forEach((button) => {
+    button.classList.toggle("selected", button.dataset.characterId === characterId);
+  });
+  setText("dotii-character-state", dotiiCharacters().find((item) => item.id === characterId)?.label || characterId);
+  byId("dotii-character-save").disabled = false;
+}
+
+async function saveDotiiCharacter() {
+  if (!state.dotiiConfig || state.characterSaving) return;
+  state.characterSaving = true;
+  const button = byId("dotii-character-save");
+  button.disabled = true;
+  try {
+    const response = await fetch("/api/v1/admin/dotii", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...state.dotiiConfig, character: state.dotiiConfig.character }),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || "形象切换失败");
+    state.dotiiConfig = cloneDotiiConfig(result.dotii_config);
+    showToast("形象已切换并同步到设备");
+    renderDotiiCharacters(state.dotiiConfig.character);
+  } catch (error) {
+    showToast(error.message || "形象切换失败");
+    button.disabled = false;
+  } finally {
+    state.characterSaving = false;
+  }
+}
+
+async function saveXiaozhi(event) {
+  event.preventDefault();
+  if (state.xiaozhiSaving) return;
+  state.xiaozhiSaving = true;
+  byId("xiaozhi-save-state").textContent = "正在保存";
+  try {
+    const response = await fetch("/api/v1/admin/xiaozhi", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        server_url: byId("xiaozhi-server-url").value.trim(),
+        wake_word: byId("xiaozhi-wake-word").value.trim(),
+        voice: byId("xiaozhi-voice").value.trim(),
+        mcp_enabled: byId("xiaozhi-mcp-enabled").checked,
+      }),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || "小智设置保存失败");
+    state.xiaozhiLoaded = false;
+    setText("xiaozhi-save-state", "已保存");
+    showToast("小智设置已保存");
+  } catch (error) {
+    setText("xiaozhi-save-state", "保存失败");
+    showToast(error.message || "小智设置保存失败");
+  } finally {
+    state.xiaozhiSaving = false;
+    await refreshOverview();
+  }
 }
 
 function setBridgeState(bridge) {
@@ -974,15 +1042,13 @@ function renderOverview(overview) {
   const snapshot = overview.snapshot || {};
   const bridge = overview.bridge || {};
   const modules = Object.fromEntries((overview.modules || []).map((module) => [module.id, module]));
-  const bambuEnabled = modules.bambu?.enabled !== false;
+  const xiaozhiEnabled = modules.xiaozhi?.enabled !== false;
   const dotiiEnabled = modules.dotii?.enabled !== false;
 
   setBridgeState(bridge);
   renderBluetooth(overview.bluetooth || {});
   renderFirmware(overview.firmware || {});
-  if (!state.moduleSaving.bambu) byId("bambu-enabled").checked = bambuEnabled;
-  byId("bambu-content").hidden = !bambuEnabled;
-  renderBambu(snapshot.bambu || {}, overview.bambu_config || {}, bambuEnabled);
+  renderXiaozhi(overview.xiaozhi_config || {}, xiaozhiEnabled);
   const incomingDotiiConfig = overview.dotii_config;
   if (!state.dotiiConfigDirty && !state.dotiiConfigSaving && incomingDotiiConfig
       && (!state.dotiiConfig || state.dotiiConfig.revision !== incomingDotiiConfig.revision)) {
@@ -991,6 +1057,7 @@ function renderOverview(overview) {
     setText("dotii-config-save-state", "配置已同步");
     renderDotiiConfigEditor();
   }
+  renderDotiiCharacters(snapshot.character || overview.dotii_config?.character);
   renderDotii(snapshot.dotii || {}, dotiiEnabled);
   const displayConfig = overview.display_config || snapshot.display || {};
   const codexUi = displayConfig.codex_ui === "dual_limit" ? "dual_limit" : "classic";
@@ -1029,44 +1096,6 @@ function renderOverview(overview) {
 
 function checkText(value) {
   return value ? "正常" : "异常";
-}
-
-async function saveBambu(event) {
-  event.preventDefault();
-  const payload = {
-    name: byId("bambu-name").value,
-    host: byId("bambu-host").value,
-    serial: byId("bambu-serial").value,
-    access_code: byId("bambu-access-code").value,
-    camera_enabled: byId("bambu-camera-enabled").checked,
-  };
-  try {
-    const response = await fetch("/api/v1/admin/bambu/config", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(payload)});
-    const result = await response.json();
-    if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
-    byId("bambu-access-code").value = "";
-    byId("bambu-access-code").placeholder = "已保存，留空表示不修改";
-    showToast("Bambu 配置已保存，正在连接");
-    await refreshOverview();
-  } catch (error) { showToast(error.message); }
-}
-
-async function reconnectBambu() {
-  try {
-    const response = await fetch("/api/v1/admin/bambu/refresh", {method: "POST", headers: {"Content-Type": "application/json"}, body: "{}"});
-    if (!response.ok) throw new Error((await response.json()).error || `HTTP ${response.status}`);
-    showToast("正在重新连接打印机");
-  } catch (error) { showToast(error.message); }
-}
-
-async function commandBambu(action) {
-  if (action === "stop" && !window.confirm("确定要停止当前打印吗？该操作无法撤销。")) return;
-  try {
-    const response = await fetch("/api/v1/admin/bambu/command", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({action})});
-    const result = await response.json();
-    if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
-    showToast(action === "stop" ? "停止指令已发送" : action === "resume" ? "继续指令已发送" : "暂停指令已发送");
-  } catch (error) { showToast(error.message); }
 }
 
 async function refreshOverview({ announce = false } = {}) {
@@ -1157,7 +1186,7 @@ async function updateModule(moduleId, enabled) {
     });
     const result = await response.json();
     if (!response.ok) throw new Error(result.error || "设置失败");
-    const moduleName = { bambu: "Bambu", dotii: "Dotii" }[moduleId] || moduleId;
+    const moduleName = { xiaozhi: "小智", dotii: "小智表情" }[moduleId] || moduleId;
     showToast(`${moduleName} 页面已${enabled ? "启用" : "关闭"}`);
   } catch (error) {
     checkbox.checked = !enabled;
@@ -1181,7 +1210,7 @@ async function saveCodexUi(codexUi) {
       body: JSON.stringify({ codex_ui: codexUi }),
     });
     const result = await response.json();
-    if (!response.ok) throw new Error(result.error || "Codex 页面样式保存失败");
+    if (!response.ok) throw new Error(result.error || "Codex 额度样式保存失败");
     const saved = result.display_config?.codex_ui === "dual_limit" ? "dual_limit" : "classic";
     setUiSelectValue("codex-ui", saved);
     setText("codex-ui-state", saved === "dual_limit"
@@ -1191,7 +1220,7 @@ async function saveCodexUi(codexUi) {
   } catch (error) {
     setUiSelectValue("codex-ui", previous);
     setText("codex-ui-state", "保存失败，已恢复原选择");
-    showToast(error.message || "Codex 页面样式保存失败");
+    showToast(error.message || "Codex 额度样式保存失败");
   } finally {
     state.codexUiSaving = false;
     await refreshOverview();
@@ -1586,23 +1615,20 @@ byId("screen-off-page").addEventListener("change", () => {
   setText("display-save-state", "有尚未保存的修改");
 });
 byId("codex-ui").addEventListener("change", (event) => saveCodexUi(event.target.value));
-byId("bambu-enabled").addEventListener("change", (event) => updateModule("bambu", event.target.checked));
+byId("xiaozhi-enabled").addEventListener("change", (event) => updateModule("xiaozhi", event.target.checked));
+byId("xiaozhi-form").addEventListener("submit", saveXiaozhi);
+byId("xiaozhi-server-url").addEventListener("input", () => setText("xiaozhi-save-state", "有尚未保存的修改"));
+byId("xiaozhi-wake-word").addEventListener("input", () => setText("xiaozhi-save-state", "有尚未保存的修改"));
+byId("xiaozhi-voice").addEventListener("input", () => setText("xiaozhi-save-state", "有尚未保存的修改"));
+byId("xiaozhi-mcp-enabled").addEventListener("change", () => setText("xiaozhi-save-state", "有尚未保存的修改"));
 byId("dotii-enabled").addEventListener("change", (event) => updateModule("dotii", event.target.checked));
+byId("dotii-character-save").addEventListener("click", saveDotiiCharacter);
 byId("dotii-config-form").addEventListener("submit", saveDotiiConfig);
 byId("dotii-follow-live").addEventListener("click", () => {
   state.dotiiFollowingLive = true;
   showDotiiExpression(state.dotiiLiveExpression, { live: true });
   setText("dotii-stage-reason", state.dotiiLiveReason);
 });
-byId("bambu-form").addEventListener("submit", saveBambu);
-byId("bambu-reconnect").addEventListener("click", reconnectBambu);
-byId("bambu-pause").addEventListener("click", (event) => commandBambu(event.currentTarget.dataset.action || "pause"));
-byId("bambu-stop").addEventListener("click", () => commandBambu("stop"));
-function openBambuSettings() {
-  byId("bambu-form").scrollIntoView({ block: "start" });
-  byId("bambu-host").focus({ preventScroll: true });
-}
-byId("bambu-empty-settings").addEventListener("click", openBambuSettings);
 byId("bluetooth-install").addEventListener("click", installBluetooth);
 byId("bluetooth-scan").addEventListener("click", scanBluetooth);
 byId("bluetooth-configure").addEventListener("click", configureBluetooth);

@@ -117,20 +117,15 @@ void app_state_make_preview(codex_snapshot_t *snapshot)
     snapshot->codex_enabled = true;
     snapshot->xiaozhi_enabled = true;
     strlcpy(snapshot->character_id, "dotii", sizeof(snapshot->character_id));
-    snapshot->bambu_enabled = true;
     snapshot->custom_enabled = true;
     snapshot->dotii_enabled = true;
     snapshot->custom_ring_enabled = true;
-    snapshot->bambu_configured = true;
-    snapshot->bambu_connected = true;
-    snapshot->bambu_commandable = true;
     snapshot->docked_rotation_tenths = 840;
     snapshot->screen_off_timeout_seconds = 60;
     snapshot->sleep_timeout_seconds = 300;
     snapshot->charging_screen_off_timeout_seconds = 60;
     snapshot->charging_sleep_timeout_seconds = 300;
     snapshot->five_hour_remaining_percent = 68;
-    snapshot->bambu_status = BAMBU_STATUS_PRINTING;
     snapshot->dotii_touch_expression = DOTII_EXPRESSION_TOUCH_RESPONSE;
     snapshot->dotii_blink_expression = DOTII_EXPRESSION_BLINK;
     snapshot->dotii_long_idle_expression = DOTII_EXPRESSION_SLEEPY_YAWN;
@@ -141,14 +136,6 @@ void app_state_make_preview(codex_snapshot_t *snapshot)
     codex_snapshot_reset_dotii_mapping(snapshot);
     snapshot->status = CODEX_STATUS_WORKING;
     codex_snapshot_refresh_dotii_state(snapshot);
-    snapshot->bambu_progress = 68;
-    snapshot->bambu_remaining_minutes = 42;
-    snapshot->bambu_layer_current = 87;
-    snapshot->bambu_layer_total = 142;
-    snapshot->bambu_nozzle_temperature = 220;
-    snapshot->bambu_bed_temperature = 55;
-    snapshot->bambu_finish_at = time(NULL) + 42 * 60;
-    snapshot->bambu_updated_at = time(NULL);
     snapshot->weekly_remaining_percent = 68;
     snapshot->weekly_tokens = 18420;
     snapshot->duration_seconds = 754;
@@ -175,10 +162,6 @@ void app_state_make_preview(codex_snapshot_t *snapshot)
     strlcpy(snapshot->custom_value, "你好，Dotii", sizeof(snapshot->custom_value));
     strlcpy(snapshot->custom_body, "这是从 Dotii 管理中心同步的自定义界面。", sizeof(snapshot->custom_body));
     strlcpy(snapshot->custom_footer, "自定义内容", sizeof(snapshot->custom_footer));
-    strlcpy(snapshot->bambu_name, "Bambu Lab", sizeof(snapshot->bambu_name));
-    strlcpy(snapshot->bambu_status_text, "打印中", sizeof(snapshot->bambu_status_text));
-    strlcpy(snapshot->bambu_filename, "可爱机器人外壳.3mf", sizeof(snapshot->bambu_filename));
-    strlcpy(snapshot->bambu_filament, "PLA Basic", sizeof(snapshot->bambu_filament));
 
     codex_task_detail_t task = {
         .status = snapshot->status,
@@ -195,32 +178,6 @@ void app_state_make_preview(codex_snapshot_t *snapshot)
     app_state_tasks_publish(&task, 1);
 }
 
-const char *app_state_bambu_status_text(bambu_status_t status)
-{
-    switch (status) {
-    case BAMBU_STATUS_IDLE: return "空闲";
-    case BAMBU_STATUS_PREPARING: return "准备中";
-    case BAMBU_STATUS_PRINTING: return "打印中";
-    case BAMBU_STATUS_PAUSED: return "已暂停";
-    case BAMBU_STATUS_COMPLETED: return "已完成";
-    case BAMBU_STATUS_CANCELLING: return "取消中";
-    case BAMBU_STATUS_FAULT: return "故障";
-    default: return "离线";
-    }
-}
-
-bambu_status_t app_state_bambu_status_from_string(const char *status)
-{
-    if (status == NULL) return BAMBU_STATUS_OFFLINE;
-    if (strcmp(status, "idle") == 0) return BAMBU_STATUS_IDLE;
-    if (strcmp(status, "preparing") == 0) return BAMBU_STATUS_PREPARING;
-    if (strcmp(status, "printing") == 0) return BAMBU_STATUS_PRINTING;
-    if (strcmp(status, "paused") == 0) return BAMBU_STATUS_PAUSED;
-    if (strcmp(status, "completed") == 0) return BAMBU_STATUS_COMPLETED;
-    if (strcmp(status, "cancelling") == 0) return BAMBU_STATUS_CANCELLING;
-    if (strcmp(status, "fault") == 0) return BAMBU_STATUS_FAULT;
-    return BAMBU_STATUS_OFFLINE;
-}
 
 dotii_expression_t app_state_dotii_expression_from_string(const char *expression)
 {

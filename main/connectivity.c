@@ -32,9 +32,6 @@
 #define CUSTOM_IMAGE_WIDTH 466
 #define CUSTOM_IMAGE_HEIGHT 466
 #define CUSTOM_IMAGE_BYTES (CUSTOM_IMAGE_WIDTH * CUSTOM_IMAGE_HEIGHT * 2)
-#define BAMBU_CAMERA_WIDTH 320
-#define BAMBU_CAMERA_HEIGHT 180
-#define BAMBU_CAMERA_BYTES (BAMBU_CAMERA_WIDTH * BAMBU_CAMERA_HEIGHT * 2)
 
 static const char *TAG = "connectivity";
 static EventGroupHandle_t s_events;
@@ -52,19 +49,9 @@ static bool s_have_snapshot;
 static uint8_t *s_custom_image_buffers[2];
 static uint32_t s_custom_image_revisions[2];
 static int s_custom_image_active = -1;
-static uint8_t *s_bambu_camera_buffers[2];
-static uint32_t s_bambu_camera_revisions[2];
-static int s_bambu_camera_active = -1;
-static QueueHandle_t s_bambu_command_queue;
 static codex_task_detail_t *s_work_tasks;
 static size_t s_work_task_count;
 static SemaphoreHandle_t s_state_lock;
-
-typedef enum {
-    BAMBU_COMMAND_PAUSE = 1,
-    BAMBU_COMMAND_RESUME,
-    BAMBU_COMMAND_STOP,
-} bambu_command_t;
 
 typedef struct {
     char *body;
@@ -201,48 +188,6 @@ static bool fetch_custom_image(uint32_t revision)
     return true;
 }
 
-static bool fetch_bambu_camera(uint32_t revision)
-{
-    const device_config_values_t *device_config = device_config_get();
-    for (size_t index = 0; index < 2; index++) {
-        if (s_bambu_camera_buffers[index] != NULL && s_bambu_camera_revisions[index] == revision) {
-            s_bambu_camera_active = (int)index;
-            return true;
-        }
-    }
-    char url[256];
-    strlcpy(url, device_config->bridge_url, sizeof(url));
-    char *last_slash = strrchr(url, '/');
-    if (last_slash == NULL) return false;
-    strlcpy(last_slash + 1, "bambu-camera.rgb565", sizeof(url) - (size_t)(last_slash + 1 - url));
-    int slot = s_bambu_camera_active == 0 ? 1 : 0;
-    if (s_bambu_camera_buffers[slot] == NULL) {
-        s_bambu_camera_buffers[slot] = heap_caps_malloc(BAMBU_CAMERA_BYTES, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        if (s_bambu_camera_buffers[slot] == NULL) return false;
-    }
-    image_body_t response = {.data = s_bambu_camera_buffers[slot], .capacity = BAMBU_CAMERA_BYTES};
-    esp_http_client_config_t config = {
-        .url = url, .event_handler = image_http_event_handler, .user_data = &response,
-        .timeout_ms = 12000, .buffer_size = 4096, .crt_bundle_attach = esp_crt_bundle_attach,
-    };
-    esp_http_client_handle_t client = esp_http_client_init(&config);
-    if (client == NULL) return false;
-    if (strlen(device_config->bridge_token) > 0) {
-        esp_http_client_set_header(client, "X-Bridge-Token", device_config->bridge_token);
-    }
-    esp_err_t error = esp_http_client_perform(client);
-    int status = esp_http_client_get_status_code(client);
-    esp_http_client_cleanup(client);
-    if (error != ESP_OK || status != 200 || response.overflow || response.length != BAMBU_CAMERA_BYTES) {
-        ESP_LOGW(TAG, "Bambu camera request failed: %s, HTTP %d, bytes %u",
-                 esp_err_to_name(error), status, (unsigned)response.length);
-        return false;
-    }
-    s_bambu_camera_revisions[slot] = revision;
-    s_bambu_camera_active = slot;
-    return true;
-}
-
 static bool fetch_snapshot(codex_snapshot_t *management)
 {
     const device_config_values_t *device_config = device_config_get();
@@ -289,10 +234,6 @@ static bool fetch_snapshot(codex_snapshot_t *management)
         !fetch_custom_image(management->custom_image_revision)) {
         management->custom_image_available = false;
     }
-    if (parsed && management->bambu_camera_available &&
-        !fetch_bambu_camera(management->bambu_camera_revision)) {
-        management->bambu_camera_available = false;
-    }
     return parsed;
 }
 
@@ -304,49 +245,6 @@ const uint8_t *connectivity_custom_image_data(uint32_t revision)
         }
     }
     return NULL;
-}
-
-const uint8_t *connectivity_bambu_camera_data(uint32_t revision)
-{
-    for (size_t index = 0; index < 2; index++) {
-        if (s_bambu_camera_buffers[index] != NULL && s_bambu_camera_revisions[index] == revision) {
-            return s_bambu_camera_buffers[index];
-        }
-    }
-    return NULL;
-}
-
-static bool send_bambu_command(bambu_command_t command)
-{
-    const device_config_values_t *device_config = device_config_get();
-    const char *action = command == BAMBU_COMMAND_PAUSE ? "pause" :
-                         command == BAMBU_COMMAND_RESUME ? "resume" : "stop";
-    char url[256];
-    strlcpy(url, device_config->bridge_url, sizeof(url));
-    char *last_slash = strrchr(url, '/');
-    if (last_slash == NULL) return false;
-    strlcpy(last_slash + 1, "bambu/command", sizeof(url) - (size_t)(last_slash + 1 - url));
-    char payload[40];
-    snprintf(payload, sizeof(payload), "{\"action\":\"%s\"}", action);
-    char response_body[256] = {0};
-    http_body_t response = {.body = response_body, .capacity = sizeof(response_body)};
-    esp_http_client_config_t config = {
-        .url = url, .event_handler = http_event_handler, .user_data = &response,
-        .timeout_ms = 8000, .buffer_size = 512, .crt_bundle_attach = esp_crt_bundle_attach,
-    };
-    esp_http_client_handle_t client = esp_http_client_init(&config);
-    if (client == NULL) return false;
-    esp_http_client_set_method(client, HTTP_METHOD_POST);
-    esp_http_client_set_header(client, "Content-Type", "application/json");
-    if (strlen(device_config->bridge_token) > 0) {
-        esp_http_client_set_header(client, "X-Bridge-Token", device_config->bridge_token);
-    }
-    esp_http_client_set_post_field(client, payload, strlen(payload));
-    esp_err_t error = esp_http_client_perform(client);
-    int status = esp_http_client_get_status_code(client);
-    esp_http_client_cleanup(client);
-    ESP_LOGI(TAG, "Bambu %s command: %s, HTTP %d", action, esp_err_to_name(error), status);
-    return error == ESP_OK && status == 202;
 }
 
 static void publish_current_state(void)
@@ -430,10 +328,6 @@ static void bridge_task(void *argument)
             pdMS_TO_TICKS(CONFIG_STATE_DISPLAY_POLL_SECONDS * 1000));
 
         if ((bits & WIFI_CONNECTED_BIT) || s_wifi_connected) {
-            bambu_command_t command;
-            while (s_bambu_command_queue != NULL && xQueueReceive(s_bambu_command_queue, &command, 0) == pdTRUE) {
-                send_bambu_command(command);
-            }
             if (fetch_snapshot(&s_management_snapshot)) {
                 if (s_state_lock != NULL) xSemaphoreTake(s_state_lock, portMAX_DELAY);
                 management_snapshot_apply(&s_work_snapshot, &s_management_snapshot);
@@ -537,12 +431,11 @@ void connectivity_start(void)
     const device_config_values_t *device_config = device_config_get();
     ESP_LOGI(TAG, "Preparing bridge data channel");
     s_events = xEventGroupCreate();
-    s_bambu_command_queue = xQueueCreate(4, sizeof(bambu_command_t));
     s_state_lock = xSemaphoreCreateMutex();
     s_work_tasks = heap_caps_calloc(CODEX_TASK_DETAIL_MAX, sizeof(*s_work_tasks),
                                     MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    ESP_ERROR_CHECK((s_events == NULL || s_bambu_command_queue == NULL ||
-                     s_state_lock == NULL || s_work_tasks == NULL) ?
+    ESP_ERROR_CHECK((s_events == NULL || s_state_lock == NULL ||
+                     s_work_tasks == NULL) ?
                     ESP_ERR_NO_MEM : ESP_OK);
     ESP_LOGI(TAG, "Bridge data buffers ready");
     setenv("TZ", CONFIG_STATE_DISPLAY_TIMEZONE, 1);
@@ -560,19 +453,6 @@ void connectivity_start(void)
     ESP_LOGI(TAG, "Starting Wi-Fi station");
     wifi_start();
     ESP_LOGI(TAG, "Connectivity services started");
-}
-
-bool connectivity_bambu_command(const char *action)
-{
-    if (s_bambu_command_queue == NULL || action == NULL) return false;
-    bambu_command_t command;
-    if (strcmp(action, "pause") == 0) command = BAMBU_COMMAND_PAUSE;
-    else if (strcmp(action, "resume") == 0) command = BAMBU_COMMAND_RESUME;
-    else if (strcmp(action, "stop") == 0) command = BAMBU_COMMAND_STOP;
-    else return false;
-    if (xQueueSend(s_bambu_command_queue, &command, 0) != pdTRUE) return false;
-    xEventGroupSetBits(s_events, REFRESH_REQUESTED_BIT);
-    return true;
 }
 
 void connectivity_request_refresh(void)

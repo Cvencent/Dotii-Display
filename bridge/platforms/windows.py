@@ -101,12 +101,6 @@ class WindowsPlatformAdapter:
                     pass
         return self.startup_enabled()
 
-    def ffmpeg_candidates(self, runtime_folder: Path, tools_root: Path) -> list[Path]:
-        return [
-            runtime_folder / "tools" / "ffmpeg" / "bin" / "ffmpeg.exe",
-            tools_root / "ffmpeg" / "bin" / "ffmpeg.exe",
-        ]
-
     def codex_cli_candidates(self, runtime_folder: Path, application_root: Path) -> list[Path]:
         return [
             runtime_folder / "codex-cli" / "node_modules" / "@openai" / "codex" / "bin" / "codex.js",

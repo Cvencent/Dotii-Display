@@ -66,7 +66,6 @@ class MacOSPlatformAdapterTests(unittest.TestCase):
         self.assertEqual(adapter.runtime_folder().name, "Dotii")
         self.assertEqual(adapter.runtime_folder().parent.name, "Application Support")
         self.assertEqual(adapter.bundled_node_candidates(Path("/app"))[0].name, "node")
-        self.assertEqual(adapter.ffmpeg_candidates(Path("/runtime"), Path("/tools"))[0].name, "ffmpeg")
 
     def test_absolute_runtime_override_is_limited_to_explicit_development_runs(self) -> None:
         with tempfile.TemporaryDirectory(dir=BRIDGE.parent / ".codx") as temporary:
@@ -79,11 +78,9 @@ class MacOSPlatformAdapterTests(unittest.TestCase):
         adapter = MacOSPlatformAdapter()
         codex = adapter.codex_cli_candidates(Path("/runtime"), Path("/app"))
         node = adapter.bundled_node_candidates(Path("/app"))
-        ffmpeg = adapter.ffmpeg_candidates(Path("/runtime"), Path("/tools"))
 
         self.assertIn(Path("/opt/homebrew/bin/codex"), codex)
         self.assertIn(Path("/opt/homebrew/bin/node"), node)
-        self.assertIn(Path("/opt/homebrew/bin/ffmpeg"), ffmpeg)
         self.assertLess(codex.index(Path("/app/tools/codex/bin/codex")), codex.index(Path("/opt/homebrew/bin/codex")))
 
     def test_app_bundle_separates_resources_and_helper_executables(self) -> None:
