@@ -44,11 +44,6 @@
         <span>自定义</span>
         <span class="module-meta" id="custom-nav-state">读取中</span>
       </button>
-      <button class="module-tab" type="button" data-panel="codex" aria-selected="false">
-        <img src="/assets/openai.svg" alt="">
-        <span>Codex</span>
-        <span class="module-meta" id="codex-nav-state">由 CodexBridge 提供</span>
-      </button>
       <button class="module-tab system-tab" type="button" data-panel="system" aria-selected="false">
         <span class="nav-icon settings-icon" aria-hidden="true"></span>
         <span>设置</span>
@@ -316,45 +311,6 @@
         </section>
       </section>
 
-      <section class="panel" id="panel-codex" aria-labelledby="codex-heading" hidden>
-        <div class="section-heading">
-          <div>
-            <h2 id="codex-heading">Codex 连接</h2>
-            <p>Codex 配额、近 7 日 Token 与额度重置通过 CodexBridge 通用协议下发，管理中心只做展示与样式设置。</p>
-          </div>
-          <span class="status-pill" id="codex-bridge-state">由 CodexBridge 同步</span>
-        </div>
-
-        <div class="codex-content">
-          <form class="settings-panel codex-ui-panel" id="codex-form">
-            <div class="card-heading">
-              <div><h3>额度显示样式</h3><p>决定 Dotii 的 Codex 页面显示哪些额度信息。</p></div>
-            </div>
-            <div class="time-field codex-ui-field">
-              <span class="time-field-label" id="codex-ui-label">Dotii 主页面额度样式</span>
-              <div class="ui-select" data-ui-select="codex-ui">
-                <input id="codex-ui" type="hidden" value="classic">
-                <button class="ui-select-trigger" id="codex-ui-trigger" type="button" aria-haspopup="listbox" aria-expanded="false" aria-labelledby="codex-ui-label codex-ui-value">
-                  <span id="codex-ui-value">仅显示周剩余</span><span class="ui-select-chevron" aria-hidden="true"></span>
-                </button>
-                <div class="ui-select-menu" role="listbox" aria-labelledby="codex-ui-label" hidden>
-                  <button type="button" role="option" data-value="classic">仅显示周剩余</button>
-                  <button type="button" role="option" data-value="dual_limit">显示 5 小时及周剩余</button>
-                </div>
-              </div>
-              <small id="codex-ui-state" role="status" aria-live="polite">仅显示周剩余额度</small>
-            </div>
-          </form>
-
-          <article class="settings-panel codex-info-panel">
-            <div class="card-heading"><div><h3>数据来源</h3><p>CodexBridge 是通用协议主机，任何设备都可以按能力订阅这些数据。</p></div></div>
-            <div class="runtime-row"><span>周剩余额度</span><strong>来自 CodexBridge 会话快照</strong></div>
-            <div class="runtime-row"><span>近 7 日 Token</span><strong>按能力 <code>quota</code> 下发</strong></div>
-            <div class="runtime-row"><span>额度重置时间</span><strong>随 <code>codex_status</code> 消息推送</strong></div>
-            <p class="network-note"><strong>配对方式</strong><span>在 CodexBridge 托盘中为这台 Dotii 启用 Codex 能力，并复制配对密钥到设备；配额数据不经过本管理中心。</span></p>
-          </article>
-        </div>
-      </section>
 
       <section class="panel" id="panel-system" aria-labelledby="system-heading" hidden>
         <div class="section-heading">
@@ -368,16 +324,10 @@
           <section class="settings-group bridge-settings-group" aria-labelledby="bridge-settings-heading">
             <div class="settings-group-heading">
               <h3 id="bridge-settings-heading">Dotii 管理中心</h3>
-              <p>控制登录启动方式并查看本机运行状态。</p>
+              <p>按需打开管理中心；关闭窗口即退出，不在后台常驻。</p>
             </div>
             <article class="settings-panel">
               <h3>应用设置</h3>
-              <label class="setting-row">
-                <span><strong>登录系统后自动启动</strong><small>让 Dotii 始终保持更新</small></span>
-                <input id="auto-start" type="checkbox">
-                <span class="switch-track" aria-hidden="true"></span>
-              </label>
-              <div class="runtime-row"><span>Codex 数据</span><strong>由 CodexBridge 同步</strong></div>
               <div class="runtime-row"><span>本次在线时长</span><strong id="bridge-uptime">--</strong></div>
               <div class="runtime-row"><span>管理页地址</span><strong id="local-url">正在获取</strong></div>
             </article>

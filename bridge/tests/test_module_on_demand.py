@@ -177,7 +177,6 @@ class ModuleOnDemandTests(unittest.TestCase):
     def test_frontend_has_xiaozhi_navigation_without_bambu(self):
         html = (BRIDGE / "web" / "index.html").read_text(encoding="utf-8")
         self.assertIn('data-panel="xiaozhi"', html)
-        self.assertIn('data-panel="codex"', html)
         self.assertIn("小智表情", html)
         self.assertNotIn("Bambu", html)
 

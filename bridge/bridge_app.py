@@ -17,17 +17,15 @@ from ctypes import wintypes
 from pathlib import Path
 
 from platforms import current_platform
-from runtime_paths import application_root, is_frozen, resource_path, runtime_folder, sibling_executable
+from runtime_paths import application_root, is_frozen, resource_path, runtime_folder
 
 
 APP_NAME = "Dotii 管理中心"
 MUTEX_NAME = "Local\\StateDisplayBridgeApp"
 DASHBOARD_URL = "http://127.0.0.1:8787"
 ADMIN_URL = f"{DASHBOARD_URL}/api/v1/admin/overview"
-STARTUP_DELAY_SECONDS = 8.0
 STARTUP_READY_TIMEOUT_SECONDS = 45.0
 ICON_PATH = resource_path("assets", "dotii.ico")
-BRIDGE_EXECUTABLE_NAME = "DotiiBridge.exe"
 WM_APP = 0x8000
 WM_TRAY = WM_APP + 21
 WM_LBUTTONUP = 0x0202
@@ -437,15 +435,28 @@ def enable_high_dpi() -> str:
 
 
 def main() -> int:
+    if len(sys.argv) > 1 and sys.argv[1] == "--esptool":
+        import esptool
+
+        sys.argv = ["esptool", *sys.argv[2:]]
+        raise SystemExit(esptool.main())
+    if os.name == "nt":
+        # Windowed console bootloader: hide the console for the tray host, but
+        # keep it for the hidden --esptool child so its output can be captured.
+        console = ctypes.windll.kernel32.GetConsoleWindow()
+        if console:
+            ctypes.windll.user32.ShowWindow(console, 0)
+    if len(sys.argv) > 1 and sys.argv[1] == "--bridge-server":
+        import codex_bridge
+
+        sys.argv = [sys.argv[0], *sys.argv[2:]]
+        codex_bridge.main()
+        return 0
     parser = argparse.ArgumentParser(description="Dotii background host")
     parser.add_argument("--open-dashboard", action="store_true")
-    parser.add_argument("--startup", action="store_true", help="从 Windows 登录启动，等待后台服务就绪")
     arguments = parser.parse_args()
     if os.name != "nt":
         raise SystemExit("bridge_app.py only supports Windows")
-    if arguments.startup:
-        # 登录时 Windows 可能仍在恢复网络和蓝牙，给后台服务一点准备时间。
-        time.sleep(STARTUP_DELAY_SECONDS)
     enable_high_dpi()
 
     kernel32 = ctypes.windll.kernel32
@@ -465,16 +476,9 @@ def main() -> int:
     log_handle = log_path.open("a", encoding="utf-8", buffering=1)
     script = Path(__file__).with_name("codex_bridge.py")
     if is_frozen():
-        bridge_executable = sibling_executable(BRIDGE_EXECUTABLE_NAME)
-        if not bridge_executable.is_file():
-            ctypes.windll.user32.MessageBoxW(
-                None,
-                f"找不到后台服务程序：\n{bridge_executable}",
-                APP_NAME,
-                0x10,
-            )
-            return 1
-        command = [str(bridge_executable)]
+        # Single-executable build: re-enter this same binary as the hidden
+        # configuration server child instead of shipping a second EXE.
+        command = [str(Path(sys.executable).resolve()), "--bridge-server"]
         working_root = application_root()
     else:
         command = [sys.executable, "-B", str(script)]
@@ -492,14 +496,8 @@ def main() -> int:
     pid_path.write_text(str(os.getpid()), encoding="ascii")
     try:
         job_handle = attach_kill_on_close_job(process)
-        ready_timeout = STARTUP_READY_TIMEOUT_SECONDS if arguments.startup else 12.0
+        ready_timeout = STARTUP_READY_TIMEOUT_SECONDS
         if not wait_until_ready(process, timeout=ready_timeout):
-            if arguments.startup and process.poll() is None:
-                # Do not show a hidden-session MessageBox or exit just because
-                # login startup is slower than the ready probe. Keep the tray
-                # host alive while the child finishes initializing.
-                TrayHost(process, log_path).run()
-                return 0
             ctypes.windll.user32.MessageBoxW(
                 None,
                 f"{APP_NAME} 未能启动。请查看日志：\n{log_path}",

@@ -27,7 +27,6 @@ const state = {
   characterLoaded: false,
   displayDirty: false,
   displaySaving: false,
-  codexUiSaving: false,
   firmwarePortsSignature: "",
   bluetoothDevicesSignature: "",
   dotiiExpressions: [],
@@ -732,10 +731,6 @@ function setBridgeState(bridge) {
   indicator.dataset.state = bridgeOnline ? "online" : "error";
   setText("bridge-state-label", bridgeOnline ? "管理中心在线" : "管理中心连接失败");
   setText("bridge-uptime", formatDuration(Date.now() / 1000 - Number(bridge.started_at_epoch || 0)));
-  const autoStart = byId("auto-start");
-  autoStart.checked = Boolean(bridge.auto_start);
-  autoStart.disabled = bridge.startup_available === false;
-  autoStart.title = autoStart.disabled ? "请从正式安装的 Dotii 管理中心应用设置登录启动" : "";
   setText("device-url", bridge.device_url || "--");
   setText("bridge-token", bridge.token || "--");
   setText("local-url", bridge.local_url || "--");
@@ -1060,13 +1055,6 @@ function renderOverview(overview) {
   renderDotiiCharacters(snapshot.character || overview.dotii_config?.character);
   renderDotii(snapshot.dotii || {}, dotiiEnabled);
   const displayConfig = overview.display_config || snapshot.display || {};
-  const codexUi = displayConfig.codex_ui === "dual_limit" ? "dual_limit" : "classic";
-  if (!state.codexUiSaving) {
-    setUiSelectValue("codex-ui", codexUi);
-    setText("codex-ui-state", codexUi === "dual_limit"
-      ? "同时显示 5 小时和周剩余额度"
-      : "仅显示周剩余额度");
-  }
   if (!state.displayDirty && !state.displaySaving) {
     const angle = Math.max(80, Math.min(100, Number(displayConfig.docked_rotation_tenths || 840) / 10));
     const screenOffTimeout = DISPLAY_TIMEOUT_OPTIONS.includes(Number(displayConfig.screen_off_timeout_seconds))
@@ -1115,23 +1103,6 @@ async function refreshOverview({ announce = false } = {}) {
   } finally {
     state.busy = false;
     byId("refresh-button").disabled = false;
-  }
-}
-
-async function updateAutoStart(enabled) {
-  try {
-    const response = await fetch("/api/v1/admin/settings", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ auto_start: enabled }),
-    });
-    const result = await response.json();
-    if (!response.ok) throw new Error(result.error || "设置失败");
-    byId("auto-start").checked = Boolean(result.auto_start);
-    showToast(result.auto_start ? "已开启登录后自动启动" : "已关闭登录后自动启动");
-  } catch (error) {
-    byId("auto-start").checked = !enabled;
-    showToast(error.message || "设置失败");
   }
 }
 
@@ -1194,35 +1165,6 @@ async function updateModule(moduleId, enabled) {
     showToast(error.message || "设置失败");
   } finally {
     state.moduleSaving[moduleId] = false;
-    await refreshOverview();
-  }
-}
-
-async function saveCodexUi(codexUi) {
-  if (state.codexUiSaving) return;
-  state.codexUiSaving = true;
-  const previous = state.overview?.display_config?.codex_ui === "dual_limit" ? "dual_limit" : "classic";
-  setText("codex-ui-state", "正在保存");
-  try {
-    const response = await fetch("/api/v1/admin/display", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ codex_ui: codexUi }),
-    });
-    const result = await response.json();
-    if (!response.ok) throw new Error(result.error || "Codex 额度样式保存失败");
-    const saved = result.display_config?.codex_ui === "dual_limit" ? "dual_limit" : "classic";
-    setUiSelectValue("codex-ui", saved);
-    setText("codex-ui-state", saved === "dual_limit"
-      ? "同时显示 5 小时和周剩余额度"
-      : "仅显示周剩余额度");
-    showToast(saved === "dual_limit" ? "已显示 5 小时和周剩余额度" : "已仅显示周剩余额度");
-  } catch (error) {
-    setUiSelectValue("codex-ui", previous);
-    setText("codex-ui-state", "保存失败，已恢复原选择");
-    showToast(error.message || "Codex 额度样式保存失败");
-  } finally {
-    state.codexUiSaving = false;
     await refreshOverview();
   }
 }
@@ -1595,7 +1537,6 @@ document.querySelectorAll("[data-copy]").forEach((button) => {
 });
 
 byId("refresh-button").addEventListener("click", () => refreshOverview({ announce: true }));
-byId("auto-start").addEventListener("change", (event) => updateAutoStart(event.target.checked));
 byId("display-form").addEventListener("submit", saveDisplaySettings);
 byId("dock-angle").addEventListener("input", (event) => {
   const angle = Number(event.target.value);
@@ -1614,7 +1555,6 @@ byId("screen-off-page").addEventListener("change", () => {
   state.displayDirty = true;
   setText("display-save-state", "有尚未保存的修改");
 });
-byId("codex-ui").addEventListener("change", (event) => saveCodexUi(event.target.value));
 byId("xiaozhi-enabled").addEventListener("change", (event) => updateModule("xiaozhi", event.target.checked));
 byId("xiaozhi-form").addEventListener("submit", saveXiaozhi);
 byId("xiaozhi-server-url").addEventListener("input", () => setText("xiaozhi-save-state", "有尚未保存的修改"));

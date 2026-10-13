@@ -31,7 +31,6 @@ $DistRoot = Join-Path $WorkRoot "dist"
 $BuildRoot = Join-Path $WorkRoot "build"
 $ReleaseRoot = Join-Path $ProjectRoot "release\DotiiManagementCenter-$Version"
 $Archive = Join-Path $ProjectRoot "release\DotiiManagementCenter-$Version-portable.zip"
-$BridgeVersionFile = Join-Path $CodxRoot "packaging-version-bridge.txt"
 $HostVersionFile = Join-Path $CodxRoot "packaging-version-host.txt"
 $FirmwareBuildRoot = Join-Path $ProjectRoot "build"
 $FirmwareRoot = Join-Path $ProjectRoot "firmware"
@@ -80,21 +79,14 @@ foreach ($FlashFile in $FlashFiles) {
 }
 
 New-Item -ItemType Directory -Force -Path $CodxRoot | Out-Null
-$BridgeVersionText = @"
-VSVersionInfo(
-  ffi=FixedFileInfo(filevers=($($Version.Split('.')[0]), $($Version.Split('.')[1]), $($Version.Split('.')[2]), 0), prodvers=($($Version.Split('.')[0]), $($Version.Split('.')[1]), $($Version.Split('.')[2]), 0)),
-  kids=[StringFileInfo([StringTable('080404B0', [StringStruct('CompanyName', 'Dotii'), StringStruct('FileDescription', 'Dotii \u7ba1\u7406\u4e2d\u5fc3\u540e\u53f0\u670d\u52a1'), StringStruct('FileVersion', '$Version'), StringStruct('InternalName', 'DotiiBridge'), StringStruct('OriginalFilename', 'DotiiBridge.exe'), StringStruct('ProductName', 'Dotii \u7ba1\u7406\u4e2d\u5fc3'), StringStruct('ProductVersion', '$Version')])]), VarFileInfo([VarStruct('Translation', [2052, 1200])])]
-)
-"@
 $HostVersionText = @"
 VSVersionInfo(
   ffi=FixedFileInfo(filevers=($($Version.Split('.')[0]), $($Version.Split('.')[1]), $($Version.Split('.')[2]), 0), prodvers=($($Version.Split('.')[0]), $($Version.Split('.')[1]), $($Version.Split('.')[2]), 0)),
-  kids=[StringFileInfo([StringTable('080404B0', [StringStruct('CompanyName', 'Dotii'), StringStruct('FileDescription', 'Dotii \u7ba1\u7406\u4e2d\u5fc3'), StringStruct('FileVersion', '$Version'), StringStruct('InternalName', 'DotiiManagementCenter'), StringStruct('OriginalFilename', 'DotiiManagementCenter.exe'), StringStruct('ProductName', 'Dotii \u7ba1\u7406\u4e2d\u5fc3'), StringStruct('ProductVersion', '$Version')])]), VarFileInfo([VarStruct('Translation', [2052, 1200])])]
+  kids=[StringFileInfo([StringTable('080404B0', [StringStruct('CompanyName', 'Dotii'), StringStruct('FileDescription', 'Dotii 管理中心'), StringStruct('FileVersion', '$Version'), StringStruct('InternalName', 'DotiiManagementCenter'), StringStruct('OriginalFilename', 'DotiiManagementCenter.exe'), StringStruct('ProductName', 'Dotii 管理中心'), StringStruct('ProductVersion', '$Version')])]), VarFileInfo([VarStruct('Translation', [2052, 1200])])]
 )
 "@
 # Keep the PyInstaller data-structure files ASCII-only. This prevents their
 # Python parser from decoding Chinese resource strings with the active OEM code page.
-[IO.File]::WriteAllText($BridgeVersionFile, $BridgeVersionText, [Text.Encoding]::ASCII)
 [IO.File]::WriteAllText($HostVersionFile, $HostVersionText, [Text.Encoding]::ASCII)
 if (-not (Test-Path $Python)) {
     & python -m venv $VenvRoot
@@ -107,37 +99,26 @@ if ($Clean -and (Test-Path $WorkRoot)) {
 }
 New-Item -ItemType Directory -Force -Path $DistRoot, $BuildRoot | Out-Null
 
-$env:DOTII_VERSION_FILE = $BridgeVersionFile
-& $Python -m PyInstaller --noconfirm --clean `
-    --distpath $DistRoot --workpath $BuildRoot `
-    "packaging\DotiiBridge.spec"
 $env:DOTII_VERSION_FILE = $HostVersionFile
 & $Python -m PyInstaller --noconfirm --clean `
     --distpath $DistRoot --workpath $BuildRoot `
     "packaging\DotiiManagementCenter.spec"
+if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed" }
 
-$BridgeExe = Join-Path $DistRoot "DotiiBridge.exe"
 $HostExe = Join-Path $DistRoot "DotiiManagementCenter.exe"
-if (-not (Test-Path $BridgeExe) -or -not (Test-Path $HostExe)) {
-    throw "PyInstaller did not produce both Dotii executables."
+if (-not (Test-Path -LiteralPath $HostExe -PathType Leaf)) {
+    throw "PyInstaller did not produce DotiiManagementCenter.exe."
+}
+$Executables = @(Get-ChildItem -LiteralPath $DistRoot -Filter "*.exe" -File -Recurse)
+if ($Executables.Count -ne 1 -or $Executables[0].FullName -ne $HostExe) {
+    throw "Expected exactly one executable in dist: $HostExe"
 }
 
 if (Test-Path -LiteralPath $ReleaseRoot) {
     Remove-Item -LiteralPath $ReleaseRoot -Recurse -Force
 }
 New-Item -ItemType Directory -Force -Path $ReleaseRoot | Out-Null
-Copy-Item -LiteralPath $BridgeExe -Destination $ReleaseRoot -Force
 Copy-Item -LiteralPath $HostExe -Destination $ReleaseRoot -Force
-
-$ReleaseTools = Join-Path $ReleaseRoot "tools"
-New-Item -ItemType Directory -Force -Path $ReleaseTools | Out-Null
-foreach ($ToolName in @("node", "codex-cli")) {
-    $ToolPath = Join-Path $ProjectRoot "tools\$ToolName"
-    if (-not (Test-Path -LiteralPath $ToolPath -PathType Container)) {
-        throw "Required bundled tool is missing: $ToolPath"
-    }
-    Copy-Item -LiteralPath $ToolPath -Destination $ReleaseTools -Recurse -Force
-}
 
 $Checksums = Get-ChildItem -LiteralPath $ReleaseRoot -Recurse -File |
     Where-Object { $_.Name -ne "SHA256SUMS.txt" } |

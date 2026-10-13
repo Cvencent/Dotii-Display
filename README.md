@@ -1,6 +1,6 @@
 # Dotii 桌面交互屏
 
-Dotii 是一套由 ESP32-S3 圆形 AMOLED 桌面屏、CodexBridge 与小智 AI 组成的开源桌面对话终端。设备固件原生运行小智语音助手，内置可切换形象与表情状态机，既能随对话与触摸切换表情，也能显示 Codex 状态。CodexBridge 以通用设备协议提供 Codex 额度、近 7 日 Token、任务状态与多设备已读同步；管理页则负责小智连接、小智表情、自定义页面、Codex 显示、显示设置、BLE 配网与烧录。
+Dotii 是一套由 ESP32-S3 圆形 AMOLED 桌面屏、CodexBridge 与小智 AI 组成的开源桌面对话终端。设备固件原生运行小智语音助手，内置可切换形象与表情状态机，既能随对话与触摸切换表情，也能显示 Codex 状态。CodexBridge 是常驻托盘、以通用设备协议提供 Codex 额度、近 7 日 Token、任务状态与多设备已读同步的桥接器；Dotii 管理中心则是独立的按需 EXE，只管小智连接、小智表情、自定义页面、显示设置、BLE 配网与烧录。
 
 ![Dotii 桌面交互屏产品渲染图](assets/dotii-product-render.png)
 
@@ -28,18 +28,17 @@ macOS 预览版目前不支持 Intel Mac。由于尚未经过苹果公证，首�
 
 ## Windows 快速上手
 
-1. 从 [CodexBridge Releases](https://github.com/Cvencent/CodexBridge/releases) 下载 Windows 安装包或便携包，按说明安装或完整解压。
-2. 运行 `CodexBridge.exe`。它会驻留在系统托盘，并托管 Dotii 管理页；默认地址为 `http://127.0.0.1:8787`。
-3. 用 USB 线连接 Dotii，在管理页“设置”中识别设备。首次使用时可通过“一键烧录”写入随包固件。
-4. 使用蓝牙配网，将 2.4 GHz Wi-Fi 和 CodexBridge 连接信息同步到 Dotii。
-5. 在管理页“小智”中填写小智服务端地址与唤醒词，设备即可直接进行语音对话。
+1. 从 [CodexBridge Releases](https://github.com/Cvencent/CodexBridge/releases) 下载并运行 `CodexBridge.exe`。它是常驻系统托盘的 Codex 桥接器，负责 Codex 采集与设备协议，默认管理接口为 `http://127.0.0.1:8788`。
+2. 打开 `DotiiManagementCenter.exe`（从本仓库 Releases 下载，按需启动、关闭即退出）。它与 CodexBridge 是两个独立 EXE，只负责设备管理。
+3. 用 USB 线连接 Dotii，在管理中心“设置”中识别设备。首次使用时可通过“一键烧录”写入随包固件。
+4. 使用蓝牙配网，将 2.4 GHz Wi-Fi 同步到 Dotii，并写入与 CodexBridge 配对的设备令牌。
+5. 在管理中心“小智”中填写小智服务端地址与唤醒词，设备即可直接进行语音对话。
 6. 在 CodexBridge 托盘中按设备启用 `quota` 能力，Codex 额度与近 7 日 Token 会通过通用协议下发到设备。
-
-请保持解压后的目录结构不变。关闭浏览器不会退出程序；重新打开管理页、查看日志或退出程序时，请使用系统托盘中的 CodexBridge 图标。不要单独启动内部管理进程。
+`CodexBridge.exe` 常驻托盘，负责 Codex 采集、统一协议、设备能力开关与已读同步；`DotiiManagementCenter.exe` 按需启动，负责刷机、蓝牙配网、小智、表情与显示设置，关闭后不常驻。
 
 ### 更新 Windows 便携包
 
-先从系统托盘彻底退出旧版程序，再安装新版 CodexBridge。CodexBridge 的设备配对、能力与语音设置保存在 `%LOCALAPPDATA%\CodexBridge`；Dotii 的小智连接、小智表情、自定义页、显示、配网与烧录配置继续保存在 `%LOCALAPPDATA%\StateDisplay`。若新版本包含 Dotii 固件更新，请在管理页中重新执行“一键烧录”。
+先从系统托盘彻底退出旧版 CodexBridge，安装新版；再单独更新 `DotiiManagementCenter.exe`。CodexBridge 的设备配对、能力与语音设置保存在 `%LOCALAPPDATA%\CodexBridge`；Dotii 的小智连接、小智表情、自定义页、显示、配网与烧录配置继续保存在 `%LOCALAPPDATA%\StateDisplay`。若新版本包含 Dotii 固件更新，请在管理中心重新执行“一键烧录”。
 
 ## macOS 快速上手
 
@@ -98,7 +97,7 @@ Dotii 固件内置一套通用设备协议客户端，任何实现同一协议�
 <details>
 <summary><strong>管理页面没有自动打开</strong></summary>
 
-Windows 请检查系统托盘，macOS 请检查菜单栏，然后通过 Dotii 图标重新打开管理页面。也可以在程序正在运行时访问 `http://127.0.0.1:8787`。
+再次运行 `DotiiManagementCenter.exe` 即会打开管理页面；也可以在同一台电脑上访问 `http://127.0.0.1:8787`（需要管理中心正在运行）。
 
 </details>
 

@@ -1321,11 +1321,6 @@ def main() -> None:
     parser.add_argument("--parent-pid", type=int, default=0, help=argparse.SUPPRESS)
     arguments = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    try:
-        if startup_enabled():
-            set_startup(True)
-    except OSError as error:
-        logging.warning("无法修复登录自启动命令：%s", error)
     writable_root = runtime_folder()
     writable_root.mkdir(parents=True, exist_ok=True)
     state_path = arguments.state or writable_root / "state.json"
