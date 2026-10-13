@@ -444,8 +444,7 @@ def main() -> int:
     if os.name != "nt":
         raise SystemExit("bridge_app.py only supports Windows")
     if arguments.startup:
-        # At login Windows may still be restoring the network, Bluetooth and
-        # the user's Codex session. Give those services a short head start.
+        # 登录时 Windows 可能仍在恢复网络和蓝牙，给后台服务一点准备时间。
         time.sleep(STARTUP_DELAY_SECONDS)
     enable_high_dpi()
 
@@ -475,10 +474,10 @@ def main() -> int:
                 0x10,
             )
             return 1
-        command = [str(bridge_executable), "--app-server"]
+        command = [str(bridge_executable)]
         working_root = application_root()
     else:
-        command = [sys.executable, "-B", str(script), "--app-server"]
+        command = [sys.executable, "-B", str(script)]
         working_root = script.parent.parent
     process = subprocess.Popen(
         command,

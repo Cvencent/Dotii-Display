@@ -1,6 +1,6 @@
 # Dotii 桌面交互屏
 
-Dotii 是一套由 ESP32-S3 圆形 AMOLED 桌面屏与 Windows/macOS 端“Dotii 管理中心”组成的开源状态显示系统。它可以显示 Codex 用量与任务状态、Bambu Lab 打印进度、自定义内容，并通过 Dotii 表情提供轻量互动。
+Dotii 是一套由 ESP32-S3 圆形 AMOLED 桌面屏和 PC 端 CodexBridge 组成的开源状态显示系统。CodexBridge 负责 Codex 状态、任务、结果与多设备已读同步；Dotii 管理页继续提供 Bambu Lab 打印进度、自定义内容、显示设置、BLE 配网与烧录。设备通过 Dotii 表情提供轻量互动。
 
 ![Dotii 桌面交互屏产品渲染图](assets/dotii-product-render.png)
 
@@ -10,10 +10,10 @@ Dotii 是一套由 ESP32-S3 圆形 AMOLED 桌面屏与 Windows/macOS 端“Dotii
 
 | 系统 | 支持范围 | 下载内容 | 当前状态 |
 | --- | --- | --- | --- |
-| Windows | Windows 10/11 x64 | `DotiiManagementCenter-1.1.1-portable.zip` | 正式版 |
-| macOS | Apple Silicon、macOS 13 及以上 | `DotiiManagementCenter-macOS-arm64-1.1.1.dmg` | 预览版，未经苹果公证 |
+| Windows | Windows 10/11 x64 | [CodexBridge Releases](https://github.com/Cvencent/CodexBridge/releases) | 正式版 |
+| macOS | Apple Silicon、macOS 13 及以上 | 当前预览包仍由 Dotii-Display Release 提供 | 迁移到 CodexBridge 打包前的过渡版本 |
 
-macOS 预览版目前不支持 Intel Mac。由于尚未经过苹果公证，首次打开时需要在“系统设置 > 隐私与安全性”中手动允许。Windows 和 macOS 安装包均已包含运行所需组件，普通用户无需安装 Python、Node.js、Codex CLI、FFmpeg 或 ESP-IDF。
+macOS 预览版目前不支持 Intel Mac。由于尚未经过苹果公证，首次打开时需要在“系统设置 > 隐私与安全性”中手动允许。发布包会包含运行所需组件，普通用户无需安装 Python、Node.js、Codex CLI、FFmpeg 或 ESP-IDF。
 
 ## 使用前准备
 
@@ -28,19 +28,17 @@ macOS 预览版目前不支持 Intel Mac。由于尚未经过苹果公证，首�
 
 ## Windows 快速上手
 
-1. 从 [Windows Release](https://github.com/ZeroOne000011/Dotii-Display/releases/tag/v1.1.1) 下载便携包，完整解压到一个新文件夹。
-2. 双击 `DotiiManagementCenter.exe`。程序会驻留在系统托盘，并在浏览器打开管理中心；默认地址为 `http://127.0.0.1:8787`。
-3. 用 USB 线连接 Dotii，在“设置”页面识别设备。首次使用时可通过“一键烧录”写入随包固件。
-4. 使用蓝牙配网，将 2.4 GHz Wi-Fi 和管理中心连接信息同步到 Dotii。
-5. 按需启用 Codex 或 Bambu，并在对应页面完成配置。
+1. 从 [CodexBridge Releases](https://github.com/Cvencent/CodexBridge/releases) 下载 Windows 安装包或便携包，按说明安装或完整解压。
+2. 运行 `CodexBridge.exe`。它会驻留在系统托盘，并托管 Dotii 管理页；默认地址为 `http://127.0.0.1:8787`。
+3. 用 USB 线连接 Dotii，在管理页“设置”中识别设备。首次使用时可通过“一键烧录”写入随包固件。
+4. 使用蓝牙配网，将 2.4 GHz Wi-Fi 和 CodexBridge 连接信息同步到 Dotii。
+5. 在 CodexBridge 托盘中按设备启用 Codex 能力；Bambu 等非 Codex 功能继续在管理页配置。
 
-请保持解压后的目录结构不变，不要单独移动或运行 `DotiiBridge.exe`。关闭浏览器不会退出管理中心；重新打开页面、查看日志或退出程序时，请使用系统托盘中的 Dotii 图标。
+请保持解压后的目录结构不变。关闭浏览器不会退出程序；重新打开管理页、查看日志或退出程序时，请使用系统托盘中的 CodexBridge 图标。不要单独启动内部管理进程。
 
 ### 更新 Windows 便携包
 
-先从系统托盘彻底退出旧版管理中心，再把新版 ZIP 完整解压到新的空文件夹。确认新版正常后，可以删除旧版程序文件夹；不要把新版直接覆盖到旧目录。
-
-现有设置保存在 `%LOCALAPPDATA%\StateDisplay`，删除旧版程序文件夹不会清除配置。若新版本包含 Dotii 固件更新，请在新版管理中心中重新执行“一键烧录”。
+先从系统托盘彻底退出旧版程序，再安装新版 CodexBridge。CodexBridge 的设备配对、能力与语音设置保存在 `%LOCALAPPDATA%\CodexBridge`；Dotii 的 Bambu、自定义页、显示、配网与烧录配置继续保存在 `%LOCALAPPDATA%\StateDisplay`。若新版本包含 Dotii 固件更新，请在管理页中重新执行“一键烧录”。
 
 ## macOS 快速上手
 
@@ -70,13 +68,13 @@ shasum -a 256 -c DotiiManagementCenter-macOS-arm64-1.1.1.dmg.sha256
 
 ## 主要功能
 
-- **Codex 状态**：显示官方接口提供的额度、用量、任务状态、计划进度和用户可见消息。
+- **Codex 状态**：由 CodexBridge 采集并广播额度、用量、任务状态、计划进度和用户可见消息；多台设备共享已读状态。
 - **Bambu 打印状态**：通过局域网读取打印进度、温度、耗材和图层，并在打印机支持时显示相机画面。
 - **自定义页面**：编辑文字、颜色、图片和圆环，保存后同步到 466 × 466 圆屏。
 - **Dotii 表情**：显示待机、眨眼、连接、工作、完成、失败等状态动画。
 - **设备管理**：提供蓝牙配网、重置配网、显示设置、休眠设置、登录自启动和受保护的一键烧录。
 
-Codex 与 Bambu 首次运行默认关闭，不会在用户启用前自动安装、登录或连接外部服务。
+Codex 能力与 Bambu 首次运行默认关闭，不会在用户启用前自动安装、登录或连接外部服务。
 
 ## 常见问题
 
@@ -92,7 +90,7 @@ Windows 请检查系统托盘，macOS 请检查菜单栏，然后通过 Dotii �
 <details>
 <summary><strong>Codex 页面没有数据</strong></summary>
 
-先确认 Codex 模块已启用，并已在官方 Codex 中完成登录。随后在 Codex 设置中运行“Codex 运行检测”，根据分项结果排查。接口没有提供的数值会显示为 `--`。
+先确认 CodexBridge 正在运行，并在托盘中为该设备启用所需能力。接口没有提供的数值会显示为 `--`。
 
 </details>
 
@@ -124,7 +122,7 @@ macOS 用户还应在“系统设置 > 隐私与安全性 > 蓝牙”中确认�
 <details>
 <summary><strong>如何查找日志</strong></summary>
 
-Windows 日志位于 `%LOCALAPPDATA%\StateDisplay\bridge.log`，macOS 日志位于 `~/Library/Application Support/Dotii/bridge.log`。分享日志前，请检查并移除不希望公开的本机信息。
+Windows 的 CodexBridge 日志位于 `%LOCALAPPDATA%\CodexBridge`；Dotii 管理页日志位于 `%LOCALAPPDATA%\StateDisplay\bridge.log`。macOS 过渡版本日志仍位于 `~/Library/Application Support/Dotii/bridge.log`。分享日志前，请检查并移除不希望公开的本机信息。
 
 </details>
 
@@ -134,7 +132,7 @@ Windows 日志位于 `%LOCALAPPDATA%\StateDisplay\bridge.log`，macOS 日志位�
 - Wi-Fi 密码、Bambu 访问码、设备令牌和运行配置保存在本机用户目录，不应上传到公开仓库。
 - Bambu 数据通过局域网获取。暂停、继续和停止只会在打印机状态允许时开放，并需要用户明确操作。
 - 常规一键烧录不会擦除 NVS。请勿对未知设备、串口或固件执行烧录。
-- Windows 首次允许局域网访问时可能显示防火墙窗口，程序名称应为“Dotii 管理中心后台服务”。请按实际使用的网络类型授权。
+- Windows 首次允许局域网访问时可能显示防火墙窗口。请允许 CodexBridge 与管理后台访问专用网络，并按实际使用的网络类型授权。
 
 ## 开发与二次开发
 

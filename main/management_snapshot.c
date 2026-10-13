@@ -1,4 +1,5 @@
 #include "management_snapshot.h"
+#include "codex_snapshot_merge.h"
 
 #include <ctype.h>
 #include <stdlib.h>
@@ -124,47 +125,110 @@ static void reset_dotii_state(codex_snapshot_t *snapshot)
         snapshot->dotii_expression_durations_ms[index] = 800;
     }
     snapshot->dotii_expression_durations_ms[DOTII_EXPRESSION_TOUCH_RESPONSE] = 1200;
+    codex_snapshot_reset_dotii_mapping(snapshot);
+}
+
+static int dotii_business_state_index(const char *state_id)
+{
+    if (state_id == NULL) return -1;
+    if (strcmp(state_id, "codex_waiting_user") == 0) return DOTII_STATE_CODEX_WAITING_USER;
+    if (strcmp(state_id, "codex_working") == 0) return DOTII_STATE_CODEX_WORKING;
+    if (strcmp(state_id, "codex_completed") == 0) return DOTII_STATE_CODEX_COMPLETED;
+    if (strcmp(state_id, "codex_failure") == 0) return DOTII_STATE_CODEX_FAILURE;
+    if (strcmp(state_id, "bambu_paused") == 0) return DOTII_STATE_BAMBU_PAUSED;
+    if (strcmp(state_id, "bambu_printing") == 0) return DOTII_STATE_BAMBU_PRINTING;
+    if (strcmp(state_id, "bambu_completed") == 0) return DOTII_STATE_BAMBU_COMPLETED;
+    if (strcmp(state_id, "bambu_failure") == 0) return DOTII_STATE_BAMBU_FAILURE;
+    return -1;
+}
+
+static void copy_dotii_animation_map(cJSON *dotii, codex_snapshot_t *snapshot)
+{
+    cJSON *animations = cJSON_GetObjectItemCaseSensitive(dotii, "animations");
+    if (!cJSON_IsObject(animations)) return;
+    cJSON *animation = NULL;
+    cJSON_ArrayForEach(animation, animations) {
+        if (!cJSON_IsObject(animation) || animation->string == NULL) continue;
+        dotii_expression_t expression = app_state_dotii_expression_from_string(
+            animation->string
+        );
+        cJSON *states = cJSON_GetObjectItemCaseSensitive(animation, "states");
+        if (!cJSON_IsArray(states)) continue;
+        uint16_t duration_ms = 0;
+        cJSON *duration = cJSON_GetObjectItemCaseSensitive(animation, "state_duration_ms");
+        if (cJSON_IsNumber(duration)) {
+            const int value = duration->valueint;
+            if (value == 0 || value == 1000 || value == 3000 || value == 5000 ||
+                value == 30000) {
+                duration_ms = (uint16_t)value;
+            }
+        }
+        cJSON *state = NULL;
+        cJSON_ArrayForEach(state, states) {
+            const int index = dotii_business_state_index(
+                cJSON_IsString(state) ? state->valuestring : NULL
+            );
+            if (index < 0) continue;
+            snapshot->dotii_expression_for_state[index] = expression;
+            snapshot->dotii_state_duration_for_state[index] = duration_ms;
+        }
+    }
+}
+
+static void copy_dotii_fixed_states(cJSON *dotii, codex_snapshot_t *snapshot)
+{
+    cJSON *fixed_states = cJSON_GetObjectItemCaseSensitive(dotii, "fixed_states");
+    if (!cJSON_IsArray(fixed_states)) return;
+    cJSON *item = NULL;
+    cJSON_ArrayForEach(item, fixed_states) {
+        if (!cJSON_IsObject(item)) continue;
+        cJSON *id = cJSON_GetObjectItemCaseSensitive(item, "id");
+        cJSON *expression = cJSON_GetObjectItemCaseSensitive(item, "expression");
+        cJSON *duration = cJSON_GetObjectItemCaseSensitive(item, "duration_ms");
+        if (!cJSON_IsString(id) || id->valuestring == NULL ||
+            !cJSON_IsString(expression) || expression->valuestring == NULL) {
+            continue;
+        }
+        dotii_expression_t parsed = app_state_dotii_expression_from_string(
+            expression->valuestring
+        );
+        uint16_t duration_ms = 800;
+        if (cJSON_IsNumber(duration) && duration->valueint >= 800 &&
+            duration->valueint <= 10000) {
+            duration_ms = (uint16_t)duration->valueint;
+        }
+        if (strcmp(id->valuestring, "touch") == 0) {
+            snapshot->dotii_touch_expression = parsed;
+            snapshot->dotii_expression_durations_ms[parsed] = duration_ms;
+        } else if (strcmp(id->valuestring, "blink") == 0) {
+            snapshot->dotii_blink_expression = parsed;
+            snapshot->dotii_expression_durations_ms[parsed] = duration_ms;
+        } else if (strcmp(id->valuestring, "long_idle") == 0) {
+            snapshot->dotii_long_idle_expression = parsed;
+            snapshot->dotii_expression_durations_ms[parsed] = duration_ms;
+        } else if (strcmp(id->valuestring, "connecting") == 0) {
+            snapshot->dotii_expression_durations_ms[DOTII_EXPRESSION_CONNECTING] = duration_ms;
+        } else if (strcmp(id->valuestring, "idle") == 0) {
+            snapshot->dotii_expression_durations_ms[DOTII_EXPRESSION_IDLE_BREATH] = duration_ms;
+        }
+    }
 }
 
 static void copy_dotii_state(cJSON *root, codex_snapshot_t *snapshot)
 {
     reset_dotii_state(snapshot);
     cJSON *dotii = cJSON_GetObjectItemCaseSensitive(root, "dotii");
-    if (!cJSON_IsObject(dotii)) return;
+    if (!cJSON_IsObject(dotii)) {
+        codex_snapshot_refresh_dotii_state(snapshot);
+        return;
+    }
 
-    cJSON *expression = cJSON_GetObjectItemCaseSensitive(dotii, "expression");
-    if (cJSON_IsString(expression) && expression->valuestring != NULL) {
-        snapshot->dotii_expression = app_state_dotii_expression_from_string(
-            expression->valuestring
-        );
-        snapshot->dotii_base_idle =
-            snapshot->dotii_expression == DOTII_EXPRESSION_IDLE_BREATH;
-        snapshot->dotii_state_assigned = !snapshot->dotii_base_idle;
-    }
-    cJSON *state = cJSON_GetObjectItemCaseSensitive(dotii, "state");
-    if (cJSON_IsString(state) && state->valuestring != NULL) {
-        snapshot->dotii_base_idle = strcmp(state->valuestring, "idle") == 0;
-        snapshot->dotii_state_token = dotii_state_token_from_string(state->valuestring);
-    }
-    cJSON *assigned = cJSON_GetObjectItemCaseSensitive(dotii, "state_assigned");
-    if (cJSON_IsBool(assigned)) snapshot->dotii_state_assigned = cJSON_IsTrue(assigned);
-    if (!snapshot->dotii_state_assigned) {
-        snapshot->dotii_expression = DOTII_EXPRESSION_IDLE_BREATH;
-        snapshot->dotii_base_idle = true;
-    }
-    cJSON *state_duration = cJSON_GetObjectItemCaseSensitive(dotii, "state_duration_ms");
-    if (cJSON_IsNumber(state_duration)) {
-        const int duration = state_duration->valueint;
-        if (duration == 0 || duration == 1000 || duration == 3000 ||
-            duration == 5000 || duration == 30000) {
-            snapshot->dotii_state_duration_ms = (uint32_t)duration;
-        }
-    }
-    cJSON *state_token = cJSON_GetObjectItemCaseSensitive(dotii, "state_token");
-    if (cJSON_IsNumber(state_token) && state_token->valuedouble >= 0 &&
-        state_token->valuedouble <= UINT32_MAX) {
-        snapshot->dotii_state_token = (uint32_t)state_token->valuedouble;
-    }
+    copy_dotii_animation_map(dotii, snapshot);
+    copy_dotii_fixed_states(dotii, snapshot);
+    /* The management snapshot only carries the mapping. The live expression is
+       resolved locally from CodexBridge and Bambu status so this merge cannot
+       overwrite CodexBridge-driven state. */
+    codex_snapshot_refresh_dotii_state(snapshot);
 }
 
 static void reset_display_config(codex_snapshot_t *snapshot)
@@ -401,16 +465,18 @@ void management_snapshot_apply(codex_snapshot_t *target, const codex_snapshot_t 
     target->charging_screen_off_timeout_seconds = source->charging_screen_off_timeout_seconds;
     target->charging_sleep_timeout_seconds = source->charging_sleep_timeout_seconds;
     target->screen_off_page = source->screen_off_page;
-    target->dotii_base_idle = source->dotii_base_idle;
-    target->dotii_state_assigned = source->dotii_state_assigned;
-    target->dotii_state_duration_ms = source->dotii_state_duration_ms;
-    target->dotii_state_token = source->dotii_state_token;
-    target->dotii_expression = source->dotii_expression;
+    /* CodexBridge owns the live expression; the management snapshot only
+       supplies the state mapping and local animation configuration. */
     target->dotii_touch_expression = source->dotii_touch_expression;
     target->dotii_blink_expression = source->dotii_blink_expression;
     target->dotii_long_idle_expression = source->dotii_long_idle_expression;
     memcpy(target->dotii_expression_durations_ms, source->dotii_expression_durations_ms,
            sizeof(target->dotii_expression_durations_ms));
+    memcpy(target->dotii_expression_for_state, source->dotii_expression_for_state,
+           sizeof(target->dotii_expression_for_state));
+    memcpy(target->dotii_state_duration_for_state, source->dotii_state_duration_for_state,
+           sizeof(target->dotii_state_duration_for_state));
+    codex_snapshot_refresh_dotii_state(target);
     target->bambu_configured = source->bambu_configured;
     target->bambu_connected = source->bambu_connected;
     target->bambu_commandable = source->bambu_commandable;

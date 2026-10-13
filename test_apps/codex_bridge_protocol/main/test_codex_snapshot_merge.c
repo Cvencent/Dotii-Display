@@ -170,6 +170,69 @@ TEST_CASE("management offline keeps the last Codex result", "[codex_merge]")
     TEST_ASSERT_EQUAL_INT(CODEX_STATUS_COMPLETED, snapshot->status);
 }
 
+TEST_CASE("codex working resolves the local working expression", "[codex_merge]")
+{
+    codex_snapshot_t *snapshot = snapshot_for_test();
+    snapshot->status = CODEX_STATUS_WORKING;
+    codex_snapshot_refresh_dotii_state(snapshot);
+    TEST_ASSERT_EQUAL_INT(DOTII_EXPRESSION_WORKING, snapshot->dotii_expression);
+    TEST_ASSERT_TRUE(snapshot->dotii_state_assigned);
+    TEST_ASSERT_EQUAL_UINT(0, snapshot->dotii_state_duration_ms);
+}
+
+TEST_CASE("bambu fault overrides idle Codex while Codex failure wins", "[codex_merge]")
+{
+    codex_snapshot_t *snapshot = snapshot_for_test();
+    snapshot->status = CODEX_STATUS_IDLE;
+    snapshot->bambu_configured = true;
+    snapshot->bambu_connected = true;
+    snapshot->bambu_status = BAMBU_STATUS_FAULT;
+    codex_snapshot_refresh_dotii_state(snapshot);
+    TEST_ASSERT_EQUAL_INT(DOTII_EXPRESSION_FAILURE, snapshot->dotii_expression);
+
+    snapshot->status = CODEX_STATUS_FAILED;
+    codex_snapshot_refresh_dotii_state(snapshot);
+    TEST_ASSERT_EQUAL_INT(DOTII_EXPRESSION_FAILURE, snapshot->dotii_expression);
+    TEST_ASSERT_EQUAL_UINT(0, snapshot->dotii_state_duration_ms);
+}
+
+TEST_CASE("disconnected Bambu never drives an expression", "[codex_merge]")
+{
+    codex_snapshot_t *snapshot = snapshot_for_test();
+    snapshot->status = CODEX_STATUS_IDLE;
+    snapshot->bambu_configured = true;
+    snapshot->bambu_connected = false;
+    snapshot->bambu_status = BAMBU_STATUS_PRINTING;
+    codex_snapshot_refresh_dotii_state(snapshot);
+    TEST_ASSERT_EQUAL_INT(DOTII_EXPRESSION_IDLE_BREATH, snapshot->dotii_expression);
+    TEST_ASSERT_FALSE(snapshot->dotii_state_assigned);
+}
+
+TEST_CASE("waiting maps to curious and offline maps to connecting", "[codex_merge]")
+{
+    codex_snapshot_t *snapshot = snapshot_for_test();
+    snapshot->status = CODEX_STATUS_WAITING;
+    codex_snapshot_refresh_dotii_state(snapshot);
+    TEST_ASSERT_EQUAL_INT(DOTII_EXPRESSION_CURIOUS, snapshot->dotii_expression);
+
+    snapshot->status = CODEX_STATUS_OFFLINE;
+    codex_snapshot_refresh_dotii_state(snapshot);
+    TEST_ASSERT_EQUAL_INT(DOTII_EXPRESSION_CONNECTING, snapshot->dotii_expression);
+}
+
+TEST_CASE("configured state duration is applied to the mapped expression", "[codex_merge]")
+{
+    codex_snapshot_t *snapshot = snapshot_for_test();
+    codex_snapshot_reset_dotii_mapping(snapshot);
+    snapshot->dotii_expression_for_state[DOTII_STATE_CODEX_WORKING] =
+        DOTII_EXPRESSION_COMPLETE;
+    snapshot->dotii_state_duration_for_state[DOTII_STATE_CODEX_WORKING] = 3000;
+    snapshot->status = CODEX_STATUS_WORKING;
+    codex_snapshot_refresh_dotii_state(snapshot);
+    TEST_ASSERT_EQUAL_INT(DOTII_EXPRESSION_COMPLETE, snapshot->dotii_expression);
+    TEST_ASSERT_EQUAL_UINT(3000, snapshot->dotii_state_duration_ms);
+}
+
 TEST_CASE("read state updates every matching task detail", "[codex_merge]")
 {
     codex_snapshot_t *snapshot = snapshot_for_test();

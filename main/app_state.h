@@ -49,6 +49,18 @@ typedef enum {
 } dotii_expression_t;
 
 typedef enum {
+    DOTII_STATE_CODEX_WAITING_USER = 0,
+    DOTII_STATE_CODEX_WORKING,
+    DOTII_STATE_CODEX_COMPLETED,
+    DOTII_STATE_CODEX_FAILURE,
+    DOTII_STATE_BAMBU_PAUSED,
+    DOTII_STATE_BAMBU_PRINTING,
+    DOTII_STATE_BAMBU_COMPLETED,
+    DOTII_STATE_BAMBU_FAILURE,
+    DOTII_STATE_COUNT,
+} dotii_business_state_t;
+
+typedef enum {
     DISPLAY_SCREEN_OFF_PAGE_NONE = 0,
     DISPLAY_SCREEN_OFF_PAGE_CUSTOM,
     DISPLAY_SCREEN_OFF_PAGE_DOTII,
@@ -134,6 +146,11 @@ typedef struct {
     dotii_expression_t dotii_expression;
     uint32_t dotii_state_duration_ms;
     uint32_t dotii_state_token;
+    /* Business-state -> expression mapping configured by the management center.
+       The firmware resolves the active state locally from CodexBridge and Bambu
+       status, so a management snapshot can never overwrite the live expression. */
+    dotii_expression_t dotii_expression_for_state[DOTII_STATE_COUNT];
+    uint16_t dotii_state_duration_for_state[DOTII_STATE_COUNT];
     dotii_expression_t dotii_touch_expression;
     dotii_expression_t dotii_blink_expression;
     dotii_expression_t dotii_long_idle_expression;

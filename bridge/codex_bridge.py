@@ -30,7 +30,6 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlparse
 
-from codex_app_server import probe_app_server, run_collector
 from bambu_client import BambuConfigStore, BambuService
 from bluetooth_bridge import BluetoothBridge
 from codex_bridge_link import claim_codex_bridge_token
@@ -53,9 +52,6 @@ CUSTOM_FRAME_WIDTH = 466
 CUSTOM_FRAME_HEIGHT = 466
 CUSTOM_FRAME_SIZE = CUSTOM_FRAME_WIDTH * CUSTOM_FRAME_HEIGHT * 2
 MAX_CUSTOM_SOURCE_SIZE = 4 * 1024 * 1024
-MAX_DISPLAY_TASKS = 6
-ALLOWED_STATUSES = {"working", "waiting_user", "completed", "failed", "idle", "offline"}
-ALLOWED_CONVERSATION_MODES = {"progress", "history", "final", "empty"}
 CUSTOM_DEFAULTS = {
     "enabled": True,
     "revision": 0,
@@ -79,7 +75,7 @@ CUSTOM_DEFAULTS = {
     "ring_start": "#F2C66D",
     "ring_end": "#5DA9FF",
 }
-MODULE_DEFAULTS = {"codex": False, "bambu": False, "dotii": True}
+MODULE_DEFAULTS = {"bambu": False, "dotii": True}
 
 
 def resolve_ffmpeg(runtime_folder: Path) -> str | None:
@@ -299,68 +295,6 @@ def _non_negative_int(value: Any, field: str) -> int:
     return result
 
 
-def _validated_messages(value: Any) -> list[str]:
-    if value is None:
-        return []
-    if not isinstance(value, list):
-        raise ValueError("codex_messages must be a list")
-    result: list[str] = []
-    for index, message in enumerate(value):
-        if not isinstance(message, str):
-            raise ValueError(f"codex_messages[{index}] must be text")
-        if message:
-            result.append(message)
-    return result
-
-
-def _validate_codex_task(task: Any) -> dict[str, Any]:
-    if not isinstance(task, dict):
-        raise ValueError("codex task must be an object")
-    status = task.get("status")
-    if status not in ALLOWED_STATUSES:
-        raise ValueError("unsupported task status")
-    conversation_mode = task.get(
-        "conversation_mode", "final" if status in {"completed", "failed"} else "progress"
-    )
-    if conversation_mode not in ALLOWED_CONVERSATION_MODES:
-        raise ValueError("unsupported conversation mode")
-    return {
-        "status": status,
-        "thread_id": _bounded_text(task.get("thread_id", ""), 63, "thread_id"),
-        "turn_id": _bounded_text(task.get("turn_id", ""), 63, "turn_id"),
-        "title": _bounded_text(task.get("title", ""), 95, "title"),
-        "last_user_message": _unbounded_text(
-            task.get("last_user_message", ""), "last_user_message"
-        ),
-        "last_assistant_message": _bounded_text(
-            task.get("last_assistant_message", ""), 255, "last_assistant_message"
-        ),
-        "reasoning_summary": _bounded_text(
-            task.get("reasoning_summary", ""), 383, "reasoning_summary"
-        ),
-        "conversation_mode": conversation_mode,
-        "codex_messages": _validated_messages(
-            task.get("codex_messages", [task.get("last_assistant_message", "")])
-        ),
-        "current_action": _bounded_text(task.get("current_action", ""), 127, "current_action"),
-        "duration_seconds": _non_negative_int(task.get("duration_seconds", 0), "duration_seconds"),
-        "user_message_count": _non_negative_int(
-            task.get("user_message_count", task.get("message_count", 0)), "user_message_count"
-        ),
-        "message_count": _non_negative_int(
-            task.get("user_message_count", task.get("message_count", 0)), "message_count"
-        ),
-        "token_count": _non_negative_int(task.get("token_count", 0), "token_count"),
-        "token_count_available": bool(task.get("token_count_available", True)),
-        "plan_completed": _non_negative_int(task.get("plan_completed", 0), "plan_completed"),
-        "plan_total": _non_negative_int(task.get("plan_total", 0), "plan_total"),
-        "started_at_epoch": _non_negative_int(task.get("started_at_epoch", 0), "started_at_epoch"),
-        "last_updated_epoch": _non_negative_int(
-            task.get("last_updated_epoch", 0), "last_updated_epoch"
-        ),
-    }
-
-
 def _custom_text(payload: dict[str, Any], field: str, maximum: int, *, required: bool = False) -> str:
     value = payload.get(field, CUSTOM_DEFAULTS[field])
     if not isinstance(value, str):
@@ -573,83 +507,6 @@ def validate_dotii_config(payload: Any) -> dict[str, Any]:
     }
 
 
-def _dotii_assignment_for_state(config: dict[str, Any], state_id: str) -> tuple[str, bool]:
-    fixed_expression = DOTII_FIXED_STATE_EXPRESSIONS.get(state_id)
-    if fixed_expression is not None:
-        return fixed_expression, True
-    for expression_id in DOTII_BUSINESS_EXPRESSION_IDS:
-        if state_id in config["animations"][expression_id]["states"]:
-            return expression_id, True
-    return "idle_breath", False
-
-
-def dotii_state(snapshot: dict[str, Any], bambu: dict[str, Any], enabled: bool,
-                config: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Resolve the device companion expression from public module state only."""
-    config = validate_dotii_config(config)
-    task = snapshot.get("codex", {}).get("task", {})
-    codex_status = task.get("status", "offline")
-    bambu_status = bambu.get("status", "offline")
-    bambu_connected = bool(bambu.get("configured")) and bool(bambu.get("connected"))
-
-    if codex_status == "failed":
-        state_id, reason = "codex_failure", "Codex 任务需要处理"
-    elif bambu_connected and bambu_status == "fault":
-        state_id, reason = "bambu_failure", "Bambu 打印机需要处理"
-    elif codex_status == "offline":
-        state_id, reason = "connecting", "正在等待管理中心数据"
-    elif codex_status == "working":
-        state_id, reason = "codex_working", "Codex 正在工作"
-    elif bambu_connected and bambu_status in {"preparing", "printing", "cancelling"}:
-        state_id, reason = "bambu_printing", "Bambu 正在打印"
-    elif codex_status == "completed":
-        state_id, reason = "codex_completed", "Codex 任务已经完成"
-    elif bambu_connected and bambu_status == "completed":
-        state_id, reason = "bambu_completed", "Bambu 打印已经完成"
-    elif codex_status == "waiting_user":
-        state_id, reason = "codex_waiting_user", "Codex 正在等待你的操作"
-    elif bambu_connected and bambu_status == "paused":
-        state_id, reason = "bambu_paused", "Bambu 打印已暂停"
-    else:
-        state_id, reason = "idle", "当前处于空闲状态"
-
-    expression, state_assigned = _dotii_assignment_for_state(config, state_id)
-    animations = config["animations"]
-
-    def local_state(local_id: str) -> dict[str, Any]:
-        local_expression = DOTII_FIXED_STATE_EXPRESSIONS[local_id]
-        return {
-            "expression": local_expression,
-            "duration_ms": DOTII_LOOP_DURATIONS_MS[local_expression],
-        }
-
-    state_duration_ms = (
-        animations[expression]["state_duration_ms"]
-        if state_assigned and state_id in DOTII_BUSINESS_STATE_LABELS
-        else 0
-    )
-
-    return {
-        "enabled": enabled,
-        "expression": expression,
-        "state": state_id,
-        "reason": reason,
-        "state_assigned": state_assigned,
-        "state_duration_ms": state_duration_ms,
-        "state_hold": state_assigned and state_duration_ms == 0,
-        "state_token": zlib.crc32(state_id.encode("utf-8")) & 0xFFFFFFFF,
-        "duration_ms": DOTII_LOOP_DURATIONS_MS[expression],
-        "durations_ms": dict(DOTII_LOOP_DURATIONS_MS),
-        "local_states": {
-            "touch": local_state("touch"),
-            "blink": local_state("blink"),
-            "long_idle": local_state("long_idle"),
-        },
-        "config_revision": config["revision"],
-        "available_expressions": list(DOTII_EXPRESSION_IDS),
-    }
-
-
 def _validate_timeout_pair(payload: dict[str, Any], screen_off_key: str, sleep_key: str,
                            fallback_screen_off: int, fallback_sleep: int) -> tuple[int, int]:
     if screen_off_key not in payload and sleep_key not in payload:
@@ -718,42 +575,14 @@ def validate_display_config(payload: Any) -> dict[str, Any]:
 
 
 def validate_snapshot(payload: Any) -> dict[str, Any]:
+    """Validate the device-facing management envelope.
+
+    Codex data is owned by CodexBridge and travels over the device protocol,
+    so this snapshot intentionally carries only Bambu, custom page, display
+    and Dotii configuration.
+    """
     if not isinstance(payload, dict) or payload.get("schema_version") != SCHEMA_VERSION:
         raise ValueError("schema_version must be 1")
-    codex = payload.get("codex")
-    task = codex.get("task") if isinstance(codex, dict) else None
-    if not isinstance(codex, dict) or not isinstance(task, dict):
-        raise ValueError("codex.task is required")
-    weekly = _non_negative_int(codex.get("weekly_remaining_percent"), "weekly_remaining_percent")
-    if weekly > 100:
-        raise ValueError("weekly_remaining_percent must be between 0 and 100")
-    five_hour = _non_negative_int(
-        codex.get("five_hour_remaining_percent", 0), "five_hour_remaining_percent"
-    )
-    if five_hour > 100:
-        raise ValueError("five_hour_remaining_percent must be between 0 and 100")
-    raw_tasks = codex.get("tasks")
-    if raw_tasks is not None and not isinstance(raw_tasks, list):
-        raise ValueError("codex.tasks must be a list")
-    ordered_raw: list[dict[str, Any]] = []
-    seen_thread_ids: set[str] = set()
-    for item in [task, *(raw_tasks or [])]:
-        if not isinstance(item, dict):
-            raise ValueError("codex.tasks entries must be objects")
-        thread_id = str(item.get("thread_id") or "")
-        identity = thread_id or f"anonymous-{len(ordered_raw)}"
-        if identity in seen_thread_ids:
-            continue
-        seen_thread_ids.add(identity)
-        ordered_raw.append(item)
-    ordered_raw.sort(key=lambda item: (
-        _non_negative_int(item.get("started_at_epoch", 0), "started_at_epoch"),
-        str(item.get("thread_id") or ""),
-    ))
-    ordered_raw = ordered_raw[:MAX_DISPLAY_TASKS]
-    primary_task = _validate_codex_task(ordered_raw[0])
-    tasks = [primary_task]
-    tasks.extend(_validate_codex_task(item) for item in ordered_raw[1:])
     return {
         "schema_version": SCHEMA_VERSION,
         "generated_at_epoch": _non_negative_int(
@@ -761,34 +590,6 @@ def validate_snapshot(payload: Any) -> dict[str, Any]:
         ),
         "preview_data": bool(payload.get("preview_data", False)),
         "source": _bounded_text(payload.get("source", "manual"), 32, "source"),
-        "codex": {
-            "five_hour_available": bool(codex.get("five_hour_available", False)),
-            "five_hour_remaining_percent": five_hour,
-            "five_hour_reset_date": _bounded_text(
-                codex.get("five_hour_reset_date", ""), 15, "five_hour_reset_date"
-            ),
-            "weekly_available": bool(codex.get("weekly_available", True)),
-            "weekly_remaining_percent": weekly,
-            "weekly_used_percent": _non_negative_int(
-                codex.get("weekly_used_percent", 100 - weekly), "weekly_used_percent"
-            ),
-            "weekly_tokens_available": bool(codex.get(
-                "weekly_tokens_available", codex.get("today_tokens_available", False)
-            )),
-            "weekly_tokens": _non_negative_int(
-                codex.get("weekly_tokens", codex.get("today_tokens", 0)), "weekly_tokens"
-            ),
-            "weekly_tokens_as_of": _bounded_text(
-                codex.get("weekly_tokens_as_of", ""), 5, "weekly_tokens_as_of"
-            ),
-            "reset_date": _bounded_text(codex.get("reset_date", ""), 15, "reset_date"),
-            "plan_type": _bounded_text(codex.get("plan_type", ""), 31, "plan_type"),
-            "rate_limit_reached": _bounded_text(
-                codex.get("rate_limit_reached", ""), 31, "rate_limit_reached"
-            ),
-            "task": primary_task,
-            "tasks": tasks,
-        },
     }
 
 
@@ -813,37 +614,6 @@ class StateStore:
             finally:
                 if os.path.exists(temporary_name):
                     os.unlink(temporary_name)
-
-
-class CodexCheckStore:
-    def __init__(self, path: Path) -> None:
-        self.path = path
-        self.lock = threading.RLock()
-
-    def read(self) -> dict[str, Any] | None:
-        with self.lock:
-            if not self.path.is_file():
-                return None
-            result = json.loads(self.path.read_text(encoding="utf-8"))
-            if not isinstance(result, dict):
-                raise ValueError("saved Codex check result must be an object")
-            return result
-
-    def write(self, result: dict[str, Any]) -> dict[str, Any]:
-        if not isinstance(result, dict):
-            raise ValueError("Codex check result must be an object")
-        with self.lock:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            handle, temporary_name = tempfile.mkstemp(prefix="codex-check-", suffix=".json", dir=self.path.parent)
-            try:
-                with os.fdopen(handle, "w", encoding="utf-8") as stream:
-                    json.dump(result, stream, ensure_ascii=False, indent=2)
-                    stream.write("\n")
-                os.replace(temporary_name, self.path)
-            finally:
-                if os.path.exists(temporary_name):
-                    os.unlink(temporary_name)
-        return result
 
 
 class CustomConfigStore:
@@ -1052,29 +822,15 @@ class DisplayConfigStore:
 
 
 class RuntimeStatus:
+    """Non-Codex runtime metadata exposed in the management overview."""
+
     def __init__(self) -> None:
         self.lock = threading.RLock()
         self.started_at_epoch = int(time.time())
-        self.collector_state = "disabled"
-        self.collector_detail = "Codex 模块已关闭"
-        self.collector_updated_epoch = self.started_at_epoch
-
-    def report(self, state: str, detail: str) -> None:
-        with self.lock:
-            self.collector_state = state
-            self.collector_detail = detail[:240]
-            self.collector_updated_epoch = int(time.time())
 
     def snapshot(self) -> dict[str, Any]:
         with self.lock:
-            return {
-                "started_at_epoch": self.started_at_epoch,
-                "collector_state": self.collector_state,
-                "collector_detail": self.collector_detail,
-                "collector_updated_epoch": self.collector_updated_epoch,
-            }
-
-
+            return {"started_at_epoch": self.started_at_epoch}
 
 
 class BridgeHandler(BaseHTTPRequestHandler):
@@ -1176,14 +932,12 @@ class BridgeHandler(BaseHTTPRequestHandler):
                 **runtime,
             },
             "snapshot": snapshot,
-            "codex_check": self.bridge.codex_check.read(),
             "dotii_config": self.bridge.dotii.read(),
             "display_config": self.bridge.display.read(),
             "bambu_config": self.bridge.bambu_config.public(),
             "bluetooth": self.bridge.bluetooth.snapshot(),
             "firmware": self.bridge.firmware.snapshot(),
             "modules": [
-                {"id": "codex", "name": "Codex", "enabled": snapshot["modules"]["codex"], "available": True, "locked": False},
                 {"id": "bambu", "name": "Bambu", "enabled": snapshot["modules"]["bambu"], "available": True, "locked": False},
                 {"id": "custom", "name": "自定义", "enabled": snapshot["custom"]["enabled"], "available": True, "locked": False},
                 {"id": "dotii", "name": "Dotii", "enabled": snapshot["modules"]["dotii"], "available": True, "locked": False},
@@ -1253,24 +1007,6 @@ class BridgeHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802
         path = urlparse(self.path).path
-        if path == "/api/v1/admin/codex/check":
-            if self._deny_nonlocal():
-                return
-            try:
-                self._read_admin_action()
-                if not self.bridge.modules.read()["codex"]:
-                    raise ValueError("请先启用 Codex 功能再运行检测")
-                result = probe_app_server(
-                    self.bridge.runtime_folder,
-                    self.bridge.application_folder,
-                    self.bridge.codex_command,
-                )
-                result["collector"] = self.bridge.runtime.snapshot()
-                self.bridge.codex_check.write(result)
-                self._send_json(HTTPStatus.OK, result)
-            except (OSError, ValueError, UnicodeDecodeError, json.JSONDecodeError) as error:
-                self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
-            return
         if path == "/api/v1/admin/bluetooth/install":
             if self._deny_nonlocal():
                 return
@@ -1418,18 +1154,13 @@ class BridgeHandler(BaseHTTPRequestHandler):
                 module_id = payload.get("id")
                 enabled = payload.get("enabled")
                 if module_id not in MODULE_DEFAULTS or not isinstance(enabled, bool):
-                    raise ValueError("id must be codex, bambu or dotii and enabled must be boolean")
+                    raise ValueError("id must be bambu or dotii and enabled must be boolean")
                 modules = self.bridge.modules.read()
                 candidate = {**modules, module_id: enabled}
                 if not any(candidate.values()) and not self.bridge.custom.read()["enabled"]:
                     raise ValueError("至少保留一个启用页面")
                 saved = self.bridge.modules.write(candidate)
-                if module_id == "codex":
-                    self.bridge.runtime.report("starting", "正在重新连接 Codex App Server")
-                    self.bridge.collector_restart.set()
-                    if not enabled:
-                        self.bridge.runtime.report("disabled", "Codex 模块已关闭")
-                elif module_id == "bambu":
+                if module_id == "bambu":
                     self.bridge.bambu.set_enabled(enabled)
                 self._send_json(HTTPStatus.OK, {"ok": True, "modules": saved})
             except (OSError, ValueError, UnicodeDecodeError, json.JSONDecodeError) as error:
@@ -1498,40 +1229,32 @@ class BridgeServer(ThreadingHTTPServer):
         store: StateStore,
         token: str,
         runtime: RuntimeStatus,
-        collector_restart: threading.Event,
         custom: CustomConfigStore,
         modules: ModuleConfigStore,
         dotii: DotiiConfigStore,
         display: DisplayConfigStore,
-        codex_check: CodexCheckStore,
         assets: CustomAssetStore,
         bambu_config: BambuConfigStore,
         bambu: BambuService,
         bluetooth: BluetoothBridge,
         firmware: FirmwareFlasher,
         runtime_folder: Path,
-        application_folder: Path,
-        codex_command: str | None,
         host_parent_pid: int = 0,
     ) -> None:
         super().__init__(address, BridgeHandler)
         self.store = store
         self.token = token
         self.runtime = runtime
-        self.collector_restart = collector_restart
         self.custom = custom
         self.modules = modules
         self.dotii = dotii
         self.display = display
-        self.codex_check = codex_check
         self.assets = assets
         self.bambu_config = bambu_config
         self.bambu = bambu
         self.bluetooth = bluetooth
         self.firmware = firmware
         self.runtime_folder = runtime_folder
-        self.application_folder = application_folder
-        self.codex_command = codex_command
         self.host_parent_pid = host_parent_pid
 
     def snapshot(self) -> dict[str, Any]:
@@ -1543,27 +1266,20 @@ class BridgeServer(ThreadingHTTPServer):
         snapshot["bambu"] = self.bambu.snapshot()
         modules = self.modules.read()
         snapshot["modules"] = {**modules, "custom": custom["enabled"]}
-        snapshot["dotii"] = dotii_state(
-            snapshot, snapshot["bambu"], modules["dotii"], self.dotii.read()
-        )
+        snapshot["dotii"] = self.dotii.read()
         snapshot["display"] = self.display.read()
         return snapshot
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="LAN bridge for the Dotii status display")
-    parser.add_argument("--host", default="0.0.0.0")
+    parser = argparse.ArgumentParser(description="Dotii 管理中心")
+    parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", default=8787, type=int)
     parser.add_argument("--state", type=Path)
     parser.add_argument("--token", default=os.environ.get("STATE_DISPLAY_BRIDGE_TOKEN"))
-    parser.add_argument("--app-server", action="store_true", help="read account and task state through Codex app-server")
-    parser.add_argument("--codex-command", help="path to a standalone Codex CLI executable or codex.js")
-    parser.add_argument("--app-server-interval", type=float, default=2.0)
     parser.add_argument("--parent-pid", type=int, default=0, help=argparse.SUPPRESS)
     arguments = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    # Preserve the user's enabled/disabled choice while repairing stale paths
-    # and releases that incorrectly registered DotiiBridge.exe as the login app.
     try:
         if startup_enabled():
             set_startup(True)
@@ -1576,30 +1292,35 @@ def main() -> None:
         shutil.copyfile(resource_path("state.json"), state_path)
 
     token = arguments.token or load_or_create_token(writable_root / "bridge-token")
-    store = StateStore(state_path)
-    runtime = RuntimeStatus()
-    stop = threading.Event()
-    collector_restart = threading.Event()
-    custom = CustomConfigStore(writable_root / "custom.json")
     modules = ModuleConfigStore(writable_root / "modules.json")
-    dotii = DotiiConfigStore(writable_root / "dotii.json")
-    display = DisplayConfigStore(writable_root / "display.json")
-    codex_check = CodexCheckStore(writable_root / "codex-check.json")
-    assets = CustomAssetStore(writable_root)
     bambu_config = BambuConfigStore(writable_root / "bambu.json")
     bambu = BambuService(
         bambu_config,
         lambda: modules.read()["bambu"],
         lambda: resolve_ffmpeg(writable_root),
     )
-    bambu.start()
     bluetooth = BluetoothBridge(writable_root)
-    bluetooth.start()
     firmware = FirmwareFlasher(project_root(), writable_root)
-    server = BridgeServer((arguments.host, arguments.port), store, token, runtime, collector_restart,
-                          custom, modules, dotii, display, codex_check, assets, bambu_config, bambu,
-                          bluetooth, firmware, writable_root, application_root(), arguments.codex_command,
-                          arguments.parent_pid)
+    server = BridgeServer(
+        (arguments.host, arguments.port),
+        StateStore(state_path),
+        token,
+        RuntimeStatus(),
+        CustomConfigStore(writable_root / "custom.json"),
+        modules,
+        DotiiConfigStore(writable_root / "dotii.json"),
+        DisplayConfigStore(writable_root / "display.json"),
+        CustomAssetStore(writable_root),
+        bambu_config,
+        bambu,
+        bluetooth,
+        firmware,
+        writable_root,
+        arguments.parent_pid,
+    )
+    bambu.start()
+    bluetooth.start()
+    stop = threading.Event()
     if arguments.parent_pid > 1:
         threading.Thread(
             target=watch_parent,
@@ -1607,38 +1328,19 @@ def main() -> None:
             name="dotii-parent-watchdog",
             daemon=True,
         ).start()
-    if arguments.app_server:
-        threading.Thread(
-            target=run_collector,
-            kwargs={
-                "runtime_folder": writable_root,
-                "cwd": application_root(),
-                "interval": max(1.0, arguments.app_server_interval),
-                "stop": stop,
-                "publish": lambda snapshot: store.write(validate_snapshot(snapshot)),
-                "codex_command": arguments.codex_command,
-                "report": runtime.report,
-                "restart": collector_restart,
-                "enabled": lambda: modules.read()["codex"],
-            },
-            name="codex-collector",
-            daemon=True,
-        ).start()
-    else:
-        runtime.report("disabled", "自动数据源未启用")
 
     address = local_ipv4()
-    logging.info("Dotii 管理中心：http://127.0.0.1:%s", arguments.port)
-    logging.info("ESP32 地址：http://%s:%s/api/v1/snapshot", address, arguments.port)
+    logging.info("Dotii 管理中心：http://127.0.0.1:%s", server.server_port)
+    logging.info("ESP32 地址：http://%s:%s/api/v1/snapshot", address, server.server_port)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
         stop.set()
-        bambu.stop()
-        bluetooth.stop()
-        firmware.stop()
+        server.bambu.stop()
+        server.bluetooth.stop()
+        server.firmware.stop()
         server.server_close()
 
 

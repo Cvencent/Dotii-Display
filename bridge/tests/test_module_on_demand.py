@@ -13,13 +13,11 @@ BRIDGE = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BRIDGE))
 
 import bambu_client  # noqa: E402
-import codex_app_server  # noqa: E402
 import codex_bridge  # noqa: E402
 from platforms.macos import MacOSPlatformAdapter  # noqa: E402
 from platforms.windows import WindowsPlatformAdapter  # noqa: E402
 from bambu_client import BambuConfigStore, BambuService  # noqa: E402
 from codex_bridge import (  # noqa: E402
-    CodexCheckStore,
     CUSTOM_DEFAULTS,
     resolve_ffmpeg,
     validate_custom_config,
@@ -29,24 +27,6 @@ from codex_bridge import (  # noqa: E402
 
 
 class ModuleOnDemandTests(unittest.TestCase):
-    def test_codex_check_result_is_persisted_for_the_next_page_load(self):
-        result = {
-            "ok": True,
-            "checked_at_epoch": 1788256800,
-            "account": {"logged_in": True, "email": "user@example.com", "plan_type": "plus"},
-            "checks": {"rate_limits": True, "usage": True, "threads": True},
-        }
-        with tempfile.TemporaryDirectory(dir=BRIDGE.parent / ".codx") as temporary:
-            path = Path(temporary) / "codex-check.json"
-            CodexCheckStore(path).write(result)
-
-            self.assertEqual(CodexCheckStore(path).read(), result)
-
-    def test_frontend_restores_saved_codex_check_from_overview(self):
-        script = (BRIDGE / "web" / "app.js").read_text(encoding="utf-8")
-
-        self.assertIn("overview.codex_check", script)
-
     def test_management_only_packaging_can_reuse_the_formal_firmware_bundle(self):
         script = (BRIDGE.parent / "packaging" / "build_windows.ps1").read_text(encoding="utf-8")
 
@@ -111,22 +91,10 @@ class ModuleOnDemandTests(unittest.TestCase):
 
         self.assertIn("BrokenPipeError, ConnectionAbortedError, ConnectionResetError", backend)
 
-    def test_codex_collector_receives_the_resolved_runtime_path(self):
-        backend = (BRIDGE / "codex_bridge.py").read_text(encoding="utf-8")
-
-        self.assertIn('"runtime_folder": writable_root,', backend)
-        self.assertNotIn('"runtime_folder": runtime_folder,', backend)
-
-    def test_codex_check_copy_matches_requested_text(self):
-        html = (BRIDGE / "web" / "index.html").read_text(encoding="utf-8")
-
-        self.assertIn("检查本机 Codex CLI、App Server、登录账户、额度、用量和任务读取是否正常。", html)
-        self.assertNotIn("手动检查本机 Codex CLI", html)
-
     def test_first_run_defaults_keep_codex_and_bambu_off(self):
         self.assertEqual(
             validate_module_config(None),
-            {"codex": False, "bambu": False, "dotii": True},
+            {"bambu": False, "dotii": True},
         )
 
     def test_first_run_defaults_enable_custom_and_dotii_pages(self):
@@ -172,35 +140,6 @@ class ModuleOnDemandTests(unittest.TestCase):
             asset = BRIDGE / "web" / animation["src"].lstrip("/")
             self.assertTrue(asset.is_file(), animation["id"])
 
-    def test_bundled_codex_app_server_command_uses_bundled_node(self):
-        with tempfile.TemporaryDirectory(dir=BRIDGE.parent / ".codx") as temporary:
-            folder = Path(temporary)
-            script = (
-                folder
-                / "tools"
-                / "codex-cli"
-                / "node_modules"
-                / "@openai"
-                / "codex"
-                / "bin"
-                / "codex.js"
-            )
-            script.parent.mkdir(parents=True)
-            script.write_text("", encoding="utf-8")
-            node = folder / "tools" / "node" / "node.exe"
-            node.parent.mkdir(parents=True)
-            node.touch()
-
-            with (
-                mock.patch.object(codex_app_server, "application_root", return_value=folder),
-                mock.patch.object(codex_app_server, "current_platform", return_value=WindowsPlatformAdapter()),
-                mock.patch.object(codex_app_server.shutil, "which") as which,
-            ):
-                command = codex_app_server._resolve_codex_command(None, folder / "runtime")
-
-            which.assert_not_called()
-            self.assertEqual(command, [str(node), str(script)])
-
     def test_bundled_ffmpeg_is_preferred_over_path(self):
         with tempfile.TemporaryDirectory(dir=BRIDGE.parent / ".codx") as temporary:
             folder = Path(temporary)
@@ -217,35 +156,6 @@ class ModuleOnDemandTests(unittest.TestCase):
 
             which.assert_not_called()
             self.assertEqual(resolved, str(bundled.resolve()))
-
-    def test_macos_bundled_codex_uses_unix_node_without_path_lookup(self):
-        with tempfile.TemporaryDirectory(dir=BRIDGE.parent / ".codx") as temporary:
-            folder = Path(temporary)
-            script = (
-                folder
-                / "tools"
-                / "codex-cli"
-                / "node_modules"
-                / "@openai"
-                / "codex"
-                / "bin"
-                / "codex.js"
-            )
-            script.parent.mkdir(parents=True)
-            script.write_text("", encoding="utf-8")
-            node = folder / "tools" / "node" / "bin" / "node"
-            node.parent.mkdir(parents=True)
-            node.touch()
-
-            with (
-                mock.patch.object(codex_app_server, "application_root", return_value=folder),
-                mock.patch.object(codex_app_server, "current_platform", return_value=MacOSPlatformAdapter()),
-                mock.patch.object(codex_app_server.shutil, "which") as which,
-            ):
-                command = codex_app_server._resolve_codex_command(None, folder / "runtime")
-
-            which.assert_not_called()
-            self.assertEqual(command, [str(node), str(script)])
 
     def test_macos_bundled_ffmpeg_is_preferred_without_path_lookup(self):
         with tempfile.TemporaryDirectory(dir=BRIDGE.parent / ".codx") as temporary:
@@ -312,9 +222,10 @@ class ModuleOnDemandTests(unittest.TestCase):
         self.assertNotIn("install-dependency", html + script)
         self.assertNotIn("reinstall-dependency", html + script)
         self.assertNotIn("/api/v1/admin/codex/detect", backend)
-        self.assertIn("Codex 运行检测", html)
-        self.assertIn("/api/v1/admin/codex/check", backend)
-        self.assertIn("/api/v1/admin/codex/check", script)
+        self.assertNotIn("Codex 运行检测", html)
+        self.assertNotIn("/api/v1/admin/codex/check", backend)
+        self.assertNotIn("/api/v1/admin/codex/check", script)
+        self.assertNotIn("overview.codex_check", script)
         self.assertNotIn("/api/v1/admin/dependencies/install", backend)
         self.assertNotIn("/api/v1/admin/bambu/ffmpeg/install", backend)
         self.assertIn("保存并连接", html)

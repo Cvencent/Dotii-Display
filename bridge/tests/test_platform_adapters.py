@@ -11,6 +11,16 @@ from unittest import mock
 BRIDGE = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BRIDGE))
 
+def _has_bleak() -> bool:
+    try:
+        import bleak  # noqa: F401
+    except (ImportError, OSError):
+        return False
+    return True
+
+
+BLEAK_AVAILABLE = _has_bleak()
+
 from platforms.macos import MacOSPlatformAdapter, parse_serial_ports as parse_macos_ports  # noqa: E402
 from platforms.windows import WindowsPlatformAdapter, parse_serial_ports  # noqa: E402
 from bluetooth_bridge import BluetoothBridge  # noqa: E402
@@ -158,6 +168,7 @@ class MacOSPlatformAdapterTests(unittest.TestCase):
         self.assertFalse(adapter.valid_serial_port("/dev/cu../disk0"))
         self.assertFalse(adapter.valid_serial_port("COM6"))
 
+    @unittest.skipUnless(BLEAK_AVAILABLE, "bleak is not installed on this host")
     def test_bluetooth_service_is_available_with_corebluetooth(self) -> None:
         with tempfile.TemporaryDirectory(dir=BRIDGE.parent / ".codx") as temporary:
             service = BluetoothBridge(Path(temporary), platform_adapter=MacOSPlatformAdapter())

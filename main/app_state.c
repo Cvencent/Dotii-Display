@@ -1,4 +1,5 @@
 #include "app_state.h"
+#include "codex_snapshot_merge.h"
 
 #include <string.h>
 
@@ -128,10 +129,6 @@ void app_state_make_preview(codex_snapshot_t *snapshot)
     snapshot->charging_sleep_timeout_seconds = 300;
     snapshot->five_hour_remaining_percent = 68;
     snapshot->bambu_status = BAMBU_STATUS_PRINTING;
-    snapshot->dotii_expression = DOTII_EXPRESSION_WORKING;
-    snapshot->dotii_state_assigned = true;
-    snapshot->dotii_state_duration_ms = 0;
-    snapshot->dotii_state_token = 1;
     snapshot->dotii_touch_expression = DOTII_EXPRESSION_TOUCH_RESPONSE;
     snapshot->dotii_blink_expression = DOTII_EXPRESSION_BLINK;
     snapshot->dotii_long_idle_expression = DOTII_EXPRESSION_SLEEPY_YAWN;
@@ -139,6 +136,9 @@ void app_state_make_preview(codex_snapshot_t *snapshot)
         snapshot->dotii_expression_durations_ms[index] = 800;
     }
     snapshot->dotii_expression_durations_ms[DOTII_EXPRESSION_TOUCH_RESPONSE] = 1200;
+    codex_snapshot_reset_dotii_mapping(snapshot);
+    snapshot->status = CODEX_STATUS_WORKING;
+    codex_snapshot_refresh_dotii_state(snapshot);
     snapshot->bambu_progress = 68;
     snapshot->bambu_remaining_minutes = 42;
     snapshot->bambu_layer_current = 87;
@@ -149,7 +149,6 @@ void app_state_make_preview(codex_snapshot_t *snapshot)
     snapshot->bambu_updated_at = time(NULL);
     snapshot->weekly_remaining_percent = 68;
     snapshot->weekly_tokens = 18420;
-    snapshot->status = CODEX_STATUS_WORKING;
     snapshot->duration_seconds = 754;
     snapshot->message_count = 1;
     snapshot->task_tokens = 18420;

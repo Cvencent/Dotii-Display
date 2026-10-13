@@ -4,6 +4,107 @@
 
 #include "esp_heap_caps.h"
 
+typedef struct {
+    const char *id;
+    dotii_expression_t default_expression;
+    uint16_t default_duration_ms;
+} dotii_business_state_definition_t;
+
+static const dotii_business_state_definition_t DOTII_BUSINESS_STATES[DOTII_STATE_COUNT] = {
+    {"codex_waiting_user", DOTII_EXPRESSION_CURIOUS, 0},
+    {"codex_working", DOTII_EXPRESSION_WORKING, 0},
+    {"codex_completed", DOTII_EXPRESSION_COMPLETE, 0},
+    {"codex_failure", DOTII_EXPRESSION_FAILURE, 0},
+    {"bambu_paused", DOTII_EXPRESSION_CURIOUS, 0},
+    {"bambu_printing", DOTII_EXPRESSION_WORKING, 0},
+    {"bambu_completed", DOTII_EXPRESSION_COMPLETE, 0},
+    {"bambu_failure", DOTII_EXPRESSION_FAILURE, 0},
+};
+
+void codex_snapshot_reset_dotii_mapping(codex_snapshot_t *target)
+{
+    if (target == NULL) return;
+    for (size_t index = 0; index < DOTII_STATE_COUNT; ++index) {
+        target->dotii_expression_for_state[index] =
+            DOTII_BUSINESS_STATES[index].default_expression;
+        target->dotii_state_duration_for_state[index] =
+            DOTII_BUSINESS_STATES[index].default_duration_ms;
+    }
+}
+
+static uint32_t dotii_state_token(const char *value)
+{
+    uint32_t hash = 2166136261U;
+    if (value == NULL) return hash;
+    while (*value != '\0') {
+        hash ^= (uint8_t)*value++;
+        hash *= 16777619U;
+    }
+    return hash;
+}
+
+static void dotii_set_state(codex_snapshot_t *target, int state_index,
+                            const char *state_id, bool assigned,
+                            dotii_expression_t fallback_expression)
+{
+    const bool base_idle = !assigned;
+    target->dotii_base_idle = base_idle;
+    target->dotii_state_assigned = assigned;
+    target->dotii_state_token = dotii_state_token(state_id);
+    if (!assigned) {
+        target->dotii_expression = DOTII_EXPRESSION_IDLE_BREATH;
+        target->dotii_state_duration_ms = 0;
+        return;
+    }
+    if (state_index >= 0 && state_index < DOTII_STATE_COUNT) {
+        target->dotii_expression = target->dotii_expression_for_state[state_index];
+        target->dotii_state_duration_ms =
+            target->dotii_state_duration_for_state[state_index];
+    } else {
+        target->dotii_expression = fallback_expression;
+        target->dotii_state_duration_ms = 0;
+    }
+}
+
+void codex_snapshot_refresh_dotii_state(codex_snapshot_t *target)
+{
+    if (target == NULL) return;
+    const bool bambu_connected = target->bambu_configured && target->bambu_connected;
+
+    if (target->status == CODEX_STATUS_FAILED) {
+        dotii_set_state(target, DOTII_STATE_CODEX_FAILURE, "codex_failure", true,
+                        DOTII_EXPRESSION_FAILURE);
+    } else if (bambu_connected && target->bambu_status == BAMBU_STATUS_FAULT) {
+        dotii_set_state(target, DOTII_STATE_BAMBU_FAILURE, "bambu_failure", true,
+                        DOTII_EXPRESSION_FAILURE);
+    } else if (target->status == CODEX_STATUS_OFFLINE) {
+        dotii_set_state(target, -1, "connecting", true, DOTII_EXPRESSION_CONNECTING);
+    } else if (target->status == CODEX_STATUS_WORKING) {
+        dotii_set_state(target, DOTII_STATE_CODEX_WORKING, "codex_working", true,
+                        DOTII_EXPRESSION_WORKING);
+    } else if (bambu_connected &&
+               (target->bambu_status == BAMBU_STATUS_PREPARING ||
+                target->bambu_status == BAMBU_STATUS_PRINTING ||
+                target->bambu_status == BAMBU_STATUS_CANCELLING)) {
+        dotii_set_state(target, DOTII_STATE_BAMBU_PRINTING, "bambu_printing", true,
+                        DOTII_EXPRESSION_WORKING);
+    } else if (target->status == CODEX_STATUS_COMPLETED) {
+        dotii_set_state(target, DOTII_STATE_CODEX_COMPLETED, "codex_completed", true,
+                        DOTII_EXPRESSION_COMPLETE);
+    } else if (bambu_connected && target->bambu_status == BAMBU_STATUS_COMPLETED) {
+        dotii_set_state(target, DOTII_STATE_BAMBU_COMPLETED, "bambu_completed", true,
+                        DOTII_EXPRESSION_COMPLETE);
+    } else if (target->status == CODEX_STATUS_WAITING) {
+        dotii_set_state(target, DOTII_STATE_CODEX_WAITING_USER, "codex_waiting_user", true,
+                        DOTII_EXPRESSION_CURIOUS);
+    } else if (bambu_connected && target->bambu_status == BAMBU_STATUS_PAUSED) {
+        dotii_set_state(target, DOTII_STATE_BAMBU_PAUSED, "bambu_paused", true,
+                        DOTII_EXPRESSION_CURIOUS);
+    } else {
+        dotii_set_state(target, -1, "idle", false, DOTII_EXPRESSION_IDLE_BREATH);
+    }
+}
+
 static bool json_number(const cJSON *parent, const char *name, cJSON **out)
 {
     cJSON *value = cJSON_GetObjectItemCaseSensitive(parent, name);
@@ -222,6 +323,7 @@ void codex_snapshot_merge_tasks(
         if (status != NULL) target->status = app_state_status_from_string(status->valuestring);
         copy_string(first, "message_id", target->message_id, sizeof(target->message_id));
     }
+    codex_snapshot_refresh_dotii_state(target);
 }
 
 void codex_snapshot_attach_result(
@@ -281,6 +383,7 @@ void codex_snapshot_merge_result(codex_snapshot_t *target, const cJSON *data)
     }
     target->conversation_message_count = target->conversation_text[0] ? 1 : 0;
     target->conversation_mode = CODEX_CONVERSATION_FINAL;
+    codex_snapshot_refresh_dotii_state(target);
 }
 
 void codex_snapshot_apply_read_state(
@@ -317,4 +420,5 @@ void codex_snapshot_apply_source_state(
     target->management_source_online = management_online;
     target->source_online = codex_online || management_online;
     if (!codex_online) target->status = CODEX_STATUS_OFFLINE;
+    codex_snapshot_refresh_dotii_state(target);
 }

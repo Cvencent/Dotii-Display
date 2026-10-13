@@ -7,6 +7,7 @@
 
 #include "app_state.h"
 #include "cJSON.h"
+#include "codex_bridge_client.h"
 #include "codex_snapshot_merge.h"
 #include "device_config.h"
 #include "esp_crt_bundle.h"
@@ -100,171 +101,6 @@ typedef struct {
     size_t length;
     bool overflow;
 } image_body_t;
-
-static size_t utf8_char_length(const char *text, size_t available)
-{
-    unsigned char lead = (unsigned char)text[0];
-    size_t length = lead < 0x80 ? 1 :
-                    (lead & 0xE0) == 0xC0 ? 2 :
-                    (lead & 0xF0) == 0xE0 ? 3 :
-                    (lead & 0xF8) == 0xF0 ? 4 : 1;
-    if (length > available) return 0;
-    for (size_t index = 1; index < length; ++index) {
-        if (((unsigned char)text[index] & 0xC0) != 0x80) return 1;
-    }
-    return length;
-}
-
-static bool plain_append(char *destination, size_t destination_size, size_t *out,
-                         const char *text, size_t length)
-{
-    for (size_t index = 0; index < length;) {
-        size_t character_length = utf8_char_length(text + index, length - index);
-        if (character_length == 0 || *out + character_length >= destination_size) return false;
-        memcpy(destination + *out, text + index, character_length);
-        *out += character_length;
-        index += character_length;
-    }
-    return true;
-}
-
-static bool is_table_rule(const char *line, size_t length)
-{
-    size_t dashes = 0;
-    for (size_t index = 0; index < length; ++index) {
-        char ch = line[index];
-        if (ch == '-') dashes++;
-        else if (ch != '|' && ch != ':' && ch != ' ' && ch != '\t') return false;
-    }
-    return dashes >= 3;
-}
-
-/* LVGL labels intentionally stay plain-text.  Convert common Markdown
-   structures into a compact reading view and never split a UTF-8 character
-   when the small round-screen buffers fill. */
-static void markdown_to_plain(const char *source, char *destination, size_t destination_size)
-{
-    if (destination_size == 0) return;
-    destination[0] = '\0';
-    if (source == NULL) return;
-
-    size_t out = 0;
-    bool in_code_fence = false;
-    const char *line = source;
-    while (*line != '\0' && out + 1 < destination_size) {
-        const char *newline = strchr(line, '\n');
-        size_t length = newline != NULL ? (size_t)(newline - line) : strlen(line);
-        if (length > 0 && line[length - 1] == '\r') length--;
-
-        size_t start = 0;
-        while (start < length && (line[start] == ' ' || line[start] == '\t')) start++;
-        size_t end = length;
-        while (end > start && (line[end - 1] == ' ' || line[end - 1] == '\t')) end--;
-
-        bool fence = end - start >= 3 &&
-                     ((line[start] == '`' && line[start + 1] == '`' && line[start + 2] == '`') ||
-                      (line[start] == '~' && line[start + 1] == '~' && line[start + 2] == '~'));
-        if (fence) {
-            if (!in_code_fence) {
-                if (out > 0 && destination[out - 1] != '\n') plain_append(destination, destination_size, &out, "\n", 1);
-                plain_append(destination, destination_size, &out, "代码片段", strlen("代码片段"));
-            }
-            in_code_fence = !in_code_fence;
-            goto next_line;
-        }
-        if (in_code_fence || start == end || is_table_rule(line + start, end - start)) goto next_line;
-
-        if (out > 0 && destination[out - 1] != '\n' &&
-            !plain_append(destination, destination_size, &out, "\n", 1)) break;
-
-        while (start < end && line[start] == '#') start++;
-        if (start < end && line[start] == ' ') start++;
-        if (start < end && line[start] == '|') start++;
-        if (end > start && line[end - 1] == '|') end--;
-
-        if (start + 1 < end && (line[start] == '-' || line[start] == '*' || line[start] == '+') &&
-            line[start + 1] == ' ') {
-            start += 2;
-            plain_append(destination, destination_size, &out, "• ", strlen("• "));
-        } else if (start + 1 < end && line[start] == '>' && line[start + 1] == ' ') {
-            start += 2;
-            plain_append(destination, destination_size, &out, "引用：", strlen("引用："));
-        }
-        if (start + 2 < end && line[start] == '[' && line[start + 2] == ']' &&
-            (line[start + 1] == ' ' || line[start + 1] == 'x' || line[start + 1] == 'X')) {
-            plain_append(destination, destination_size, &out,
-                         line[start + 1] == ' ' ? "待办 " : "完成 ",
-                         strlen(line[start + 1] == ' ' ? "待办 " : "完成 "));
-            start += 3;
-            if (start < end && line[start] == ' ') start++;
-        }
-
-        for (size_t index = start; index < end && out + 1 < destination_size;) {
-            char ch = line[index];
-            if (ch == '\\' && index + 1 < end) {
-                index++;
-                size_t character_length = utf8_char_length(line + index, end - index);
-                if (character_length == 0 || !plain_append(destination, destination_size, &out,
-                                                            line + index, character_length)) break;
-                index += character_length;
-                continue;
-            }
-            if (ch == '!' && index + 1 < end && line[index + 1] == '[') {
-                index++;
-                plain_append(destination, destination_size, &out, "图片：", strlen("图片："));
-                ch = '[';
-            }
-            if (ch == '[') {
-                const char *close = find_bounded(line + index + 1, end - index - 1, ']');
-                if (close != NULL && close + 1 < line + end && close[1] == '(') {
-                    const char *url_end = find_bounded(close + 2, (size_t)(line + end - close - 2), ')');
-                    if (url_end != NULL) {
-                        size_t label_length = (size_t)(close - line - index - 1);
-                        if (!plain_append(destination, destination_size, &out, line + index + 1, label_length)) break;
-                        index = (size_t)(url_end - line) + 1;
-                        continue;
-                    }
-                }
-            }
-            if (ch == '<') {
-                const char *close = find_bounded(line + index + 1, end - index - 1, '>');
-                if (close != NULL) {
-                    if (strncmp(line + index + 1, "http://", 7) == 0 ||
-                        strncmp(line + index + 1, "https://", 8) == 0) {
-                        plain_append(destination, destination_size, &out, "链接", strlen("链接"));
-                    }
-                    index = (size_t)(close - line) + 1;
-                    continue;
-                }
-            }
-            if (ch == '`' || ch == '*' || ch == '~' ||
-                (ch == '_' && index + 1 < end && line[index + 1] == '_')) {
-                index += ch == '_' ? 2 : 1;
-                continue;
-            }
-            if (ch == '|') {
-                if (!plain_append(destination, destination_size, &out, " · ", strlen(" · "))) break;
-                index++;
-                continue;
-            }
-            if (ch == '\t') ch = ' ';
-            if (ch == ' ' && out > 0 && destination[out - 1] == ' ') {
-                index++;
-                continue;
-            }
-            size_t character_length = utf8_char_length(line + index, end - index);
-            if (character_length == 0 || !plain_append(destination, destination_size, &out,
-                                                        line + index, character_length)) break;
-            index += character_length;
-        }
-
-next_line:
-        if (newline == NULL) break;
-        line = newline + 1;
-    }
-    while (out > 0 && (destination[out - 1] == ' ' || destination[out - 1] == '\n')) out--;
-    destination[out] = '\0';
-}
 
 static esp_err_t http_event_handler(esp_http_client_event_t *event)
 {
@@ -526,9 +362,11 @@ static void publish_current_state(void)
 }
 
 void connectivity_apply_codex_bridge_message(
-    const codex_bridge_message_t *message
+    const codex_bridge_message_t *message,
+    void *context
 )
 {
+    (void)context;
     if (message == NULL || message->ignored) return;
     if (s_state_lock != NULL) xSemaphoreTake(s_state_lock, portMAX_DELAY);
     if (strcmp(message->type, "read_state") == 0) {

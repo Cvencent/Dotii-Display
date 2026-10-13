@@ -7,6 +7,8 @@
 #include "app_state.h"
 #include "cJSON.h"
 
+void codex_snapshot_reset_dotii_mapping(codex_snapshot_t *target);
+void codex_snapshot_refresh_dotii_state(codex_snapshot_t *target);
 void codex_snapshot_merge_status(codex_snapshot_t *target, const cJSON *data);
 void codex_snapshot_merge_tasks(
     codex_snapshot_t *target,

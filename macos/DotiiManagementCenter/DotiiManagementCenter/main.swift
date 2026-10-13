@@ -166,10 +166,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let process = Process()
             process.executableURL = executable
             process.arguments = [
-                "--app-server",
-                // Dotii receives this Mac's LAN address during provisioning and
-                // pulls its snapshot directly. Admin routes still reject
-                // non-loopback clients in the bridge HTTP handler.
+                // Dotii 在配网时拿到这台 Mac 的局域网地址并直接轮询快照，
+                // 管理接口仍会拒绝非回环客户端。
                 "--host", "0.0.0.0",
                 "--port", String(dashboardPort),
                 "--parent-pid", String(ProcessInfo.processInfo.processIdentifier),

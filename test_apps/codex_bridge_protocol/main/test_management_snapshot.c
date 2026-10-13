@@ -2,6 +2,7 @@
 
 #include "cJSON.h"
 #include "management_snapshot.h"
+#include "codex_snapshot_merge.h"
 #include "unity.h"
 
 static codex_snapshot_t *snapshot_for_test(void)
@@ -84,6 +85,50 @@ TEST_CASE("management snapshot resets omitted management fields",
     TEST_ASSERT_FALSE(snapshot->bambu_camera_available);
     TEST_ASSERT_EQUAL_UINT(0, snapshot->display_revision);
     cJSON_Delete(data);
+}
+
+TEST_CASE("management snapshot applies mapping without overwriting live expression",
+          "[management_merge]")
+{
+    codex_snapshot_t *snapshot = snapshot_for_test();
+    snapshot->codex_source_online = true;
+    snapshot->status = CODEX_STATUS_WORKING;
+    codex_snapshot_reset_dotii_mapping(snapshot);
+    codex_snapshot_refresh_dotii_state(snapshot);
+    TEST_ASSERT_EQUAL_INT(DOTII_EXPRESSION_WORKING, snapshot->dotii_expression);
+    cJSON *data = parse_json(
+        "{\"schema_version\":1,"
+        "\"dotii\":{\"animations\":{"
+        "\"complete\":{\"states\":[\"codex_working\"],\"state_duration_ms\":3000}}}}"
+    );
+
+    TEST_ASSERT_TRUE(management_snapshot_merge(snapshot, data));
+    /* The mapping moves codex_working to "complete", but the expression stays
+       live-driven instead of being forced to idle by the management snapshot. */
+    TEST_ASSERT_EQUAL_INT(CODEX_STATUS_WORKING, snapshot->status);
+    TEST_ASSERT_EQUAL_INT(DOTII_EXPRESSION_COMPLETE, snapshot->dotii_expression);
+    TEST_ASSERT_EQUAL_UINT(3000, snapshot->dotii_state_duration_ms);
+    TEST_ASSERT_TRUE(snapshot->dotii_state_assigned);
+    cJSON_Delete(data);
+}
+
+TEST_CASE("management apply preserves CodexBridge-derived expression",
+          "[management_merge]")
+{
+    codex_snapshot_t target = {0};
+    codex_snapshot_t source = {0};
+    target.status = CODEX_STATUS_WORKING;
+    codex_snapshot_reset_dotii_mapping(&target);
+    codex_snapshot_refresh_dotii_state(&target);
+    source.custom_enabled = true;
+    codex_snapshot_reset_dotii_mapping(&source);
+
+    management_snapshot_apply(&target, &source);
+
+    TEST_ASSERT_EQUAL_INT(CODEX_STATUS_WORKING, target.status);
+    TEST_ASSERT_EQUAL_INT(DOTII_EXPRESSION_WORKING, target.dotii_expression);
+    TEST_ASSERT_TRUE(target.dotii_state_assigned);
+    TEST_ASSERT_TRUE(target.custom_enabled);
 }
 
 TEST_CASE("management snapshot requires schema one", "[management_merge]")

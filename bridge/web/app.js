@@ -25,11 +25,8 @@ const state = {
   displayDirty: false,
   displaySaving: false,
   codexUiSaving: false,
-  codexChecking: false,
-  codexCheck: null,
   firmwarePortsSignature: "",
   bluetoothDevicesSignature: "",
-  selectedCodexTaskId: "",
   dotiiExpressions: [],
   dotiiFollowingLive: true,
   dotiiEnabled: true,
@@ -49,36 +46,6 @@ const setText = (id, value) => {
   const target = byId(id);
   if (target) target.textContent = value;
 };
-const setMarkdown = (id, value) => {
-  const target = byId(id);
-  const renderer = window.StateDisplayMarkdown?.renderMarkdown;
-  if (typeof renderer === "function") target.innerHTML = renderer(String(value));
-  else target.textContent = String(value);
-};
-const setMarkdownMessages = (id, values) => {
-  const target = byId(id);
-  const renderer = window.StateDisplayMarkdown?.renderMarkdown;
-  target.replaceChildren();
-  target.setAttribute("role", "list");
-  values.forEach((value) => {
-    const item = document.createElement("div");
-    item.className = "codex-message-item";
-    item.setAttribute("role", "listitem");
-    if (typeof renderer === "function") item.innerHTML = renderer(String(value));
-    else item.textContent = String(value);
-    target.append(item);
-  });
-};
-
-const STATUS_TEXT = {
-  working: "工作中",
-  waiting_user: "等待用户",
-  completed: "已完成",
-  failed: "失败",
-  idle: "暂无任务",
-  offline: "暂时离线",
-};
-
 const DISPLAY_TIMEOUT_OPTIONS = [10, 30, 60, 180, 300, 600, 1800, 0];
 const DISPLAY_TIMEOUT_PAIRS = [
   { screenOff: "screen-off-timeout", sleep: "sleep-timeout" },
@@ -693,11 +660,9 @@ function renderBambu(bambu = {}, config = {}, enabled = true) {
 
 function setBridgeState(bridge) {
   const indicator = byId("bridge-state");
-  const collectorState = bridge.collector_state || "starting";
   const bridgeOnline = bridge.online !== false;
   indicator.dataset.state = bridgeOnline ? "online" : "error";
   setText("bridge-state-label", bridgeOnline ? "管理中心在线" : "管理中心连接失败");
-  setText("collector-detail", collectorState === "disabled" ? "Codex 模块已关闭" : collectorState === "online" ? "已连接" : collectorState === "error" ? "需要修复" : "正在连接");
   setText("bridge-uptime", formatDuration(Date.now() / 1000 - Number(bridge.started_at_epoch || 0)));
   const autoStart = byId("auto-start");
   autoStart.checked = Boolean(bridge.auto_start);
@@ -1004,96 +969,19 @@ function populateCustomForm(custom = {}) {
   setText("custom-save-state", "已保存");
 }
 
-function renderCodexTask(task) {
-  setText("task-status", STATUS_TEXT[task.status] || "未知状态");
-  setText("message-count", formatNumber(task.user_message_count ?? task.message_count));
-  setText("conversation-title", task.title || "暂无任务");
-  setText("task-title", task.title || "暂无任务");
-  setText("task-duration", formatTaskDuration(task.duration_seconds));
-  setMarkdown("last-user-message", task.last_user_message || "暂无内容");
-  const messages = Array.isArray(task.codex_messages) ? task.codex_messages.filter(Boolean) : [];
-  const visibleMessages = task.conversation_mode === "progress" ? messages : messages.slice(-1);
-  const conversationHeading = {
-    progress: "Codex 中间消息",
-    history: "Codex 最终回复",
-    final: "Codex 最终回复",
-  }[task.conversation_mode] || "Codex 消息";
-  setText("codex-message-heading", conversationHeading);
-  setMarkdownMessages(
-    "codex-message-stream",
-    visibleMessages.length ? visibleMessages : [
-      task.conversation_mode === "progress" ? "暂无中间消息" : (task.last_assistant_message || "暂无最终回复"),
-    ],
-  );
-}
-
-function renderCodexTaskSwitcher(tasks) {
-  const switcher = byId("codex-task-switcher");
-  switcher.hidden = tasks.length <= 1;
-  switcher.replaceChildren();
-  if (tasks.length <= 1) return;
-  tasks.forEach((task, index) => {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.textContent = `任务${["一", "二", "三", "四", "五", "六"][index] || index + 1}`;
-    button.title = task.title || button.textContent;
-    button.classList.toggle("active", task.thread_id === state.selectedCodexTaskId);
-    button.addEventListener("click", () => {
-      state.selectedCodexTaskId = task.thread_id || `task-${index}`;
-      renderCodexTask(task);
-      renderCodexTaskSwitcher(tasks);
-    });
-    switcher.append(button);
-  });
-}
-
 function renderOverview(overview) {
   state.overview = overview;
-  if (!state.codexChecking && overview.codex_check) state.codexCheck = overview.codex_check;
   const snapshot = overview.snapshot || {};
-  const codex = snapshot.codex || {};
-  const tasks = Array.isArray(codex.tasks) && codex.tasks.length ? codex.tasks : [codex.task || {}];
-  let task = tasks.find((item) => item.thread_id && item.thread_id === state.selectedCodexTaskId);
-  if (!task) {
-    task = tasks[0] || {};
-    state.selectedCodexTaskId = task.thread_id || "task-0";
-  }
   const bridge = overview.bridge || {};
   const modules = Object.fromEntries((overview.modules || []).map((module) => [module.id, module]));
-  const codexEnabled = modules.codex?.enabled !== false;
   const bambuEnabled = modules.bambu?.enabled !== false;
   const dotiiEnabled = modules.dotii?.enabled !== false;
-  const weeklyAvailable = codex.weekly_available !== false;
-  const weekly = weeklyAvailable ? Math.max(0, Math.min(100, Number(codex.weekly_remaining_percent) || 0)) : 0;
-  const fiveHourAvailable = codex.five_hour_available === true;
-  const fiveHour = fiveHourAvailable ? Math.max(0, Math.min(100, Number(codex.five_hour_remaining_percent) || 0)) : 0;
 
   setBridgeState(bridge);
   renderBluetooth(overview.bluetooth || {});
   renderFirmware(overview.firmware || {});
-  byId("usage-ring").style.setProperty("--progress", `${weekly * 3.6}deg`);
-  byId("five-hour-ring").style.setProperty("--progress", `${fiveHour * 3.6}deg`);
-  setText("weekly-value", weeklyAvailable ? `${weekly}%` : "--");
-  setText("five-hour-value", fiveHourAvailable ? `${fiveHour}%` : "--");
-  setText("five-hour-plan", fiveHourAvailable ? "Plus 计划" : "仅 Plus");
-  setText("five-hour-reset-date", fiveHourAvailable ? (codex.five_hour_reset_date || "--") : "--");
-  setText("weekly-reset-inline-value", codex.reset_date || "--");
-  setText("weekly-plan", codex.plan_type ? `${codex.plan_type} 计划` : "计划类型未知");
-  setText("snapshot-source", snapshot.preview_data ? "示例内容" : bridge.collector_state === "online" ? "已连接" : "等待连接");
-  setText("snapshot-time", formatTime(snapshot.generated_at_epoch));
-  setText("weekly-tokens", formatNumber(codex.weekly_tokens, codex.weekly_tokens_available !== false));
-  setText("weekly-token-period", codex.weekly_tokens_available !== false && codex.weekly_tokens_as_of
-    ? `统计截至 ${codex.weekly_tokens_as_of}`
-    : "等待用量统计");
-  setText("reset-date", codex.reset_date || "--");
-  renderCodexTask(task);
-  renderCodexTaskSwitcher(tasks);
-  if (!state.moduleSaving.codex) byId("codex-enabled").checked = codexEnabled;
   if (!state.moduleSaving.bambu) byId("bambu-enabled").checked = bambuEnabled;
-  byId("codex-content").hidden = !codexEnabled;
-  renderCodexCheck(state.codexCheck, codexEnabled, bridge);
   byId("bambu-content").hidden = !bambuEnabled;
-  setText("codex-nav-state", codexEnabled ? (bridge.collector_state === "online" ? "在线" : bridge.collector_state === "error" ? "异常" : "连接中") : "已关闭");
   renderBambu(snapshot.bambu || {}, overview.bambu_config || {}, bambuEnabled);
   const incomingDotiiConfig = overview.dotii_config;
   if (!state.dotiiConfigDirty && !state.dotiiConfigSaving && incomingDotiiConfig
@@ -1106,10 +994,6 @@ function renderOverview(overview) {
   renderDotii(snapshot.dotii || {}, dotiiEnabled);
   const displayConfig = overview.display_config || snapshot.display || {};
   const codexUi = displayConfig.codex_ui === "dual_limit" ? "dual_limit" : "classic";
-  byId("codex-overview").classList.toggle("dual-limit", codexUi === "dual_limit");
-  byId("usage-panel").classList.toggle("dual-limit", codexUi === "dual_limit");
-  byId("five-hour-quota").hidden = codexUi !== "dual_limit";
-  byId("weekly-reset-inline").hidden = codexUi !== "dual_limit";
   if (!state.codexUiSaving) {
     setUiSelectValue("codex-ui", codexUi);
     setText("codex-ui-state", codexUi === "dual_limit"
@@ -1145,76 +1029,6 @@ function renderOverview(overview) {
 
 function checkText(value) {
   return value ? "正常" : "异常";
-}
-
-function collectorText(collector = {}) {
-  const labels = { online: "在线", starting: "连接中", error: "异常", disabled: "已关闭" };
-  return labels[collector.collector_state] || "等待连接";
-}
-
-function renderCodexCheck(result, enabled = true, liveBridge = {}) {
-  const button = byId("codex-check");
-  button.disabled = !enabled || state.codexChecking;
-  const badge = byId("codex-check-badge");
-  if (state.codexChecking) {
-    badge.dataset.state = "running";
-    badge.textContent = "检测中";
-    setText("codex-check-detail", "正在通过本机 App Server 读取 Codex 状态…");
-    setText("codex-check-collector", collectorText(liveBridge));
-    return;
-  }
-  if (!result) {
-    badge.dataset.state = "idle";
-    badge.textContent = "尚未检测";
-    setText("codex-check-detail", enabled ? "点击“开始检测”验证当前 Codex 数据链路。" : "启用 Codex 后可运行只读检测。");
-    setText("codex-check-collector", collectorText(liveBridge));
-    return;
-  }
-  const cli = result.cli || {};
-  const appServer = result.app_server || {};
-  const account = result.account || {};
-  const checks = result.checks || {};
-  const collector = result.collector || liveBridge;
-  badge.dataset.state = result.ok ? "ready" : "error";
-  badge.textContent = result.ok ? "运行正常" : account.logged_in ? "部分异常" : "需要处理";
-  setText("codex-check-cli", cli.available ? (cli.version && cli.version !== "--" ? `v${cli.version}` : "可用") : "不可用");
-  setText("codex-check-source", cli.source || "--");
-  setText("codex-check-server", checkText(appServer.available));
-  setText("codex-check-collector", collectorText(collector));
-  setText("codex-check-account", account.logged_in ? (account.email || "已登录") : "未登录");
-  setText("codex-check-plan", account.plan_type ? account.plan_type.toUpperCase() : "--");
-  setText("codex-check-usage", account.logged_in ? `额度${checkText(checks.rate_limits)} · 用量${checkText(checks.usage)}` : "--");
-  setText("codex-check-threads", checks.threads ? `正常 · ${Number(result.thread_count) || 0} 个` : "异常");
-  setText("codex-check-detail", result.detail || (result.ok ? "Codex 功能运行正常。" : "Codex 功能检测异常。"));
-  setText("codex-check-time", result.checked_at_epoch ? `检测于 ${formatTime(result.checked_at_epoch)}` : "尚未检测");
-}
-
-async function checkCodex() {
-  if (state.codexChecking) return;
-  state.codexChecking = true;
-  renderCodexCheck(state.codexCheck, true, state.overview?.bridge || {});
-  try {
-    const response = await fetch("/api/v1/admin/codex/check", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: "{}",
-    });
-    const result = await response.json();
-    if (!response.ok) throw new Error(result.error || "Codex 检测失败");
-    state.codexCheck = result;
-    showToast(result.ok ? "Codex 功能运行正常" : (result.detail || "Codex 检测发现异常"));
-  } catch (error) {
-    state.codexCheck = {
-      ok: false,
-      checked_at_epoch: Math.floor(Date.now() / 1000),
-      detail: error.message || "Codex 检测失败",
-      collector: state.overview?.bridge || {},
-    };
-    showToast(state.codexCheck.detail);
-  } finally {
-    state.codexChecking = false;
-    renderCodexCheck(state.codexCheck, byId("codex-enabled").checked, state.overview?.bridge || {});
-  }
 }
 
 async function saveBambu(event) {
@@ -1334,7 +1148,7 @@ async function updateModule(moduleId, enabled) {
   state.moduleSaving[moduleId] = true;
   const checkbox = byId(`${moduleId}-enabled`);
   const content = byId(`${moduleId}-content`);
-  content.hidden = !enabled;
+  if (content) content.hidden = !enabled;
   try {
     const response = await fetch("/api/v1/admin/modules", {
       method: "POST",
@@ -1343,11 +1157,11 @@ async function updateModule(moduleId, enabled) {
     });
     const result = await response.json();
     if (!response.ok) throw new Error(result.error || "设置失败");
-    const moduleName = { codex: "Codex", bambu: "Bambu", dotii: "Dotii" }[moduleId] || moduleId;
+    const moduleName = { bambu: "Bambu", dotii: "Dotii" }[moduleId] || moduleId;
     showToast(`${moduleName} 页面已${enabled ? "启用" : "关闭"}`);
   } catch (error) {
     checkbox.checked = !enabled;
-    content.hidden = enabled;
+    if (content) content.hidden = enabled;
     showToast(error.message || "设置失败");
   } finally {
     state.moduleSaving[moduleId] = false;
@@ -1771,9 +1585,7 @@ byId("screen-off-page").addEventListener("change", () => {
   state.displayDirty = true;
   setText("display-save-state", "有尚未保存的修改");
 });
-byId("codex-enabled").addEventListener("change", (event) => updateModule("codex", event.target.checked));
 byId("codex-ui").addEventListener("change", (event) => saveCodexUi(event.target.value));
-byId("codex-check").addEventListener("click", checkCodex);
 byId("bambu-enabled").addEventListener("change", (event) => updateModule("bambu", event.target.checked));
 byId("dotii-enabled").addEventListener("change", (event) => updateModule("dotii", event.target.checked));
 byId("dotii-config-form").addEventListener("submit", saveDotiiConfig);
