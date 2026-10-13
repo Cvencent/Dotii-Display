@@ -21,10 +21,9 @@ static codex_snapshot_t *snapshot_for_test(void)
 TEST_CASE("status merges quota fields without erasing management data", "[codex_merge]")
 {
     codex_snapshot_t *snapshot = snapshot_for_test();
-    snapshot->bambu_configured = true;
-    snapshot->bambu_status = BAMBU_STATUS_PRINTING;
     snapshot->custom_enabled = true;
     snapshot->display_revision = 42;
+    snapshot->xiaozhi_mcp_enabled = true;
     cJSON *data = parse_json(
         "{\"generated_at_epoch\":123,"
         "\"account\":{\"weekly_remaining_percent\":68,\"weekly_tokens\":900,"
@@ -42,12 +41,102 @@ TEST_CASE("status merges quota fields without erasing management data", "[codex_
     TEST_ASSERT_EQUAL_STRING("Build", snapshot->title);
     TEST_ASSERT_EQUAL_STRING("main-thread", snapshot->thread_id);
     TEST_ASSERT_EQUAL_STRING("task:main-thread", snapshot->message_id);
-    TEST_ASSERT_TRUE(snapshot->bambu_configured);
-    TEST_ASSERT_EQUAL_INT(BAMBU_STATUS_PRINTING, snapshot->bambu_status);
     TEST_ASSERT_TRUE(snapshot->custom_enabled);
     TEST_ASSERT_EQUAL_UINT(42, snapshot->display_revision);
+    TEST_ASSERT_TRUE(snapshot->xiaozhi_mcp_enabled);
     TEST_ASSERT_TRUE(snapshot->codex_source_online);
     TEST_ASSERT_TRUE(snapshot->source_online);
+    cJSON_Delete(data);
+}
+
+TEST_CASE("quota merge fills usage fields and reset dates", "[codex_merge]")
+{
+    codex_snapshot_t *snapshot = snapshot_for_test();
+    snapshot->custom_enabled = true;
+    cJSON *data = parse_json(
+        "{\"generated_at_epoch\":123,"
+        "\"quota\":{\"five_hour_remaining_percent\":64,"
+        "\"five_hour_reset_at\":1757000000,\"weekly_remaining_percent\":71,"
+        "\"weekly_reset_at\":1758000000,\"weekly_tokens\":12345,"
+        "\"plan_type\":\"plus\",\"task_status\":\"working\","
+        "\"thread_id\":\"t1\",\"current_action\":\"Running tests\","
+        "\"token_count\":42,\"plan_completed\":2,\"plan_total\":5}}"
+    );
+
+    codex_snapshot_merge_quota(snapshot, data);
+
+    TEST_ASSERT_TRUE(snapshot->valid);
+    TEST_ASSERT_TRUE(snapshot->five_hour_available);
+    TEST_ASSERT_EQUAL_INT(64, snapshot->five_hour_remaining_percent);
+    TEST_ASSERT_TRUE(snapshot->weekly_available);
+    TEST_ASSERT_EQUAL_INT(71, snapshot->weekly_remaining_percent);
+    TEST_ASSERT_TRUE(snapshot->weekly_tokens_available);
+    TEST_ASSERT_EQUAL_UINT(12345, snapshot->weekly_tokens);
+    TEST_ASSERT_EQUAL_STRING("plus", snapshot->plan_type);
+    TEST_ASSERT_EQUAL_INT(CODEX_STATUS_WORKING, snapshot->status);
+    TEST_ASSERT_EQUAL_STRING("t1", snapshot->thread_id);
+    TEST_ASSERT_EQUAL_STRING("Running tests", snapshot->current_action);
+    TEST_ASSERT_EQUAL_UINT(42, snapshot->task_tokens);
+    TEST_ASSERT_TRUE(snapshot->task_tokens_available);
+    TEST_ASSERT_EQUAL_UINT(2, snapshot->plan_completed);
+    TEST_ASSERT_EQUAL_UINT(5, snapshot->plan_total);
+    TEST_ASSERT_TRUE(snapshot->five_hour_reset_date[0] != '\0');
+    TEST_ASSERT_TRUE(snapshot->reset_date[0] != '\0');
+    TEST_ASSERT_EQUAL_INT(DOTII_EXPRESSION_WORKING, snapshot->dotii_expression);
+    TEST_ASSERT_TRUE(snapshot->custom_enabled);
+    cJSON_Delete(data);
+}
+
+TEST_CASE("quota merge leaves absent fields unavailable", "[codex_merge]")
+{
+    codex_snapshot_t *snapshot = snapshot_for_test();
+    cJSON *data = parse_json(
+        "{\"quota\":{\"weekly_remaining_percent\":50}}"
+    );
+
+    codex_snapshot_merge_quota(snapshot, data);
+
+    TEST_ASSERT_TRUE(snapshot->weekly_available);
+    TEST_ASSERT_EQUAL_INT(50, snapshot->weekly_remaining_percent);
+    TEST_ASSERT_FALSE(snapshot->five_hour_available);
+    TEST_ASSERT_FALSE(snapshot->weekly_tokens_available);
+    TEST_ASSERT_EQUAL_INT(0, snapshot->five_hour_remaining_percent);
+    TEST_ASSERT_EQUAL_UINT(0, snapshot->weekly_tokens);
+    cJSON_Delete(data);
+}
+
+TEST_CASE("quota merge prefers weekly_tokens then seven_day_tokens", "[codex_merge]")
+{
+    codex_snapshot_t *snapshot = snapshot_for_test();
+    cJSON *first = parse_json("{\"quota\":{\"seven_day_tokens\":7777}}");
+    codex_snapshot_merge_quota(snapshot, first);
+    TEST_ASSERT_TRUE(snapshot->weekly_tokens_available);
+    TEST_ASSERT_EQUAL_UINT(7777, snapshot->weekly_tokens);
+    cJSON_Delete(first);
+
+    cJSON *second = parse_json(
+        "{\"quota\":{\"weekly_tokens\":4321,\"seven_day_tokens\":7777}}"
+    );
+    codex_snapshot_merge_quota(snapshot, second);
+    TEST_ASSERT_EQUAL_UINT(4321, snapshot->weekly_tokens);
+    cJSON_Delete(second);
+}
+
+TEST_CASE("quota merge ignores malformed data", "[codex_merge]")
+{
+    codex_snapshot_t *snapshot = snapshot_for_test();
+    snapshot->weekly_remaining_percent = 33;
+    snapshot->weekly_available = true;
+    cJSON *data = parse_json(
+        "{\"quota\":{\"weekly_remaining_percent\":\"oops\","
+        "\"five_hour_remaining_percent\":500}}"
+    );
+
+    codex_snapshot_merge_quota(snapshot, data);
+
+    TEST_ASSERT_EQUAL_INT(33, snapshot->weekly_remaining_percent);
+    TEST_ASSERT_TRUE(snapshot->weekly_available);
+    TEST_ASSERT_FALSE(snapshot->five_hour_available);
     cJSON_Delete(data);
 }
 
@@ -122,7 +211,7 @@ TEST_CASE("empty task list still marks CodexBridge online", "[codex_merge]")
 TEST_CASE("result merge fills final response and task identity", "[codex_merge]")
 {
     codex_snapshot_t *snapshot = snapshot_for_test();
-    snapshot->bambu_connected = true;
+    snapshot->xiaozhi_mcp_enabled = true;
     cJSON *data = parse_json(
         "{\"task\":{\"thread_id\":\"done-thread\",\"status\":\"completed\","
         "\"title\":\"Done\",\"last_assistant_message\":\"finished\","
@@ -136,7 +225,7 @@ TEST_CASE("result merge fills final response and task identity", "[codex_merge]"
     TEST_ASSERT_EQUAL_STRING("final answer", snapshot->conversation_text);
     TEST_ASSERT_EQUAL_STRING("result:done-thread:123", snapshot->message_id);
     TEST_ASSERT_EQUAL_INT(CODEX_STATUS_COMPLETED, snapshot->status);
-    TEST_ASSERT_TRUE(snapshot->bambu_connected);
+    TEST_ASSERT_TRUE(snapshot->xiaozhi_mcp_enabled);
     cJSON_Delete(data);
 }
 
@@ -145,15 +234,15 @@ TEST_CASE("Codex offline does not clear the management snapshot", "[codex_merge]
     codex_snapshot_t *snapshot = snapshot_for_test();
     snapshot->valid = true;
     snapshot->status = CODEX_STATUS_WORKING;
-    snapshot->bambu_connected = true;
     snapshot->custom_enabled = true;
+    snapshot->xiaozhi_mcp_enabled = true;
 
     codex_snapshot_apply_source_state(snapshot, false, true);
 
     TEST_ASSERT_FALSE(snapshot->codex_source_online);
     TEST_ASSERT_TRUE(snapshot->management_source_online);
-    TEST_ASSERT_TRUE(snapshot->bambu_connected);
     TEST_ASSERT_TRUE(snapshot->custom_enabled);
+    TEST_ASSERT_TRUE(snapshot->xiaozhi_mcp_enabled);
     TEST_ASSERT_EQUAL_INT(CODEX_STATUS_OFFLINE, snapshot->status);
 }
 
@@ -180,32 +269,13 @@ TEST_CASE("codex working resolves the local working expression", "[codex_merge]"
     TEST_ASSERT_EQUAL_UINT(0, snapshot->dotii_state_duration_ms);
 }
 
-TEST_CASE("bambu fault overrides idle Codex while Codex failure wins", "[codex_merge]")
+TEST_CASE("failed status wins the local expression", "[codex_merge]")
 {
     codex_snapshot_t *snapshot = snapshot_for_test();
-    snapshot->status = CODEX_STATUS_IDLE;
-    snapshot->bambu_configured = true;
-    snapshot->bambu_connected = true;
-    snapshot->bambu_status = BAMBU_STATUS_FAULT;
-    codex_snapshot_refresh_dotii_state(snapshot);
-    TEST_ASSERT_EQUAL_INT(DOTII_EXPRESSION_FAILURE, snapshot->dotii_expression);
-
     snapshot->status = CODEX_STATUS_FAILED;
     codex_snapshot_refresh_dotii_state(snapshot);
     TEST_ASSERT_EQUAL_INT(DOTII_EXPRESSION_FAILURE, snapshot->dotii_expression);
     TEST_ASSERT_EQUAL_UINT(0, snapshot->dotii_state_duration_ms);
-}
-
-TEST_CASE("disconnected Bambu never drives an expression", "[codex_merge]")
-{
-    codex_snapshot_t *snapshot = snapshot_for_test();
-    snapshot->status = CODEX_STATUS_IDLE;
-    snapshot->bambu_configured = true;
-    snapshot->bambu_connected = false;
-    snapshot->bambu_status = BAMBU_STATUS_PRINTING;
-    codex_snapshot_refresh_dotii_state(snapshot);
-    TEST_ASSERT_EQUAL_INT(DOTII_EXPRESSION_IDLE_BREATH, snapshot->dotii_expression);
-    TEST_ASSERT_FALSE(snapshot->dotii_state_assigned);
 }
 
 TEST_CASE("waiting maps to curious and offline maps to connecting", "[codex_merge]")

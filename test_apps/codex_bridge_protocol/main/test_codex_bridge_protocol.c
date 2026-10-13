@@ -114,7 +114,7 @@ static bool fixture_discover(void)
                  strcmp(device_id->valuestring, device_identity_get()) == 0 &&
                  cJSON_IsNumber(port) && port->valueint == 8765 &&
                  cJSON_IsArray(capabilities) &&
-                 cJSON_GetArraySize(capabilities) == 5;
+                 cJSON_GetArraySize(capabilities) == 6;
     cJSON_Delete(root);
     return valid;
 }
@@ -196,7 +196,8 @@ static void fixture_task(void *context)
             client,
             "{\"type\":\"bridge_ready\",\"bridge\":\"CodexBridge\","
             "\"version\":\"test\",\"capabilities\":["
-            "\"status\",\"text\",\"tasks\",\"results\",\"read_ack\"]}")) {
+            "\"status\",\"text\",\"tasks\",\"results\",\"read_ack\","
+            "\"quota\"]}")) {
         close(client);
         close(server);
         fixture_fail("bridge_ready send failed");
@@ -248,10 +249,11 @@ TEST_CASE("bridge_ready exposes only granted capabilities", "[codex_bridge]")
     codex_bridge_message_t message = {0};
     const char *line =
         "{\"type\":\"bridge_ready\",\"bridge\":\"CodexBridge\","
-        "\"version\":\"0.1.0\",\"capabilities\":[\"status\",\"tasks\",\"read_ack\"]}\n";
+        "\"version\":\"0.1.0\",\"capabilities\":[\"status\",\"tasks\",\"read_ack\",\"quota\"]}\n";
     TEST_ESP_OK(codex_bridge_protocol_feed(line, strlen(line), &message));
     TEST_ASSERT_EQUAL_STRING("bridge_ready", message.type);
     TEST_ASSERT_TRUE(codex_bridge_protocol_has_capability(&message, "tasks"));
+    TEST_ASSERT_TRUE(codex_bridge_protocol_has_capability(&message, "quota"));
     TEST_ASSERT_FALSE(codex_bridge_protocol_has_capability(&message, "voice"));
     codex_bridge_protocol_reset_message(&message);
 }

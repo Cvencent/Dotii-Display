@@ -27,7 +27,7 @@ static const char *TAG = "codex_bridge";
 static const char *DEVICE_MODEL = "dotii";
 static const char *DEVICE_NAME = "Dotii";
 static const char *const CAPABILITIES[] = {
-    "status", "text", "tasks", "results", "read_ack",
+    "status", "text", "tasks", "results", "read_ack", "quota",
 };
 
 static TaskHandle_t s_udp_task;

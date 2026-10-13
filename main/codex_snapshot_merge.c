@@ -1,5 +1,6 @@
 #include "codex_snapshot_merge.h"
 
+#include <stdio.h>
 #include <string.h>
 
 #include "esp_heap_caps.h"
@@ -130,6 +131,84 @@ static void copy_time(const cJSON *parent, const char *name, time_t *target)
     if (json_number(parent, name, &value)) *target = (time_t)value->valuedouble;
 }
 
+static void copy_bounded_u16(const cJSON *parent, const char *name, uint16_t *target)
+{
+    cJSON *value = NULL;
+    if (!json_number(parent, name, &value)) return;
+    const int number = (int)value->valuedouble;
+    if (number < 0 || number > (int)UINT16_MAX) return;
+    *target = (uint16_t)number;
+}
+
+static void copy_string_checked(const cJSON *parent, const char *name,
+                                char *target, size_t size)
+{
+    cJSON *value = json_string(parent, name);
+    if (value != NULL) strlcpy(target, value->valuestring, size);
+}
+
+/* Convert an absolute reset instant into the "MM-DD HH:MM" string the
+   on-device usage screens already render. */
+static void copy_epoch_date(const cJSON *parent, const char *name,
+                            char *target, size_t size)
+{
+    cJSON *value = NULL;
+    if (!json_number(parent, name, &value) || value->valuedouble <= 0) return;
+    time_t epoch = (time_t)value->valuedouble;
+    struct tm local;
+    if (localtime_r(&epoch, &local) == NULL) return;
+    if (strftime(target, size, "%m-%d %H:%M", &local) == 0) return;
+}
+
+static void apply_quota(const cJSON *quota, codex_snapshot_t *target)
+{
+    cJSON *five_hour = NULL;
+    if (json_number(quota, "five_hour_remaining_percent", &five_hour) &&
+        five_hour->valuedouble >= 0 && five_hour->valuedouble <= 100) {
+        target->five_hour_remaining_percent = (int)five_hour->valuedouble;
+        target->five_hour_available = true;
+    }
+    cJSON *weekly = NULL;
+    if (json_number(quota, "weekly_remaining_percent", &weekly) &&
+        weekly->valuedouble >= 0 && weekly->valuedouble <= 100) {
+        target->weekly_remaining_percent = (int)weekly->valuedouble;
+        target->weekly_available = true;
+    }
+    cJSON *weekly_tokens = NULL;
+    if (json_number(quota, "weekly_tokens", &weekly_tokens) && weekly_tokens->valuedouble >= 0) {
+        target->weekly_tokens = (uint32_t)weekly_tokens->valuedouble;
+        target->weekly_tokens_available = true;
+    } else {
+        cJSON *seven_day = NULL;
+        if (json_number(quota, "seven_day_tokens", &seven_day) && seven_day->valuedouble >= 0) {
+            target->weekly_tokens = (uint32_t)seven_day->valuedouble;
+            target->weekly_tokens_available = true;
+        }
+    }
+    /* The protocol reports absolute reset instants; convert them into the
+       "MM-DD HH:MM" strings the on-device usage screens already render. */
+    copy_epoch_date(quota, "five_hour_reset_at", target->five_hour_reset_date,
+                    sizeof(target->five_hour_reset_date));
+    copy_epoch_date(quota, "weekly_reset_at", target->reset_date,
+                    sizeof(target->reset_date));
+    copy_string_checked(quota, "plan_type", target->plan_type, sizeof(target->plan_type));
+    copy_string_checked(quota, "current_action", target->current_action,
+                        sizeof(target->current_action));
+    copy_string_checked(quota, "thread_id", target->thread_id, sizeof(target->thread_id));
+    cJSON *token_count = NULL;
+    if (json_number(quota, "token_count", &token_count) && token_count->valuedouble >= 0) {
+        target->task_tokens = (uint32_t)token_count->valuedouble;
+        target->task_tokens_available = true;
+    }
+    copy_bounded_u16(quota, "plan_completed", &target->plan_completed);
+    copy_bounded_u16(quota, "plan_total", &target->plan_total);
+
+    cJSON *task_status = json_string(quota, "task_status");
+    if (task_status != NULL) {
+        target->status = app_state_status_from_string(task_status->valuestring);
+    }
+}
+
 static void free_task_text(codex_task_detail_t *task)
 {
     if (task == NULL) return;
@@ -249,6 +328,19 @@ void codex_snapshot_merge_status(codex_snapshot_t *target, const cJSON *data)
                                         CODEX_CONVERSATION_PROGRESS :
                                         CODEX_CONVERSATION_FINAL;
     }
+}
+
+void codex_snapshot_merge_quota(codex_snapshot_t *target, const cJSON *data)
+{
+    if (target == NULL || !cJSON_IsObject(data)) return;
+    const cJSON *quota = json_object(data, "quota");
+    if (quota == NULL) return;
+    target->valid = true;
+    target->codex_source_online = true;
+    target->source_online = true;
+    copy_time(data, "generated_at_epoch", &target->generated_at);
+    apply_quota(quota, target);
+    codex_snapshot_refresh_dotii_state(target);
 }
 
 void codex_snapshot_merge_tasks(

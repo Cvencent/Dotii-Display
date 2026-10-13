@@ -29,15 +29,16 @@ TEST_CASE("management snapshot without codex preserves CodexBridge state",
     strlcpy(snapshot->title, "Build", sizeof(snapshot->title));
     cJSON *data = parse_json(
         "{\"schema_version\":1,"
-        "\"modules\":{\"codex\":false,\"bambu\":true,\"dotii\":true},"
+        "\"modules\":{\"codex\":false,\"xiaozhi\":true,\"dotii\":true},"
         "\"custom\":{\"enabled\":true,\"title\":\"Desk\"},"
-        "\"bambu\":{\"configured\":true,\"connected\":true,\"status\":\"printing\"}}"
+        "\"xiaozhi\":{\"server_url\":\"wss://xiaozhi.example\",\"mcp_enabled\":false}}"
     );
 
     TEST_ASSERT_TRUE(management_snapshot_merge(snapshot, data));
     TEST_ASSERT_TRUE(snapshot->management_source_online);
     TEST_ASSERT_TRUE(snapshot->custom_enabled);
-    TEST_ASSERT_TRUE(snapshot->bambu_connected);
+    TEST_ASSERT_EQUAL_STRING("wss://xiaozhi.example", snapshot->xiaozhi_server_url);
+    TEST_ASSERT_FALSE(snapshot->xiaozhi_mcp_enabled);
     TEST_ASSERT_EQUAL_INT(CODEX_STATUS_WORKING, snapshot->status);
     TEST_ASSERT_EQUAL_INT(68, snapshot->weekly_remaining_percent);
     TEST_ASSERT_EQUAL_STRING("Build", snapshot->title);
@@ -53,8 +54,7 @@ TEST_CASE("management snapshot ignores legacy codex fields",
     snapshot->weekly_remaining_percent = 54;
     cJSON *data = parse_json(
         "{\"schema_version\":1,"
-        "\"codex\":{\"weekly_remaining_percent\":1,\"task\":{\"status\":\"completed\"}},"
-        "\"modules\":{\"bambu\":true}}"
+        "\"codex\":{\"weekly_remaining_percent\":1,\"task\":{\"status\":\"completed\"}}}"
     );
 
     TEST_ASSERT_TRUE(management_snapshot_merge(snapshot, data));
@@ -69,21 +69,18 @@ TEST_CASE("management snapshot resets omitted management fields",
     codex_snapshot_t *snapshot = snapshot_for_test();
     snapshot->custom_enabled = true;
     snapshot->custom_image_available = true;
-    snapshot->bambu_configured = true;
-    snapshot->bambu_connected = true;
-    snapshot->bambu_commandable = true;
-    snapshot->bambu_camera_available = true;
     snapshot->display_revision = 42;
+    strlcpy(snapshot->xiaozhi_server_url, "wss://stale.example",
+            sizeof(snapshot->xiaozhi_server_url));
+    snapshot->xiaozhi_mcp_enabled = false;
     cJSON *data = parse_json("{\"schema_version\":1}");
 
     TEST_ASSERT_TRUE(management_snapshot_merge(snapshot, data));
     TEST_ASSERT_FALSE(snapshot->custom_enabled);
     TEST_ASSERT_FALSE(snapshot->custom_image_available);
-    TEST_ASSERT_FALSE(snapshot->bambu_configured);
-    TEST_ASSERT_FALSE(snapshot->bambu_connected);
-    TEST_ASSERT_FALSE(snapshot->bambu_commandable);
-    TEST_ASSERT_FALSE(snapshot->bambu_camera_available);
     TEST_ASSERT_EQUAL_UINT(0, snapshot->display_revision);
+    TEST_ASSERT_EQUAL_STRING("", snapshot->xiaozhi_server_url);
+    TEST_ASSERT_TRUE(snapshot->xiaozhi_mcp_enabled);
     cJSON_Delete(data);
 }
 

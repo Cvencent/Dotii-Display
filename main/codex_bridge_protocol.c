@@ -10,7 +10,7 @@
 #define CODEX_BRIDGE_TRUNCATION_SUFFIX "\n...[已截断]"
 
 static const char *const SUPPORTED_CAPABILITIES[] = {
-    "status", "text", "tasks", "results", "read_ack",
+    "status", "text", "tasks", "results", "read_ack", "quota",
 };
 
 static char s_chunk_message_id[CODEX_BRIDGE_ID_MAX];

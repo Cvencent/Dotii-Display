@@ -303,6 +303,8 @@ void connectivity_apply_codex_bridge_message(
             message->thread_id,
             message->message_id
         );
+    } else if (strcmp(message->kind, "codex_status") == 0) {
+        codex_snapshot_merge_quota(&s_work_snapshot, message->data);
     } else {
         if (s_state_lock != NULL) xSemaphoreGive(s_state_lock);
         return;
