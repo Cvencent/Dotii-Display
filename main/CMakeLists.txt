@@ -13,6 +13,7 @@ idf_component_register(
         "ble_bridge.c"
         "board_input.c"
         "state_ui.c"
+        "xiaozhi_client.c"
         "emotion/emotion_catalog.c"
         "emotion/animation.c"
         "emotion/emotion_engine.c"

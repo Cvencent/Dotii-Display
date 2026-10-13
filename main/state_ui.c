@@ -16,6 +16,7 @@
 #include "emotion/emotion_engine.h"
 #include "emotion/emotion_render.h"
 #include "emotion/emotion_router.h"
+#include "xiaozhi_client.h"
 #include "device_config.h"
 #include "esp_attr.h"
 #include "esp_app_desc.h"
@@ -143,6 +144,7 @@ static emotion_router_t s_dotii_router;
 static emotion_render_t s_dotii_render;
 static bool s_dotii_engine_ready;
 static char s_dotii_character[16] = "dotii";
+static xiaozhi_client_t s_xiaozhi;
 static lv_obj_t *s_codex_quick;
 static lv_obj_t *s_bambu_quick;
 static lv_obj_t *s_custom_quick;
@@ -1762,6 +1764,7 @@ static void dotii_engine_ensure(void)
     }
     emotion_engine_init(&s_dotii_engine, lv_tick_get());
     emotion_router_init(&s_dotii_router, &s_dotii_engine);
+    xiaozhi_client_init(&s_xiaozhi);
     s_dotii_engine_ready = true;
 }
 
@@ -1784,6 +1787,20 @@ static void render_dotii_expression(void)
         emotion_router_set_source(&s_dotii_router, EMOTION_SRC_BUSINESS, business, 0, now);
     } else {
         emotion_router_clear_source(&s_dotii_router, EMOTION_SRC_BUSINESS, now);
+    }
+
+    if (s_snapshot.xiaozhi_enabled) {
+        const char *xiaozhi_emotion = xiaozhi_client_last_emotion(&s_xiaozhi);
+        if (xiaozhi_emotion == NULL) {
+            xiaozhi_emotion = xiaozhi_client_state_emotion(xiaozhi_client_state(&s_xiaozhi));
+        }
+        if (xiaozhi_emotion != NULL) {
+            emotion_router_set_source(&s_dotii_router, EMOTION_SRC_XIAOZHI, xiaozhi_emotion, 0, now);
+        } else {
+            emotion_router_clear_source(&s_dotii_router, EMOTION_SRC_XIAOZHI, now);
+        }
+    } else {
+        emotion_router_clear_source(&s_dotii_router, EMOTION_SRC_XIAOZHI, now);
     }
 
     emotion_router_tick(&s_dotii_router, now);

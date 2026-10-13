@@ -38,4 +38,12 @@ menu "Dotii 桌面交互屏"
         help
             CST-8 is Asia/Shanghai without daylight-saving time.
 
+    config XIAOZHI_ENABLE
+        bool "Enable onboard xiaozhi AI client (WebSocket + Opus)"
+        default n
+        help
+            Enables the built-in xiaozhi client transport. Wake word and Opus
+            audio are added by a follow-up task; the emotion/state bridge is
+            always compiled.
+
 endmenu
