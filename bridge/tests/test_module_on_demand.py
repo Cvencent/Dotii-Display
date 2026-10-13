@@ -79,6 +79,12 @@ class ModuleOnDemandTests(unittest.TestCase):
         self.assertIn("codesign --verify", packaging)
         self.assertIn("notarytool submit", packaging)
 
+    def test_windows_host_serves_snapshots_on_the_lan(self):
+        host = (BRIDGE / "bridge_app.py").read_text(encoding="utf-8")
+
+        self.assertIn('"--host", "0.0.0.0"', host)
+        self.assertNotIn('"--host", "127.0.0.1"', host)
+
     def test_parent_watchdog_stops_orphaned_backend(self):
         stop = mock.Mock()
         stop.wait.side_effect = [False]

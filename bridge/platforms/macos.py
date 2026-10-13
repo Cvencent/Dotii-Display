@@ -73,6 +73,9 @@ class MacOSPlatformAdapter:
     def hidden_creation_flags(self) -> int:
         return 0
 
+    async def prepare_bluetooth_pairing(self, address: str) -> None:
+        return None
+
     def startup_command(self, python_executable: Path, app_script: Path) -> str:
         raise NotImplementedError("macOS login startup requires the native app host and SMAppService")
 

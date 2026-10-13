@@ -335,7 +335,7 @@ class BluetoothPairingRecoveryTests(unittest.IsolatedAsyncioTestCase):
 
         service = BluetoothBridge.__new__(BluetoothBridge)
         service.lock = threading.RLock()
-        service.platform = SimpleNamespace(name="macos", bluetooth_pair_on_connect=False)
+        service.platform = SimpleNamespace(name="macos", bluetooth_pair_on_connect=False, prepare_bluetooth_pairing=mock.AsyncMock())
         service._ble_devices = {"UUID": "native-device"}
         service._bleak = lambda: (FakeClient, object)
 
@@ -386,7 +386,7 @@ class BluetoothPairingRecoveryTests(unittest.IsolatedAsyncioTestCase):
 
         service = BluetoothBridge.__new__(BluetoothBridge)
         service.lock = threading.RLock()
-        service.platform = SimpleNamespace(name="windows", bluetooth_pair_on_connect=True)
+        service.platform = SimpleNamespace(name="windows", bluetooth_pair_on_connect=True, prepare_bluetooth_pairing=mock.AsyncMock())
         service._ble_devices = {"AA:BB": "native-device"}
         service._bleak = lambda: (FakeClient, object)
         service.operation_detail = ""

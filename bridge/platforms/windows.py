@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 from .base import RunCommand
 
@@ -59,6 +60,9 @@ class WindowsPlatformAdapter:
 
     def hidden_creation_flags(self) -> int:
         return getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+    async def prepare_bluetooth_pairing(self, address: str) -> None:
+        await pair_bluetooth_device(address)
 
     def startup_command(self, python_executable: Path, app_script: Path) -> str:
         return f'"{python_executable.resolve()}" -B "{app_script.resolve()}" --startup'
@@ -166,3 +170,50 @@ class WindowsPlatformAdapter:
 
     def valid_serial_port(self, port: str) -> bool:
         return bool(PORT_PATTERN.fullmatch(port.upper()))
+
+
+async def pair_bluetooth_device(address: str) -> None:
+    """Pair a Dotii over BLE at the *encryption* protection level.
+
+    Windows asks for encryption-and-authentication by default.  Dotii pairs
+    with Just Works (no PIN), which cannot satisfy that request, and the
+    failed attempt leaves the OS pairing unusable on the next connect.  A
+    bond created explicitly with the encryption level is enough to reach the
+    encrypted configuration characteristic.
+    """
+    from winrt.windows.devices.bluetooth import BluetoothLEDevice
+    from winrt.windows.devices.enumeration import (
+        DevicePairingKinds,
+        DevicePairingProtectionLevel,
+        DevicePairingResultStatus,
+    )
+
+    digits = address.replace(":", "").replace("-", "").strip()
+    if len(digits) != 12:
+        raise ValueError("蓝牙地址无效，请重新扫描 Dotii")
+    device = await BluetoothLEDevice.from_bluetooth_address_async(int(digits, 16))
+    if device is None:
+        raise OSError("未找到蓝牙设备，请确认 Dotii 正在广播")
+    pairing = device.device_information.pairing
+    if pairing.is_paired:
+        return
+    if not pairing.can_pair:
+        raise OSError("系统不支持与该设备配对，请在系统设置中移除旧的 Dotii 配对后重试")
+    custom = pairing.custom
+
+    def accept(sender: Any, args: Any) -> None:
+        args.accept()
+
+    token = custom.add_pairing_requested(accept)
+    try:
+        result = await custom.pair_with_protection_level_async(
+            DevicePairingKinds.CONFIRM_ONLY,
+            DevicePairingProtectionLevel.ENCRYPTION,
+        )
+    finally:
+        custom.remove_pairing_requested(token)
+    if result.status not in (
+        DevicePairingResultStatus.PAIRED,
+        DevicePairingResultStatus.ALREADY_PAIRED,
+    ):
+        raise OSError(f"蓝牙配对未完成（{result.status}），请在系统设置中移除旧的 Dotii 配对后重试")

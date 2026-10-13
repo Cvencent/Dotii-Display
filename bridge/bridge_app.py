@@ -475,13 +475,14 @@ def main() -> int:
     rotate_log(log_path)
     log_handle = log_path.open("a", encoding="utf-8", buffering=1)
     script = Path(__file__).with_name("codex_bridge.py")
+    # Dotii 设备通过局域网地址轮询快照，管理接口仍只允许回环客户端。
     if is_frozen():
         # Single-executable build: re-enter this same binary as the hidden
         # configuration server child instead of shipping a second EXE.
-        command = [str(Path(sys.executable).resolve()), "--bridge-server"]
+        command = [str(Path(sys.executable).resolve()), "--bridge-server", "--host", "0.0.0.0"]
         working_root = application_root()
     else:
-        command = [sys.executable, "-B", str(script)]
+        command = [sys.executable, "-B", str(script), "--host", "0.0.0.0"]
         working_root = script.parent.parent
     process = subprocess.Popen(
         command,

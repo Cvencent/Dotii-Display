@@ -394,7 +394,7 @@ static bool fetch_ota(xiaozhi_client_t *client)
     esp_http_client_set_header(http, "Activation-Version", "1");
     esp_http_client_set_header(http, "Device-Id", device_identity_get_mac());
     esp_http_client_set_header(http, "Client-Id", device_identity_get_client_id());
-    esp_http_client_set_header(http, "User-Agent", "Dotii/1.1.2");
+    esp_http_client_set_header(http, "User-Agent", "Dotii/1.1.3");
     esp_http_client_set_header(http, "Accept-Language", "zh-CN");
     esp_http_client_set_header(http, "Content-Type", "application/json");
     esp_http_client_set_post_field(http, "{}", 2);
@@ -492,6 +492,7 @@ static bool open_websocket(xiaozhi_client_t *client)
         .reconnect_timeout_ms = 5000,
         .network_timeout_ms = 12000,
         .buffer_size = 4096,
+        .crt_bundle_attach = esp_crt_bundle_attach,
     };
     esp_websocket_client_handle_t handle = esp_websocket_client_init(&config);
     if (handle == NULL) return false;

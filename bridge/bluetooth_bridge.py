@@ -417,8 +417,8 @@ class BluetoothBridge:
             except (UnicodeDecodeError, json.JSONDecodeError):
                 pass
 
-        # Windows requests pairing during connect. CoreBluetooth has no explicit
-        # pairing API and prompts when the encrypted characteristic is accessed.
+        # CoreBluetooth has no explicit pairing API and prompts when the
+        # encrypted characteristic is accessed; Windows pairs via the adapter.
         async with client_class(
             target,
             timeout=45.0 if self.platform.name == "macos" else 30.0,
@@ -438,6 +438,10 @@ class BluetoothBridge:
         client_class, _ = self._bleak()
         with self.lock:
             target = address if self.platform.name == "macos" else self._ble_devices.get(address, address)
+
+        # Windows asks for encryption plus authentication, which Dotii's Just Works
+        # pairing cannot satisfy, so create an encryption-only bond first.
+        await self.platform.prepare_bluetooth_pairing(address)
 
         try:
             return await self._configure_once(client_class, target, body)

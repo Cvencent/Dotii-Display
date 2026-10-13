@@ -69,6 +69,8 @@ typedef struct {
     bool force_full_refresh;
 } lcd_transform_t;
 
+static uint16_t s_lcd_dma_tile[BSP_LCD_H_RES * LCD_TRANSFORM_TILE_SIZE];
+
 static lcd_transform_t s_lcd_transform = {
     .angle_tenths = LCD_TRANSFORM_ANGLE_DEFAULT_TENTHS,
     .cos_q16 = 0,
@@ -949,11 +951,11 @@ static lv_display_t *bsp_display_lcd_init(const bsp_display_cfg_t *cfg)
             .rotation = cfg->rotation,
             .hor_res = BSP_LCD_H_RES,
             .ver_res = BSP_LCD_V_RES,
-            /* QSPI DMA cannot transmit directly from PSRAM on ESP32-S3. Two
-               12-line LVGL buffers plus one 12-line transform tile use about
-               33 KiB and preserve the prior Wi-Fi internal-memory budget. */
+            /* QSPI DMA cannot transmit directly from PSRAM on ESP32-S3, so the
+               single 12-line transform tile stays in internal DMA memory
+               while it streams out; the LVGL draw buffers live in PSRAM. */
             .buffer_height = LCD_TRANSFORM_TILE_SIZE,
-            .use_psram = false,
+            .use_psram = true,
             .enable_ppa_accel = false,
             .require_double_buffer = true,
         },
@@ -1023,13 +1025,17 @@ lv_display_t *bsp_display_start_with_config(bsp_display_cfg_t *cfg)
 
     s_lcd_transform.logical_fb = heap_caps_calloc(LCD_TRANSFORM_PIXELS, sizeof(uint16_t),
                                                    MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    s_lcd_transform.dma_tile = heap_caps_malloc(BSP_LCD_H_RES * LCD_TRANSFORM_TILE_SIZE *
-                                                sizeof(uint16_t),
-                                                MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
+    /* Reserved in .bss: the internal DMA heap is fragmented by Wi-Fi and BLE
+       before the display starts, so a runtime allocation is not reliable. */
+    s_lcd_transform.dma_tile = s_lcd_dma_tile;
     s_lcd_transform.tile_done = xSemaphoreCreateBinary();
     if (s_lcd_transform.logical_fb == NULL || s_lcd_transform.dma_tile == NULL ||
         s_lcd_transform.tile_done == NULL) {
-        ESP_LOGE(TAG, "Unable to allocate software display transform buffers");
+        ESP_LOGE(TAG, "Unable to allocate software display transform buffers (fb=%p tile=%p psram_free=%u dma_largest=%u internal_largest=%u)",
+                 s_lcd_transform.logical_fb, s_lcd_transform.dma_tile,
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DMA),
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
         return NULL;
     }
     lcd_transform_set_coefficients(s_lcd_transform.angle_tenths);

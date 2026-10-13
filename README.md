@@ -133,6 +133,13 @@ macOS 用户还应在“系统设置 > 隐私与安全性 > 蓝牙”中确认�
 </details>
 
 <details>
+<summary><strong>蓝牙配网提示配对失败</strong></summary>
+
+1.1.3 起 Windows 会先按“仅加密”等级与 Dotii 建立绑定，再写入加密配置特征。若系统里残留旧的 Dotii 配对，请在“设置 > 蓝牙”中删除后重新扫描再试；macOS 由系统在访问加密特征时自动配对，无需手动操作。
+
+</details>
+
+<details>
 <summary><strong>更换路由器或电脑后无法连接</strong></summary>
 
 请长按 Dotii 右侧按钮进入“设置”，再长按“重置配网”1.2 秒。设备会清除 Wi-Fi、管理中心绑定和蓝牙配对后重启；随后在新电脑的管理中心重新扫描并配网，通常无需重新烧录固件。
@@ -165,6 +172,8 @@ Windows 的 CodexBridge 日志位于 `%LOCALAPPDATA%\CodexBridge`；Dotii 管理
 - [macOS 开发指南](docs/development/macos.md)：macOS 菜单栏宿主、CoreBluetooth、串口、签名、公证与 DMG 构建。
 
 平台共用固件、后台业务、管理网页和设备协议。平台差异应保留在对应适配器、宿主与打包目录中，不应复制共用业务代码。
+
+固件的内部 RAM 预算很紧：Wi-Fi、BLE 和 AMOLED 面板共用内部 DMA 内存。`sdkconfig.defaults` 因此使用低内存 Wi-Fi 缓冲剖面、让 LVGL 绘制缓冲与 mbedTLS 走 PSRAM，并在 BSP 中静态预留 12 行 DMA 条带。修改 Wi-Fi、蓝牙、LVGL 或 TLS 配置时请保留这些约束，否则设备可能在显示初始化阶段重启。
 
 ## 社区贡献与扩展
 
