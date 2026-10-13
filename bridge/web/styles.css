@@ -582,6 +582,29 @@ button:disabled { cursor: not-allowed; opacity: .55; transform: none; }
 .xiaozhi-info .runtime-row span { color: var(--muted); }
 .xiaozhi-info .runtime-row strong { text-align: right; }
 .xiaozhi-info .network-note { grid-template-columns: 1fr; gap: 6px; }
+.xiaozhi-activation { grid-column: 1 / -1; display: grid; gap: 14px; padding: 22px 24px; }
+.xiaozhi-activation[hidden] { display: none; }
+.xiaozhi-activation .settings-heading { align-items: center; }
+.xiaozhi-activation .settings-heading h3 { margin: 0; }
+.activation-code {
+  min-height: 52px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 10px 18px;
+  border: 1px solid rgba(93, 169, 255, .42);
+  border-radius: 14px;
+  background: linear-gradient(180deg, rgba(93, 169, 255, .12), rgba(93, 169, 255, .05));
+  color: var(--text);
+  font-family: "Cascadia Mono", "SFMono-Regular", Consolas, monospace;
+  font-size: clamp(22px, 4vw, 32px);
+  font-weight: 700;
+  letter-spacing: .16em;
+  text-align: center;
+  user-select: all;
+}
+.xiaozhi-activation .primary-button { justify-self: start; }
+.status-pill.waiting { border-color: #70612f; background: #39321a; color: #e7ce74; }
 .codex-ui-field { display: grid; gap: 8px; }
 .codex-ui-field .time-field-label { font-size: 13px; color: var(--muted-strong); }
 .codex-info-panel .runtime-row { display: flex; align-items: baseline; justify-content: space-between; gap: 14px; padding: 11px 0; border-bottom: 1px solid var(--line); font-size: 13px; }

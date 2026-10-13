@@ -55,7 +55,7 @@
         <div class="section-heading">
           <div>
             <h2 id="xiaozhi-heading">小智 AI</h2>
-            <p>设备固件内原生运行小智语音助手，唤醒词、服务地址与会话能力都在这里配置。</p>
+            <p>设备固件内原生运行小智语音助手，使用官方 OTA 配对与小智服务端直连。</p>
           </div>
           <label class="module-switch">
             <span>启用小智</span>
@@ -67,21 +67,33 @@
         <div class="module-content xiaozhi-content" id="xiaozhi-content">
           <form class="settings-panel xiaozhi-form" id="xiaozhi-form">
             <div class="card-heading">
-              <div><h3>小智连接</h3><p>填写小智服务端地址，Dotii 会通过 WebSocket 直接建立语音会话。</p></div>
+              <div><h3>小智连接</h3><p>默认使用小智官方 OTA 地址；首次使用会显示设备码，请到 xiaozhi.me 配对。</p></div>
               <span class="status-pill" id="xiaozhi-connection">未启用</span>
             </div>
             <div class="settings-grid xiaozhi-fields">
-              <label><span>服务端地址</span><input id="xiaozhi-server-url" maxlength="192" autocomplete="off" placeholder="wss://api.tenclass.net/xiaozhi/v1/"></label>
+              <label><span>OTA / 服务地址</span><input id="xiaozhi-server-url" maxlength="192" autocomplete="off" placeholder="https://api.tenclass.net/xiaozhi/ota/"></label>
               <label><span>唤醒词</span><input id="xiaozhi-wake-word" maxlength="32" autocomplete="off" placeholder="你好小智"></label>
               <label><span>音色</span><input id="xiaozhi-voice" maxlength="32" autocomplete="off" placeholder="default"></label>
               <label class="check-row"><input id="xiaozhi-mcp-enabled" type="checkbox"><span>启用 MCP 工具调用</span></label>
             </div>
-            <p class="network-note"><strong>保持连接稳定</strong><span>建议使用局域网或官方小智服务。设备内原生解析表情指令，无需电脑端中转。</span></p>
+            <p class="network-note"><strong>保持连接稳定</strong><span>设备内原生解析小智服务端下发的表情指令，无需电脑端中转。</span></p>
             <div class="form-actions">
               <button class="primary-button" type="submit">保存小智设置</button>
               <span class="save-state" id="xiaozhi-save-state" role="status" aria-live="polite">尚未修改</span>
             </div>
           </form>
+
+          <article class="settings-panel xiaozhi-activation" id="xiaozhi-activation" hidden>
+            <div class="card-heading">
+              <div><h3>首次配对</h3><p>设备已向小智官方服务申请激活，请完成一次官网绑定。</p></div>
+              <span class="status-pill waiting">等待配对</span>
+            </div>
+            <div class="activation-code" id="xiaozhi-activation-code">等待设备上报</div>
+            <p class="network-note" id="xiaozhi-activation-message">请在小智官网登录后输入设备码完成配对。</p>
+            <div class="form-actions">
+              <a class="primary-button" id="xiaozhi-pairing-link" href="https://xiaozhi.me/" target="_blank" rel="noreferrer">打开 xiaozhi.me 配对</a>
+            </div>
+          </article>
 
           <article class="settings-panel xiaozhi-info">
             <h3>工作原理</h3>

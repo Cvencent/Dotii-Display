@@ -610,9 +610,9 @@ function formatMinutes(value) {
   return `${Math.floor(minutes / 60)} 小时 ${minutes % 60} 分钟`;
 }
 
-function renderXiaozhi(config = {}, enabled = true) {
+function renderXiaozhi(config = {}, enabled = true, bluetooth = {}) {
   if (!state.xiaozhiLoaded && !state.xiaozhiSaving) {
-    byId("xiaozhi-server-url").value = config.server_url || "wss://api.tenclass.net/xiaozhi/v1/";
+    byId("xiaozhi-server-url").value = config.server_url || "https://api.tenclass.net/xiaozhi/ota/";
     byId("xiaozhi-wake-word").value = config.wake_word || "你好小智";
     byId("xiaozhi-voice").value = config.voice || "default";
     byId("xiaozhi-mcp-enabled").checked = config.mcp_enabled !== false;
@@ -621,10 +621,26 @@ function renderXiaozhi(config = {}, enabled = true) {
   if (!state.moduleSaving.xiaozhi) byId("xiaozhi-enabled").checked = enabled;
   byId("xiaozhi-content").hidden = !enabled;
   const connection = byId("xiaozhi-connection");
+  const device = bluetooth.device_status?.xiaozhi || {};
   const active = Boolean(config.enabled) && enabled;
-  connection.dataset.state = active ? "online" : enabled ? "waiting" : "offline";
-  connection.textContent = !enabled ? "模块已关闭" : active ? "已启用" : "已保存，未启用";
-  setText("xiaozhi-nav-state", !enabled ? "已关闭" : active ? "已启用" : "已配置");
+  const connected = Boolean(device.connected);
+  const activationRequired = Boolean(device.activation_required);
+  connection.dataset.state = connected ? "online" : active ? "waiting" : "offline";
+  connection.textContent = !enabled ? "模块已关闭" :
+    connected ? "小智在线" :
+    activationRequired ? "等待配对" : active ? "已启用" : "已保存，未启用";
+  setText("xiaozhi-nav-state", !enabled ? "已关闭" :
+    connected ? "在线" : activationRequired ? "待配对" : active ? "已启用" : "已配置");
+  const activation = byId("xiaozhi-activation");
+  const code = device.activation_code || "";
+  if (activation) {
+    activation.hidden = !enabled || (!activationRequired && !code);
+    setText("xiaozhi-activation-code", code || "等待设备上报");
+    setText("xiaozhi-activation-message",
+      device.activation_message || "请在小智官网登录后输入设备码完成配对。");
+    const link = byId("xiaozhi-pairing-link");
+    if (link) link.href = "https://xiaozhi.me/";
+  }
 }
 
 function dotiiCharacters() {
@@ -705,6 +721,7 @@ async function saveXiaozhi(event) {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
+        enabled: byId("xiaozhi-enabled").checked,
         server_url: byId("xiaozhi-server-url").value.trim(),
         wake_word: byId("xiaozhi-wake-word").value.trim(),
         voice: byId("xiaozhi-voice").value.trim(),
@@ -1043,7 +1060,7 @@ function renderOverview(overview) {
   setBridgeState(bridge);
   renderBluetooth(overview.bluetooth || {});
   renderFirmware(overview.firmware || {});
-  renderXiaozhi(overview.xiaozhi_config || {}, xiaozhiEnabled);
+  renderXiaozhi(overview.xiaozhi_config || {}, xiaozhiEnabled, overview.bluetooth || {});
   const incomingDotiiConfig = overview.dotii_config;
   if (!state.dotiiConfigDirty && !state.dotiiConfigSaving && incomingDotiiConfig
       && (!state.dotiiConfig || state.dotiiConfig.revision !== incomingDotiiConfig.revision)) {

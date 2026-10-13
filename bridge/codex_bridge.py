@@ -85,8 +85,8 @@ DOTII_CHARACTERS = (
 DOTII_CHARACTER_IDS = tuple(character["id"] for character in DOTII_CHARACTERS)
 
 XIAOZHI_DEFAULTS = {
-    "enabled": False,
-    "server_url": "wss://api.tenclass.net/xiaozhi/v1/",
+    "enabled": True,
+    "server_url": "https://api.tenclass.net/xiaozhi/ota/",
     "wake_word": "你好小智",
     "voice": "default",
     "mcp_enabled": True,
@@ -121,8 +121,8 @@ def validate_xiaozhi_config(payload: Any) -> dict[str, Any]:
     server_url = bounded(payload.get("server_url"), "server_url", 192,
                          defaults["server_url"]) or defaults["server_url"]
     parsed = urlparse(server_url)
-    if parsed.scheme not in {"ws", "wss"} or not parsed.hostname:
-        raise ValueError("xiaozhi.server_url must be a ws:// or wss:// URL")
+    if parsed.scheme not in {"http", "https", "ws", "wss"} or not parsed.hostname:
+        raise ValueError("xiaozhi.server_url must be an http(s):// or ws(s):// URL")
 
     return {
         "enabled": enabled,
@@ -997,7 +997,7 @@ class BridgeHandler(BaseHTTPRequestHandler):
         address = local_ipv4()
         runtime = self.bridge.runtime.snapshot()
         return {
-            "app": {"name": "Dotii 管理中心", "version": "1.1.1"},
+            "app": {"name": "Dotii 管理中心", "version": "1.1.2"},
             "bridge": {
                 "online": True,
                 "local_url": f"http://127.0.0.1:{self.bridge.server_port}",

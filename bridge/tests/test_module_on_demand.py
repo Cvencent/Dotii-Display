@@ -45,7 +45,7 @@ class ModuleOnDemandTests(unittest.TestCase):
         self.assertEqual(info["LSMinimumSystemVersion"], "13.0")
         self.assertIn("Dotii", info["NSBluetoothAlwaysUsageDescription"])
         self.assertIn("Dotii", info["NSLocalNetworkUsageDescription"])
-        self.assertEqual(info["CFBundleShortVersionString"], "1.1.1")
+        self.assertEqual(info["CFBundleShortVersionString"], "1.1.2")
         self.assertEqual(info["CFBundleIconName"], "AppIcon")
 
     def test_macos_brand_icons_are_complete_and_used_by_native_host(self):
@@ -102,10 +102,12 @@ class ModuleOnDemandTests(unittest.TestCase):
 
     def test_xiaozhi_config_defaults_and_requires_websocket_url(self):
         defaults = validate_xiaozhi_config(None)
-        self.assertFalse(defaults["enabled"])
-        self.assertEqual(defaults["server_url"], "wss://api.tenclass.net/xiaozhi/v1/")
+        self.assertTrue(defaults["enabled"])
+        self.assertEqual(defaults["server_url"], "https://api.tenclass.net/xiaozhi/ota/")
+        self.assertEqual(validate_xiaozhi_config({"server_url": "https://example.com"})["server_url"],
+                         "https://example.com")
         with self.assertRaises(ValueError):
-            validate_xiaozhi_config({"server_url": "https://example.com"})
+            validate_xiaozhi_config({"server_url": "ftp://example.com"})
 
     def test_snapshot_validation_rejects_bambu_module(self):
         with self.assertRaises(ValueError):
@@ -121,12 +123,14 @@ class ModuleOnDemandTests(unittest.TestCase):
 
     def test_xiaozhi_config_preserves_websocket_settings(self):
         saved = validate_xiaozhi_config({
+            "enabled": True,
             "server_url": "wss://example.test/xiaozhi",
             "wake_word": "嗨小智",
             "voice": "sweet",
             "mcp_enabled": False,
         })
         self.assertEqual(saved["server_url"], "wss://example.test/xiaozhi")
+        self.assertTrue(saved["enabled"])
         self.assertEqual(saved["wake_word"], "嗨小智")
         self.assertEqual(saved["voice"], "sweet")
         self.assertFalse(saved["mcp_enabled"])
@@ -194,6 +198,16 @@ class ModuleOnDemandTests(unittest.TestCase):
         self.assertIn("saveDotiiCharacter", script)
         self.assertIn("saveXiaozhi", script)
         self.assertIn("/api/v1/admin/xiaozhi", script)
+
+    def test_frontend_exposes_xiaozhi_activation_pairing_flow(self):
+        html = (BRIDGE / "web" / "index.html").read_text(encoding="utf-8")
+        script = (BRIDGE / "web" / "app.js").read_text(encoding="utf-8")
+        styles = (BRIDGE / "web" / "styles.css").read_text(encoding="utf-8")
+        self.assertIn('id="xiaozhi-activation-code"', html)
+        self.assertIn('id="xiaozhi-pairing-link"', html)
+        self.assertIn("activation_required", script)
+        self.assertIn(".xiaozhi-activation", styles)
+        self.assertIn(".activation-code", styles)
 
 
     def test_macos_build_rejects_stale_bundled_web_assets(self):

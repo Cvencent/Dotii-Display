@@ -21,9 +21,10 @@
 #include "services/gap/ble_svc_gap.h"
 #include "services/gatt/ble_svc_gatt.h"
 #include "store/config/ble_store_config.h"
+#include "state_ui.h"
 
 #define RX_MAX 1024
-#define RESPONSE_MAX 384
+#define RESPONSE_MAX 1536
 
 static const char *TAG = "ble_bridge";
 static uint8_t s_own_addr_type;
@@ -210,15 +211,36 @@ static int gatt_access(uint16_t conn_handle, uint16_t attr_handle,
     if (ctxt->op == BLE_GATT_ACCESS_OP_READ_CHR && ble_uuid_cmp(ctxt->chr->uuid, &STATUS_UUID.u) == 0) {
         char bridge[64];
         connectivity_get_bridge_summary(bridge, sizeof(bridge));
-        char status[RESPONSE_MAX];
-        snprintf(status, sizeof(status),
-                 "{\"v\":1,\"device_id\":\"%s\",\"name\":\"Dotii\",\"firmware\":\"%s\","
-                 "\"provisioned\":%s,\"wifi\":%s,\"bridge\":\"%s\"}",
-                 device_identity_get(),
-                 esp_app_get_description()->version,
-                 device_config_get()->provisioned ? "true" : "false",
-                 connectivity_is_wifi_connected() ? "true" : "false", bridge);
-        return os_mbuf_append(ctxt->om, status, strlen(status)) == 0 ? 0 : BLE_ATT_ERR_INSUFFICIENT_RES;
+        cJSON *status = cJSON_CreateObject();
+        if (status == NULL) return BLE_ATT_ERR_INSUFFICIENT_RES;
+        cJSON_AddNumberToObject(status, "v", 1);
+        cJSON_AddStringToObject(status, "device_id", device_identity_get());
+        cJSON_AddStringToObject(status, "mac", device_identity_get_mac());
+        cJSON_AddStringToObject(status, "name", "Dotii");
+        cJSON_AddStringToObject(status, "firmware", esp_app_get_description()->version);
+        cJSON_AddBoolToObject(status, "provisioned", device_config_get()->provisioned);
+        cJSON_AddBoolToObject(status, "wifi", connectivity_is_wifi_connected());
+        cJSON_AddStringToObject(status, "bridge", bridge);
+        const xiaozhi_client_t *client = state_ui_xiaozhi_client();
+        cJSON *xiaozhi = cJSON_AddObjectToObject(status, "xiaozhi");
+        if (xiaozhi != NULL) {
+            cJSON_AddStringToObject(xiaozhi, "state", xiaozhi_client_state_name(xiaozhi_client_state(client)));
+            cJSON_AddBoolToObject(xiaozhi, "connected", client->connected);
+            cJSON_AddBoolToObject(xiaozhi, "activated", client->activated);
+            cJSON_AddBoolToObject(xiaozhi, "activation_required", xiaozhi_client_activation_required(client));
+            cJSON_AddStringToObject(xiaozhi, "activation_code",
+                                    xiaozhi_client_activation_code(client) ?: "");
+            cJSON_AddStringToObject(xiaozhi, "activation_message",
+                                    xiaozhi_client_activation_message(client) ?: "");
+            cJSON_AddStringToObject(xiaozhi, "websocket_url",
+                                    xiaozhi_client_websocket_url(client) ?: "");
+        }
+        char *serialized = cJSON_PrintUnformatted(status);
+        cJSON_Delete(status);
+        if (serialized == NULL) return BLE_ATT_ERR_INSUFFICIENT_RES;
+        int result = os_mbuf_append(ctxt->om, serialized, strlen(serialized)) == 0 ? 0 : BLE_ATT_ERR_INSUFFICIENT_RES;
+        cJSON_free(serialized);
+        return result;
     }
     return BLE_ATT_ERR_UNLIKELY;
 }

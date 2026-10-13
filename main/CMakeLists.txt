@@ -21,9 +21,10 @@ idf_component_register(
         "emotion/emotion_router.c"
         "emotion/emotion_pose.c"
         "emotion/emotion_render.c"
-        "generated/ui_font_detail_20.c"
+        "generated/ui_font_cjk_20.c"
         "generated/ui_font_fixed_20.c"
-        "generated/ui_font_chinese_semibold_24.c"
+        "generated/ui_font_cjk_24.c"
+        "generated/ui_font_cjk_28.c"
         "generated/ui_font_digits_64.c"
         "generated/ui_icons.c"
     INCLUDE_DIRS "." "generated" "emotion"
@@ -34,6 +35,9 @@ idf_component_register(
         esp_netif
         esp_timer
         esp_wifi
+        esp_websocket_client
+        espressif__esp_audio_codec
+        espressif__esp_audio_effects
         bt
         espressif__cjson
         mbedtls
