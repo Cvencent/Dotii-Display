@@ -97,6 +97,7 @@ typedef struct {
     bool task_tokens_available;
     codex_conversation_mode_t conversation_mode;
     bool codex_enabled;
+    bool xiaozhi_enabled;
     bool bambu_enabled;
     bool custom_enabled;
     bool dotii_enabled;
@@ -122,6 +123,7 @@ typedef struct {
     char five_hour_reset_date[16];
     char reset_date[16];
     char plan_type[32];
+    char character_id[16];
     codex_task_status_t status;
     char title[96];
     char thread_id[64];

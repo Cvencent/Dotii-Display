@@ -26,6 +26,7 @@ $tests = @(
     @{ name = 'emotion_engine';  src = 'test_apps\emotion\test_emotion_engine.c';  libs = @('main\emotion\emotion_engine.c', 'main\emotion\emotion_catalog.c') },
     @{ name = 'character_pack';  src = 'test_apps\emotion\test_character_pack.c';  libs = @('main\emotion\character_pack.c') },
     @{ name = 'emotion_router';  src = 'test_apps\emotion\test_emotion_router.c';  libs = @('main\emotion\emotion_router.c', 'main\emotion\emotion_engine.c', 'main\emotion\emotion_catalog.c') }
+    @{ name = 'emotion_pose';    src = 'test_apps\emotion\test_emotion_pose.c';    libs = @('main\emotion\emotion_pose.c', 'main\emotion\emotion_engine.c', 'main\emotion\emotion_catalog.c', 'main\emotion\character_pack.c', 'main\emotion\animation.c') }
 )
 
 $failed = 0

@@ -11,6 +11,11 @@
 #include "codex_bridge_client.h"
 #include "codex_read_tracker.h"
 #include "connectivity.h"
+#include "emotion/character_pack.h"
+#include "emotion/emotion_catalog.h"
+#include "emotion/emotion_engine.h"
+#include "emotion/emotion_render.h"
+#include "emotion/emotion_router.h"
 #include "device_config.h"
 #include "esp_attr.h"
 #include "esp_app_desc.h"
@@ -133,6 +138,11 @@ static lv_obj_t *s_dotii_mouth;
 static lv_obj_t *s_dotii_accent_left;
 static lv_obj_t *s_dotii_accent_right;
 static lv_obj_t *s_dotii_accent_center;
+static emotion_engine_t s_dotii_engine;
+static emotion_router_t s_dotii_router;
+static emotion_render_t s_dotii_render;
+static bool s_dotii_engine_ready;
+static char s_dotii_character[16] = "dotii";
 static lv_obj_t *s_codex_quick;
 static lv_obj_t *s_bambu_quick;
 static lv_obj_t *s_custom_quick;
@@ -1721,120 +1731,78 @@ static void set_dotii_part(lv_obj_t *part, int width, int height, int x, int y,
     lv_obj_set_style_bg_opa(part, opacity, 0);
 }
 
+static const char *business_emotion_id(void)
+{
+    if (!s_snapshot.codex_enabled) {
+        return NULL;
+    }
+    switch (s_snapshot.status) {
+    case CODEX_STATUS_WORKING:   return "30";
+    case CODEX_STATUS_WAITING:   return "35";
+    case CODEX_STATUS_COMPLETED: return "33";
+    case CODEX_STATUS_FAILED:    return "34";
+    case CODEX_STATUS_IDLE:      return "02";
+    case CODEX_STATUS_OFFLINE:   return "36";
+    default:                     return NULL;
+    }
+}
+
+static const char *touch_emotion_id(void)
+{
+    if (!dotii_touch_active()) {
+        return NULL;
+    }
+    return "13";
+}
+
+static void dotii_engine_ensure(void)
+{
+    if (s_dotii_engine_ready) {
+        return;
+    }
+    emotion_engine_init(&s_dotii_engine, lv_tick_get());
+    emotion_router_init(&s_dotii_router, &s_dotii_engine);
+    s_dotii_engine_ready = true;
+}
+
 static void render_dotii_expression(void)
 {
     if (s_dotii == NULL) return;
-    const uint32_t warm = 0xF4EAD2;
-    const uint32_t amber = 0xF2C66D;
-    const uint32_t cyan = 0x55D8D0;
-    const uint32_t coral = 0xFF827A;
-    const dotii_expression_t expression = active_dotii_expression();
-    uint32_t elapsed = lv_tick_get();
-    if (dotii_touch_active() && expression == s_snapshot.dotii_touch_expression) {
-        elapsed = lv_tick_elaps(s_dotii_touch_started);
-    } else if (dotii_idle_fallback_active() &&
-               lv_tick_elaps(s_last_activity) <= 60000 &&
-               expression == s_snapshot.dotii_blink_expression &&
-               dotii_blink_cycle_position() >= 6000U) {
-        elapsed = dotii_blink_cycle_position() - 6000U;
-    } else if (dotii_business_animation_active() && s_dotii_state_seen) {
-        elapsed = lv_tick_elaps(s_dotii_state_started);
+    dotii_engine_ensure();
+
+    const uint32_t now = lv_tick_get();
+    const char *touch = touch_emotion_id();
+    if (touch != NULL) {
+        emotion_router_set_source(&s_dotii_router, EMOTION_SRC_TOUCH, touch,
+                                  (uint16_t)dotii_expression_duration(s_snapshot.dotii_touch_expression), now);
+    } else {
+        emotion_router_clear_source(&s_dotii_router, EMOTION_SRC_TOUCH, now);
     }
-    const uint32_t duration = dotii_expression_duration(expression);
-    const uint32_t phase = ((elapsed % duration) * 8U) / duration;
+
+    const char *business = business_emotion_id();
+    if (business != NULL) {
+        emotion_router_set_source(&s_dotii_router, EMOTION_SRC_BUSINESS, business, 0, now);
+    } else {
+        emotion_router_clear_source(&s_dotii_router, EMOTION_SRC_BUSINESS, now);
+    }
+
+    emotion_router_tick(&s_dotii_router, now);
+
+    const emotion_engine_state_t *state = emotion_engine_state(&s_dotii_engine);
+    const emotion_def_t *def = emotion_catalog_by_id(emotion_router_active_id(&s_dotii_router));
+    if (def == NULL) def = emotion_catalog_fallback();
+    const char *character_id = s_snapshot.character_id[0] != '\0' ? s_snapshot.character_id : s_dotii_character;
+    const character_def_t *pack = character_pack_lookup(character_id);
+    if (pack == NULL) pack = character_pack_fallback();
+
+    if (s_dotii_render.attached) {
+        emotion_render_update(&s_dotii_render, state, def, pack);
+    }
 
     lv_obj_add_flag(s_dotii_accent_left, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s_dotii_accent_right, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s_dotii_accent_center, LV_OBJ_FLAG_HIDDEN);
-    set_dotii_part(s_dotii_left_eye, 52, 72, -78, -30, warm, LV_OPA_COVER);
-    set_dotii_part(s_dotii_right_eye, 52, 72, 78, -30, warm, LV_OPA_COVER);
-    set_dotii_part(s_dotii_mouth, 56, 12, 0, 70, warm, LV_OPA_COVER);
-
-    switch (expression) {
-    case DOTII_EXPRESSION_BLINK: {
-        const int eye_height = phase == 2 || phase == 3 ? 7 :
-                               phase == 1 || phase == 4 ? 24 : 66;
-        set_dotii_part(s_dotii_left_eye, 58, eye_height, -78, -26, warm, LV_OPA_COVER);
-        set_dotii_part(s_dotii_right_eye, 58, eye_height, 78, -26, warm, LV_OPA_COVER);
-        break;
-    }
-    case DOTII_EXPRESSION_CURIOUS: {
-        const int curious = phase < 4 ? (int)phase : (int)(8 - phase);
-        set_dotii_part(s_dotii_left_eye, 62, 82, -76, -34, warm, LV_OPA_COVER);
-        set_dotii_part(s_dotii_right_eye, 46, 62, 82, -26, warm, LV_OPA_COVER);
-        set_dotii_part(s_dotii_mouth, 20 + curious, 20 + curious, 8, 70,
-                       amber, LV_OPA_COVER);
-        break;
-    }
-    case DOTII_EXPRESSION_SLEEPY_YAWN: {
-        const int yawn = phase < 4 ? (int)phase * 3 : (int)(8 - phase) * 3;
-        set_dotii_part(s_dotii_left_eye, 68, 10, -76, -18, warm, LV_OPA_COVER);
-        set_dotii_part(s_dotii_right_eye, 68, 10, 76, -18, warm, LV_OPA_COVER);
-        set_dotii_part(s_dotii_mouth, 26 + yawn, 26 + yawn, 0, 72, amber, LV_OPA_COVER);
-        break;
-    }
-    case DOTII_EXPRESSION_TOUCH_RESPONSE: {
-        /* Keep the original tall-eye/cyan-dot character, but make the response
-           visibly animate from the first short-click frame. */
-        const int pulse = phase < 4 ? (int)phase * 4 : (int)(8 - phase) * 4;
-        const int spread = phase < 4 ? (int)phase * 3 : (int)(8 - phase) * 3;
-        set_dotii_part(s_dotii_left_eye, 62 + pulse / 2, 80 + pulse, -76, -34, warm, LV_OPA_COVER);
-        set_dotii_part(s_dotii_right_eye, 62 + pulse / 2, 80 + pulse, 76, -34, warm, LV_OPA_COVER);
-        set_dotii_part(s_dotii_mouth, 30 + pulse, 16 + pulse / 2, 0, 76, cyan, LV_OPA_COVER);
-        set_dotii_part(s_dotii_accent_left, 13, 13, -120 - spread, 52, cyan, LV_OPA_COVER);
-        set_dotii_part(s_dotii_accent_right, 13, 13, 120 + spread, 52, cyan, LV_OPA_COVER);
-        break;
-    }
-    case DOTII_EXPRESSION_CONNECTING: {
-        const lv_opa_t left_opacity = phase < 4 ? LV_OPA_COVER : (lv_opa_t)110;
-        const lv_opa_t right_opacity = phase < 4 ? (lv_opa_t)110 : LV_OPA_COVER;
-        set_dotii_part(s_dotii_left_eye, 48, 64, -76, -28, cyan, left_opacity);
-        set_dotii_part(s_dotii_right_eye, 48, 64, 76, -28, cyan, right_opacity);
-        set_dotii_part(s_dotii_accent_center, 10, 10, (int)phase * 22 - 77, 88, cyan, LV_OPA_COVER);
-        break;
-    }
-    case DOTII_EXPRESSION_WORKING: {
-        const int shift = phase < 4 ? (int)phase * 4 : (int)(8 - phase) * 4;
-        set_dotii_part(s_dotii_left_eye, 48, 68, -86 + shift, -30, warm, LV_OPA_COVER);
-        set_dotii_part(s_dotii_right_eye, 48, 68, 70 + shift, -30, warm, LV_OPA_COVER);
-        set_dotii_part(s_dotii_mouth, 62, 10, 0, 72, cyan, LV_OPA_COVER);
-        set_dotii_part(s_dotii_accent_right, 10, 10, 134, -82 + (int)phase * 7,
-                       cyan, LV_OPA_COVER);
-        break;
-    }
-    case DOTII_EXPRESSION_COMPLETE: {
-        const int celebrate = phase < 4 ? (int)phase : (int)(8 - phase);
-        set_dotii_part(s_dotii_left_eye, 68, 14, -76, -28, warm, LV_OPA_COVER);
-        set_dotii_part(s_dotii_right_eye, 68, 14, 76, -28, warm, LV_OPA_COVER);
-        set_dotii_part(s_dotii_mouth, 108 + celebrate, 20 + celebrate / 2,
-                       0, 62, amber, LV_OPA_COVER);
-        set_dotii_part(s_dotii_accent_left, 10 + celebrate, 10 + celebrate,
-                       -132, -76, amber, LV_OPA_COVER);
-        set_dotii_part(s_dotii_accent_right, 10 + celebrate, 10 + celebrate,
-                       132, -76, cyan, LV_OPA_COVER);
-        break;
-    }
-    case DOTII_EXPRESSION_FAILURE: {
-        const int warning = phase < 4 ? (int)phase : (int)(8 - phase);
-        set_dotii_part(s_dotii_left_eye, 58, 12, -76, -22, coral, LV_OPA_COVER);
-        set_dotii_part(s_dotii_right_eye, 58, 12, 76, -22, coral, LV_OPA_COVER);
-        set_dotii_part(s_dotii_mouth, 72, 12, 0, 80 + warning / 2,
-                       coral, LV_OPA_COVER);
-        set_dotii_part(s_dotii_accent_center, 10 + warning, 10 + warning,
-                       0, 52, coral, LV_OPA_COVER);
-        break;
-    }
-    case DOTII_EXPRESSION_IDLE_BREATH: {
-        const int breath = phase < 4 ? (int)phase * 2 : (int)(8 - phase) * 2;
-        set_dotii_part(s_dotii_left_eye, 52, 68 + breath, -78, -30, warm, LV_OPA_COVER);
-        set_dotii_part(s_dotii_right_eye, 52, 68 + breath, 78, -30, warm, LV_OPA_COVER);
-        break;
-    }
-    default:
-        break;
-    }
 }
-
 static void dotii_touch_event(lv_event_t *event)
 {
     if (lv_event_get_code(event) != LV_EVENT_SHORT_CLICKED) return;
@@ -1869,6 +1837,12 @@ static void build_dotii(void)
     s_dotii_accent_left = make_dotii_part(s_dotii, 12, 12, -132, 52, COLOR_CYAN);
     s_dotii_accent_right = make_dotii_part(s_dotii, 12, 12, 132, 52, COLOR_CYAN);
     s_dotii_accent_center = make_dotii_part(s_dotii, 12, 12, 0, 88, COLOR_CYAN);
+    /* The native emotion renderer owns its own layer set. The legacy parts are
+       hidden so the old accent logic stays harmless. */
+    emotion_render_attach(&s_dotii_render, s_dotii, 466);
+    lv_obj_add_flag(s_dotii_left_eye, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(s_dotii_right_eye, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(s_dotii_mouth, LV_OBJ_FLAG_HIDDEN);
     /* Like the custom canvas, Dotii is an immersive ambient page and does not
        show the global navigation dots. */
     render_dotii_expression();

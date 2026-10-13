@@ -13,13 +13,20 @@ idf_component_register(
         "ble_bridge.c"
         "board_input.c"
         "state_ui.c"
+        "emotion/emotion_catalog.c"
+        "emotion/animation.c"
+        "emotion/emotion_engine.c"
+        "emotion/character_pack.c"
+        "emotion/emotion_router.c"
+        "emotion/emotion_pose.c"
+        "emotion/emotion_render.c"
         "generated/ui_font_detail_20.c"
         "generated/ui_font_fixed_20.c"
         "generated/ui_font_chinese_semibold_24.c"
         "generated/ui_font_bambu_semibold_24.c"
         "generated/ui_font_digits_64.c"
         "generated/ui_icons.c"
-    INCLUDE_DIRS "." "generated"
+    INCLUDE_DIRS "." "generated" "emotion"
     REQUIRES
         esp_event
         esp_app_format

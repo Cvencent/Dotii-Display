@@ -115,6 +115,8 @@ void app_state_make_preview(codex_snapshot_t *snapshot)
     snapshot->task_tokens_available = true;
     snapshot->conversation_mode = CODEX_CONVERSATION_PROGRESS;
     snapshot->codex_enabled = true;
+    snapshot->xiaozhi_enabled = true;
+    strlcpy(snapshot->character_id, "dotii", sizeof(snapshot->character_id));
     snapshot->bambu_enabled = true;
     snapshot->custom_enabled = true;
     snapshot->dotii_enabled = true;
