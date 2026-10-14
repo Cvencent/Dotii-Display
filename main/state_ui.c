@@ -1410,6 +1410,10 @@ static void build_xiaozhi(void)
     lv_obj_remove_flag(face, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_remove_flag(face, LV_OBJ_FLAG_CLICKABLE);
     emotion_render_attach(&s_xiaozhi_render, face, SCREEN_SIZE);
+    /* The Xiaozhi page is an always-on companion face. A pure black body on
+       the AMOLED keeps the panel visually quiet (black pixels are unlit) and
+       leaves only the animated eyes visible. */
+    emotion_render_set_body_override(&s_xiaozhi_render, true, 0x000000);
 
     s_xiaozhi_status_pill = lv_obj_create(content);
     lv_obj_set_size(s_xiaozhi_status_pill, 252, 56);

@@ -520,6 +520,8 @@ bool emotion_render_attach(emotion_render_t *render, lv_obj_t *parent, int size)
     render->dirty_y2 = px - 1;
     render->full_redraw = true;
     render->last_body_color = 0;
+    render->body_override = false;
+    render->body_override_color = 0;
     render->attached = true;
     return true;
 }
@@ -533,6 +535,20 @@ void emotion_render_set_shape(emotion_render_t *render, const char *shape_id)
     if (idx != render->shape_index) {
         render->shape_index = idx;
         render->ring_valid = false;
+        render->full_redraw = true;
+    }
+}
+
+void emotion_render_set_body_override(emotion_render_t *render, bool enabled,
+                                      uint32_t rgb)
+{
+    if (render == NULL || !render->attached) {
+        return;
+    }
+    if (render->body_override != enabled ||
+        render->body_override_color != rgb) {
+        render->body_override = enabled;
+        render->body_override_color = rgb;
         render->full_redraw = true;
     }
 }
@@ -642,14 +658,26 @@ void emotion_render_update(emotion_render_t *render,
     if (has_accent) {
         accent = emotion_geometry_body_colors()[look->color_index];
     }
-    const uint32_t body_rgb = face_body_color(pack->body_color, pack->eye_color,
-                                              accent, has_accent);
+    uint32_t body_rgb = face_body_color(pack->body_color, pack->eye_color,
+                                        accent, has_accent);
+    if (render->body_override) {
+        /* Flat override (Xiaozhi black face): a single opaque body colour with
+           the normal animated eyes drawn on top. */
+        body_rgb = render->body_override_color;
+    }
     const bool full_redraw = render->full_redraw || body_rgb != render->last_body_color;
 
     const uint8_t expression = eb_pool_expression(look, now_ms);
-    const uint16_t eye_color = rgb565(c8(pack->eye_color, 16),
-                                      c8(pack->eye_color, 8),
-                                      c8(pack->eye_color, 0));
+    uint32_t eye_rgb = pack->eye_color;
+    if (render->body_override &&
+        abs(luma8(eye_rgb) - luma8(body_rgb)) < 72) {
+        /* A flat body can swallow the character's own eye colour (for example
+           a dark-eyed character on a black face). Keep the eyes readable. */
+        eye_rgb = luma8(body_rgb) > 128 ? 0x101418u : 0xF1F8F5u;
+    }
+    const uint16_t eye_color = rgb565(c8(eye_rgb, 16),
+                                      c8(eye_rgb, 8),
+                                      c8(eye_rgb, 0));
     const uint16_t ring_points = emotion_geometry_ring_points();
     const float eye_scale = size * 0.0043f;
     float point_x[2][EB_MAX_POINTS];

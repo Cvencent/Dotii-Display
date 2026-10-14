@@ -37,6 +37,11 @@ typedef struct {
     int32_t dirty_y2;
     bool full_redraw;
     uint32_t last_body_color;
+    /* Optional flat body colour override (for example the Xiaozhi black
+       face). When enabled the character palette is ignored and only the
+       eye geometry is drawn on top. */
+    bool body_override;
+    uint32_t body_override_color;
 } emotion_render_t;
 
 /* Creates the canvas under parent at the given pixel size. Idempotent. */
@@ -51,6 +56,11 @@ void emotion_render_update(emotion_render_t *render,
 
 /* Selects the upstream body shape (blob/wedge/gem) for this renderer. */
 void emotion_render_set_shape(emotion_render_t *render, const char *shape_id);
+
+/* Forces a flat body colour instead of the character palette. Passing
+   enabled=false restores the normal per-emotion tinting. */
+void emotion_render_set_body_override(emotion_render_t *render, bool enabled,
+                                      uint32_t rgb);
 
 void emotion_render_detach(emotion_render_t *render);
 

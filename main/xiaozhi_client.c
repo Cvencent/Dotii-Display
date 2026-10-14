@@ -394,7 +394,7 @@ static bool fetch_ota(xiaozhi_client_t *client)
     esp_http_client_set_header(http, "Activation-Version", "1");
     esp_http_client_set_header(http, "Device-Id", device_identity_get_mac());
     esp_http_client_set_header(http, "Client-Id", device_identity_get_client_id());
-    esp_http_client_set_header(http, "User-Agent", "Dotii/1.1.4");
+    esp_http_client_set_header(http, "User-Agent", "Dotii/1.1.6");
     esp_http_client_set_header(http, "Accept-Language", "zh-CN");
     esp_http_client_set_header(http, "Content-Type", "application/json");
     esp_http_client_set_post_field(http, "{}", 2);
