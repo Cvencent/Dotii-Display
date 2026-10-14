@@ -11,27 +11,15 @@
 static const char *TAG = "emotion_render";
 
 /* ---------------------------------------------------------------------------
- * Upstream geometry is defined in a 259-unit viewBox (-15..244). The canvas is
- * square, so a single scale maps both axes; the head is drawn slightly above
- * the vertical centre to leave room for the status pill underneath.
+ * The round panel itself is the face. Character colour fills the entire
+ * canvas and the upstream eye rings are laid out directly in screen space.
+ * There is deliberately no body silhouette or sphere shading here: those made
+ * the display read as a small 3D head floating inside a black ring.
  * ------------------------------------------------------------------------- */
 
 #define EB_PI 3.14159265f
 #define EB_TAU 6.28318531f
 #define EB_MAX_POINTS 96
-
-typedef struct {
-    float x;
-    float y;
-    float z;
-} eb_pt_t;
-
-typedef struct {
-    float xmin;
-    float xmax;
-    float ymin;
-    float ymax;
-} eb_bbox_t;
 
 static inline float clampf(float v, float lo, float hi)
 {
@@ -53,28 +41,6 @@ static inline uint8_t c8(uint32_t rgb, int shift)
 static inline uint16_t rgb565(uint8_t r, uint8_t g, uint8_t b)
 {
     return (uint16_t)(((r & 0xF8u) << 8) | ((g & 0xFCu) << 3) | (b >> 3));
-}
-
-/* Upstream shade(color, amount): blend towards white for amount > 0 and
-   towards black for amount < 0, matching ball.js. */
-static uint16_t shade565(uint32_t rgb, float amount)
-{
-    const float target = amount < 0.0f ? 0.0f : 255.0f;
-    const float a = fabsf(amount);
-    const float r = (float)c8(rgb, 16) + (target - (float)c8(rgb, 16)) * a;
-    const float g = (float)c8(rgb, 8) + (target - (float)c8(rgb, 8)) * a;
-    const float b = (float)c8(rgb, 0) + (target - (float)c8(rgb, 0)) * a;
-    return rgb565((uint8_t)(r + 0.5f), (uint8_t)(g + 0.5f), (uint8_t)(b + 0.5f));
-}
-
-static inline uint16_t lerp565(uint16_t a, uint16_t b, float t)
-{
-    const int ar = (a >> 11) & 0x1F, ag = (a >> 5) & 0x3F, ab = a & 0x1F;
-    const int br = (b >> 11) & 0x1F, bg = (b >> 5) & 0x3F, bb = b & 0x1F;
-    const int r = ar + (int)((float)(br - ar) * t + 0.5f);
-    const int g = ag + (int)((float)(bg - ag) * t + 0.5f);
-    const int bl = ab + (int)((float)(bb - ab) * t + 0.5f);
-    return (uint16_t)((r << 11) | (g << 5) | bl);
 }
 
 /* -- canvas ---------------------------------------------------------------- */
@@ -230,25 +196,7 @@ static void eb_pose_from_look(const eb_look_t *look, float t_ms, float openness,
     }
 }
 
-/* ---------------------------------------------------------------------------
- * Geometry: body outline, silhouette table and the sphere-projected eyes.
- * ------------------------------------------------------------------------- */
-
-/* Transform a source point (x100 fixed point) through the body pose. */
-static inline void body_point(const eb_pose_t *pose, const eb_shape_t *shape,
-                              float *sx, float *sy, float *dx, float *dy)
-{
-    const float x = *sx - eb_head_c;
-    const float y = *sy - eb_head_c;
-    const float c = cosf(pose->body_rotate * EB_PI / 180.0f);
-    const float s = sinf(pose->body_rotate * EB_PI / 180.0f);
-    const float k = pose->body_scale;
-    *dx = eb_head_c + (x * c - y * s) * k + pose->body_x;
-    *dy = eb_head_c + (x * s + y * c) * k + pose->body_y;
-    (void)shape;
-}
-
-/* Scanline polygon fill, used for both the body and the eye rings. */
+/* Scanline polygon fill for the eye rings. */
 static void fill_polygon(eb_surface_t *surf, const float *xs, const float *ys, int n,
                          uint16_t color)
 {
@@ -293,67 +241,6 @@ static void fill_polygon(eb_surface_t *surf, const float *xs, const float *ys, i
         }
     }
 }
-/* Silhouette table: per 2-unit row, the body's left/right extremes. Mirrors
-   ball.js building silRows from the head ring. */
-typedef struct {
-    float min_y;
-    float max_y;
-    float step;
-    int rows;
-    float lo[128];
-    float hi[128];
-} eb_sil_t;
-
-static void eb_sil_build(eb_sil_t *sil, const float *body_x, const float *body_y, int n)
-{
-    if (n <= 0) {
-        memset(sil, 0, sizeof(*sil));
-        return;
-    }
-    float mn = body_y[0], mx = body_y[0];
-    for (int i = 1; i < n; ++i) {
-        mn = body_y[i] < mn ? body_y[i] : mn;
-        mx = body_y[i] > mx ? body_y[i] : mx;
-    }
-    sil->min_y = mn;
-    sil->max_y = mx;
-    sil->step = 2.0f;
-    int rows = (int)((mx - mn) / sil->step) + 1;
-    if (rows > 128) {
-        rows = 128;
-    }
-    sil->rows = rows;
-    for (int r = 0; r < rows; ++r) {
-        const float y = mn + (float)r * sil->step;
-        float lo = 1e9f, hi = -1e9f;
-        for (int i = 0; i < n; ++i) {
-            const int j = (i + 1) % n;
-            const float y0 = body_y[i], y1 = body_y[j];
-            if ((y0 <= y && y1 >= y) || (y1 <= y && y0 >= y)) {
-                const float t = (y1 == y0) ? 0.0f : (y - y0) / (y1 - y0);
-                const float x = body_x[i] + (body_x[j] - body_x[i]) * t;
-                lo = x < lo ? x : lo;
-                hi = x > hi ? x : hi;
-            }
-        }
-        if (lo > hi) {
-            lo = eb_head_c - 4.0f;
-            hi = eb_head_c + 4.0f;
-        }
-        sil->lo[r] = lo;
-        sil->hi[r] = hi;
-    }
-}
-
-static void eb_sil_at(const eb_sil_t *sil, float y, float *lo, float *hi)
-{
-    const float clamped = clampf(y, sil->min_y, sil->max_y);
-    int r = (int)((clamped - sil->min_y) / sil->step + 0.5f);
-    r = clampi(r, 0, sil->rows - 1);
-    *lo = sil->lo[r];
-    *hi = sil->hi[r];
-}
-
 static void eb_centroid(const int16_t *ring, float *cx, float *cy)
 {
     const uint16_t n = emotion_geometry_ring_points();
@@ -366,125 +253,98 @@ static void eb_centroid(const int16_t *ring, float *cx, float *cy)
     *cy = y / (float)n;
 }
 
-/* Project one eye ring using the exact ball.js setEye maths, returning the
-   transformed outline in screen space. Returns false when the eye rotates
-   past the sphere's terminator and must be hidden. */
-static bool eb_eye_points(const eb_pose_t *pose, const eb_shape_t *shape,
-                          const int16_t *ring, int slot, const eb_sil_t *sil,
-                          float scale, float offset_x, float offset_y,
-                          float *sx_out, float *sy_out)
+/* Place one expression ring directly on the screen. The ring supplies only
+   the eye's shape; all horizontal and vertical layout is done in screen
+   space, independent of the removed body silhouette. */
+static void eb_eye_points(const eb_pose_t *pose, const eb_shape_t *shape,
+                          const int16_t *ring, int slot, float size,
+                          float eye_scale, float *sx_out, float *sy_out)
 {
     const uint16_t n = emotion_geometry_ring_points();
     float base_x, base_y;
     eb_centroid(ring, &base_x, &base_y);
 
     const float open = clampf(pose->openness, 0.02f, 2.4f);
-    const float sy = clampf(pose->eye_scale_y[slot] * open * shape->face.eye, 0.02f, 2.4f);
-    const float sx_base = pose->eye_scale_x[slot] * shape->face.eye;
+    const float eye_shape_scale = clampf(shape->face.eye, 0.68f, 1.08f);
+    float local_scale = eye_scale * eye_shape_scale;
 
-    const float half_h = eb_eye_half * sy + 2.0f;
-    float ey0 = eb_head_c + shape->face.y + (base_y - eb_head_c) * shape->face.sy +
-                pose->eye_y[slot] + pose->eye_look_y[slot];
-    ey0 = clampf(ey0, sil->min_y + half_h, sil->max_y - half_h);
-
-    float sil_lo, sil_hi;
-    eb_sil_at(sil, ey0, &sil_lo, &sil_hi);
-    const float cx0 = (sil_lo + sil_hi) * 0.5f;
-    const float hw = fmaxf((sil_hi - sil_lo) * 0.5f, 12.0f);
-
-    const float ox = shape->face.x + (base_x - eb_head_c) * shape->face.sx +
-                     pose->eye_x[slot] + pose->eye_look_x[slot];
-    const float theta = clampf(ox / hw, -1.15f, 1.15f);
-    const float cn = cosf(theta);
-    if (cn <= 0.02f) {
-        return false;
+    /* Keep the widest expression rings inside the round panel without making
+       the common expressions smaller. */
+    float min_ring_x = (float)ring[0] / 100.0f;
+    float max_ring_x = min_ring_x;
+    float min_ring_y = (float)ring[1] / 100.0f;
+    float max_ring_y = min_ring_y;
+    for (uint16_t i = 1; i < n; ++i) {
+        const float px = (float)ring[i * 2] / 100.0f;
+        const float py = (float)ring[i * 2 + 1] / 100.0f;
+        min_ring_x = px < min_ring_x ? px : min_ring_x;
+        max_ring_x = px > max_ring_x ? px : max_ring_x;
+        min_ring_y = py < min_ring_y ? py : min_ring_y;
+        max_ring_y = py > max_ring_y ? py : max_ring_y;
     }
-    const float ex = cx0 + hw * sinf(theta) * 0.985f;
-    const float dyn = (ey0 - eb_head_c) / 130.0f;
-    const float fy = sqrtf(1.0f - dyn * dyn * 0.22f);
+    const float extent = fmaxf(max_ring_x - min_ring_x, max_ring_y - min_ring_y);
+    const float max_extent = size * 0.44f;
+    if (extent * local_scale > max_extent) {
+        local_scale = max_extent / fmaxf(extent, 0.001f);
+    }
+
+    const float body_scale = clampf(pose->body_scale, 0.86f, 1.14f);
+    const float base_eye_x = slot == 1 ? size * 0.315f : size * 0.685f;
+    const float base_eye_y = size * 0.44f;
+    const float body_dx = pose->body_x * eye_scale * 0.55f;
+    const float body_dy = pose->body_y * eye_scale * 0.55f;
+    const float motion_x = (pose->eye_x[slot] + pose->eye_look_x[slot]) * eye_scale * 0.8f;
+    const float motion_y = (pose->eye_y[slot] + pose->eye_look_y[slot]) * eye_scale * 0.8f;
+
+    float ex = size * 0.5f + (base_eye_x - size * 0.5f) * body_scale + body_dx + motion_x;
+    float ey = base_eye_y + body_dy + motion_y;
+
+    /* The panel colour does not move, but a little of the body rotation is
+       kept as a face tilt so the expressions still have personality. */
+    const float body_rot = pose->body_rotate * EB_PI / 180.0f * 0.30f;
+    if (fabsf(body_rot) > 0.0001f) {
+        const float dx = ex - size * 0.5f;
+        const float dy = ey - size * 0.5f;
+        const float cr = cosf(body_rot);
+        const float sr = sinf(body_rot);
+        ex = size * 0.5f + dx * cr - dy * sr;
+        ey = size * 0.5f + dx * sr + dy * cr;
+    }
+
+    ex = clampf(ex, size * 0.10f, size * 0.90f);
+    ey = clampf(ey, size * 0.12f, size * 0.88f);
 
     const float rot = pose->eye_rotate[slot] * EB_PI / 180.0f;
     const float cr = cosf(rot), sr = sinf(rot);
-    const float sx = sx_base * cn;
-    const float syy = sy * fy;
+    const float sx = local_scale * clampf(pose->eye_scale_x[slot], 0.2f, 2.2f);
+    const float sy = local_scale * clampf(pose->eye_scale_y[slot], 0.2f, 2.2f) * open;
     for (uint16_t i = 0; i < n; ++i) {
         const float px = (float)ring[i * 2] / 100.0f - base_x;
         const float py = (float)ring[i * 2 + 1] / 100.0f - base_y;
         const float rx = px * sx;
-        const float ry = py * syy;
+        const float ry = py * sy;
         const float tx = rx * cr - ry * sr;
         const float ty = rx * sr + ry * cr;
-        sx_out[i] = (ex + tx + offset_x) * scale;
-        sy_out[i] = (ey0 + ty + offset_y) * scale;
+        sx_out[i] = ex + tx;
+        sy_out[i] = ey + ty;
     }
-    return true;
 }
-/* Body radial gradient matching the upstream SVG (cx 38%, cy 32%, r 75%):
-   shade(+0.22) -> base at 62% -> shade(-0.12) at 100%. */
-static void eb_fill_body(eb_surface_t *surf, const float *bx, const float *by, int n,
-                         const eb_shape_t *shape, uint32_t body_rgb, float scale,
-                         float offset_x, float offset_y)
+
+/* The round panel is the face, so the body colour is a flat full-screen fill.
+   No silhouette, radial highlight, or edge vignette belongs here. */
+static void eb_fill_body(eb_surface_t *surf, uint32_t body_rgb)
 {
-    const uint16_t c0 = shade565(body_rgb, 0.22f);
-    const uint16_t c1 = rgb565(c8(body_rgb, 16), c8(body_rgb, 8), c8(body_rgb, 0));
-    const uint16_t c2 = shade565(body_rgb, -0.12f);
-
-    const float gx = (eb_head_c + (0.38f - 0.5f) * eb_view_span + offset_x) * scale;
-    const float gy = (eb_head_c + (0.32f - 0.5f) * eb_view_span + offset_y) * scale;
-    const float gr = 0.75f * eb_view_span * scale;
-
-    float ymin = by[0], ymax = by[0];
-    for (int i = 1; i < n; ++i) {
-        ymin = by[i] < ymin ? by[i] : ymin;
-        ymax = by[i] > ymax ? by[i] : ymax;
+    const uint16_t color565 = rgb565(c8(body_rgb, 16), c8(body_rgb, 8), c8(body_rgb, 0));
+    const size_t total = (size_t)surf->size * (size_t)surf->size;
+    const uint32_t color32 = (uint32_t)color565 | ((uint32_t)color565 << 16);
+    uint32_t *dst32 = (uint32_t *)surf->px;
+    const size_t pairs = total / 2u;
+    for (size_t i = 0; i < pairs; ++i) {
+        dst32[i] = color32;
     }
-    const int y0 = clampi((int)floorf(ymin), 0, surf->size - 1);
-    const int y1 = clampi((int)ceilf(ymax), 0, surf->size - 1);
-    float xint[EB_MAX_POINTS];
-    for (int y = y0; y <= y1; ++y) {
-        const float scan = (float)y + 0.5f;
-        int count = 0;
-        for (int i = 0; i < n; ++i) {
-            const int j = (i + 1) % n;
-            const float ay = by[i], b_y = by[j];
-            if ((ay <= scan && b_y > scan) || (b_y <= scan && ay > scan)) {
-                if (count < EB_MAX_POINTS) {
-                    xint[count++] = bx[i] + (scan - ay) / (b_y - ay) * (bx[j] - bx[i]);
-                }
-            }
-        }
-        if (count < 2) {
-            continue;
-        }
-        for (int a = 1; a < count; ++a) {
-            const float key = xint[a];
-            int b = a - 1;
-            while (b >= 0 && xint[b] > key) {
-                xint[b + 1] = xint[b];
-                --b;
-            }
-            xint[b + 1] = key;
-        }
-        for (int a = 0; a + 1 < count; a += 2) {
-            const int xa = clampi((int)ceilf(xint[a] - 0.5f), 0, surf->size - 1);
-            const int xb = clampi((int)floorf(xint[a + 1] - 0.5f), 0, surf->size - 1);
-            for (int x = xa; x <= xb; ++x) {
-                const float dx = (float)x + 0.5f - gx;
-                const float dy = (float)y + 0.5f - gy;
-                const float d = sqrtf(dx * dx + dy * dy);
-                uint16_t c;
-                if (d >= gr) {
-                    c = c2;
-                } else if (d >= gr * 0.62f) {
-                    c = lerp565(c1, c2, (d - gr * 0.62f) / (gr * 0.38f));
-                } else {
-                    c = lerp565(c0, c1, d / (gr * 0.62f));
-                }
-                put_px(surf, x, y, c);
-            }
-        }
+    if ((total & 1u) != 0u) {
+        surf->px[total - 1u] = color565;
     }
-    (void)shape;
 }
 
 /* -- public API ------------------------------------------------------------ */
@@ -581,9 +441,6 @@ static const eb_look_t *resolve_look(const emotion_def_t *def)
  * Frame compositor: assemble one pose and rasterise it into the canvas.
  * ------------------------------------------------------------------------- */
 
-#define EB_FACE_BBOX_SPAN 228.54f
-#define EB_BODY_DIAMETER_RATIO (400.0f / 466.0f)
-#define EB_BODY_CENTRE_OFFSET (-6.0f)
 #define EB_BLINK_DURATION_MS 170.0f
 
 /* The upstream engine walks its expression pool on a random interval between
@@ -630,17 +487,7 @@ void emotion_render_update(emotion_render_t *render,
     const eb_shape_t *shape = emotion_geometry_shape(render->shape_index);
     const uint32_t now_ms = lv_tick_get();
 
-    /* Map the 259-unit upstream viewBox onto the canvas. The head ring spans
-       228.54 units; rendering it at 400 px on a 466 px panel leaves a small
-       rim for the status pill without shrinking the face. */
     const float size = (float)render->size;
-    const float diameter = size * EB_BODY_DIAMETER_RATIO;
-    const float scale = diameter / EB_FACE_BBOX_SPAN;
-    const float stage = 259.0f * scale;
-    const float left = (size - stage) * 0.5f;
-    const float top = left + EB_BODY_CENTRE_OFFSET;
-    const float offset_x = 15.0f + left / scale;
-    const float offset_y = 15.0f + top / scale;
 
     /* Viewer gaze is expressed in normalised units; upstream clamps the look
        offset to +/-24 horizontal and +/-15 vertical viewBox units. */
@@ -660,36 +507,12 @@ void emotion_render_update(emotion_render_t *render,
     eb_surface_t surface;
     surface.px = (uint16_t *)render->buffer;
     surface.size = render->size;
-    memset(surface.px, 0, (size_t)render->size * (size_t)render->size * sizeof(uint16_t));
-
-    /* Body: the silhouette lookup stays in raw viewBox space (it drives the
-       eye clamp), while the drawn outline carries the pose transform. */
-    const uint16_t body_points = shape->body_points;
-    float body_vx[EB_MAX_POINTS] = {0};
-    float body_vy[EB_MAX_POINTS] = {0};
-    float body_px[EB_MAX_POINTS] = {0};
-    float body_py[EB_MAX_POINTS] = {0};
-    for (uint16_t i = 0; i < body_points; ++i) {
-        body_vx[i] = (float)shape->ring[i * 2u] / 100.0f;
-        body_vy[i] = (float)shape->ring[i * 2u + 1u] / 100.0f;
-        float vx = body_vx[i];
-        float vy = body_vy[i];
-        float dx = 0.0f;
-        float dy = 0.0f;
-        body_point(&pose, shape, &vx, &vy, &dx, &dy);
-        body_px[i] = (dx + offset_x) * scale;
-        body_py[i] = (dy + offset_y) * scale;
-    }
-
-    eb_sil_t silhouette;
-    eb_sil_build(&silhouette, body_vx, body_vy, body_points);
 
     uint32_t body_rgb = pack->body_color;
     if (look->color_index != EB_NO_COLOR) {
         body_rgb = emotion_geometry_body_colors()[look->color_index];
     }
-    eb_fill_body(&surface, body_px, body_py, body_points, shape, body_rgb,
-                 scale, offset_x, offset_y);
+    eb_fill_body(&surface, body_rgb);
 
     /* Eyes: the pool rotates the expression ring; each eye owns slot 1 or 2
        after the compositor folded the shared "both" spec into it. */
@@ -698,15 +521,15 @@ void emotion_render_update(emotion_render_t *render,
                                       c8(pack->eye_color, 8),
                                       c8(pack->eye_color, 0));
     const uint16_t ring_points = emotion_geometry_ring_points();
+    /* Ring units are roughly 100 across; scale them into the round panel. */
+    const float eye_scale = size * 0.0043f;
     float eye_x[EB_MAX_POINTS];
     float eye_y[EB_MAX_POINTS];
     for (int eye = 0; eye < 2; ++eye) {
         const int16_t *ring = emotion_geometry_ring(expression, (uint8_t)eye);
         const int slot = eye == 0 ? 1 : 2;
-        if (eb_eye_points(&pose, shape, ring, slot, &silhouette, scale,
-                          offset_x, offset_y, eye_x, eye_y)) {
-            fill_polygon(&surface, eye_x, eye_y, ring_points, eye_color);
-        }
+        eb_eye_points(&pose, shape, ring, slot, size, eye_scale, eye_x, eye_y);
+        fill_polygon(&surface, eye_x, eye_y, ring_points, eye_color);
     }
 
     lv_obj_invalidate(render->canvas);

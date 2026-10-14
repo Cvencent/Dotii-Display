@@ -1395,42 +1395,39 @@ static void build_xiaozhi(void)
     lv_obj_set_size(content, SCREEN_SIZE, SCREEN_SIZE);
     lv_obj_center(content);
     lv_obj_remove_flag(content, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_remove_flag(content, LV_OBJ_FLAG_CLICKABLE);
-    /* Round-screen layout: a 360 px face keeps the panel's dominant visual,
-       while the title and a two-row status card sit inside the top and bottom
-       arcs so no text lands on the eyes or the body silhouette. */
+    /* The Xiaozhi page is an immersive face: the character fills the whole
+       466 px round panel, so the bezel itself becomes the face outline. No
+       title sits on top; the status pill only appears when there is something
+       worth saying (pairing code, error, or an active session). */
     lv_obj_t *face = lv_obj_create(content);
     lv_obj_remove_style_all(face);
-    lv_obj_set_size(face, 380, 380);
-    lv_obj_align(face, LV_ALIGN_TOP_MID, 0, 20);
+    lv_obj_set_size(face, SCREEN_SIZE, SCREEN_SIZE);
+    lv_obj_center(face);
     lv_obj_remove_flag(face, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_remove_flag(face, LV_OBJ_FLAG_CLICKABLE);
-    emotion_render_attach(&s_xiaozhi_render, face, 380);
-
-    lv_obj_t *title = make_label(content, "小智", &ui_font_cjk_28, COLOR_TEXT);
-    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 2);
+    emotion_render_attach(&s_xiaozhi_render, face, SCREEN_SIZE);
 
     s_xiaozhi_status_pill = lv_obj_create(content);
-    lv_obj_set_size(s_xiaozhi_status_pill, 216, 60);
-    lv_obj_set_style_radius(s_xiaozhi_status_pill, 26, 0);
-    lv_obj_set_style_bg_color(s_xiaozhi_status_pill, color(0x0B1113), 0);
-    lv_obj_set_style_bg_opa(s_xiaozhi_status_pill, LV_OPA_70, 0);
-    lv_obj_set_style_border_width(s_xiaozhi_status_pill, 1, 0);
-    lv_obj_set_style_border_color(s_xiaozhi_status_pill, color(0x1E2A2E), 0);
-    lv_obj_set_style_pad_row(s_xiaozhi_status_pill, 5, 0);
-    lv_obj_set_style_pad_all(s_xiaozhi_status_pill, 6, 0);
+    lv_obj_set_size(s_xiaozhi_status_pill, 252, 56);
+    lv_obj_set_style_radius(s_xiaozhi_status_pill, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_color(s_xiaozhi_status_pill, color(0x05090A), 0);
+    lv_obj_set_style_bg_opa(s_xiaozhi_status_pill, LV_OPA_60, 0);
+    lv_obj_set_style_border_width(s_xiaozhi_status_pill, 0, 0);
+    lv_obj_set_style_pad_row(s_xiaozhi_status_pill, 3, 0);
+    lv_obj_set_style_pad_all(s_xiaozhi_status_pill, 7, 0);
     lv_obj_set_layout(s_xiaozhi_status_pill, LV_LAYOUT_FLEX);
     lv_obj_set_flex_flow(s_xiaozhi_status_pill, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(s_xiaozhi_status_pill, LV_FLEX_ALIGN_CENTER,
                           LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_remove_flag(s_xiaozhi_status_pill, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_remove_flag(s_xiaozhi_status_pill, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_align(s_xiaozhi_status_pill, LV_ALIGN_BOTTOM_MID, 0, -26);
+    lv_obj_align(s_xiaozhi_status_pill, LV_ALIGN_BOTTOM_MID, 0, -46);
+    lv_obj_add_flag(s_xiaozhi_status_pill, LV_OBJ_FLAG_HIDDEN);
 
     /* Row 1: connection dot, session state, current expression. */
     lv_obj_t *status_row = lv_obj_create(s_xiaozhi_status_pill);
     lv_obj_remove_style_all(status_row);
-    lv_obj_set_size(status_row, 204, 22);
+    lv_obj_set_size(status_row, 236, 20);
     lv_obj_set_layout(status_row, LV_LAYOUT_FLEX);
     lv_obj_set_flex_flow(status_row, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(status_row, LV_FLEX_ALIGN_CENTER,
@@ -1444,18 +1441,18 @@ static void build_xiaozhi(void)
     lv_obj_set_style_radius(s_xiaozhi_status_dot, LV_RADIUS_CIRCLE, 0);
     lv_obj_set_style_bg_opa(s_xiaozhi_status_dot, LV_OPA_COVER, 0);
     s_xiaozhi_status = make_label(status_row, "未连接", &ui_font_cjk_20, COLOR_MUTED);
-    lv_obj_set_width(s_xiaozhi_status, 74);
+    lv_obj_set_width(s_xiaozhi_status, 80);
     lv_label_set_long_mode(s_xiaozhi_status, LV_LABEL_LONG_DOT);
     lv_obj_set_style_text_align(s_xiaozhi_status, LV_TEXT_ALIGN_CENTER, 0);
     s_xiaozhi_emotion = make_label(status_row, "等待配对", &ui_font_cjk_20, COLOR_TEXT);
-    lv_obj_set_width(s_xiaozhi_emotion, 116);
+    lv_obj_set_width(s_xiaozhi_emotion, 148);
     lv_label_set_long_mode(s_xiaozhi_emotion, LV_LABEL_LONG_DOT);
     lv_obj_set_style_text_align(s_xiaozhi_emotion, LV_TEXT_ALIGN_CENTER, 0);
 
     /* Row 2: clock and server hint. */
     lv_obj_t *server_row = lv_obj_create(s_xiaozhi_status_pill);
     lv_obj_remove_style_all(server_row);
-    lv_obj_set_size(server_row, 204, 22);
+    lv_obj_set_size(server_row, 236, 20);
     lv_obj_set_layout(server_row, LV_LAYOUT_FLEX);
     lv_obj_set_flex_flow(server_row, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(server_row, LV_FLEX_ALIGN_CENTER,
@@ -1464,14 +1461,13 @@ static void build_xiaozhi(void)
     lv_obj_remove_flag(server_row, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_remove_flag(server_row, LV_OBJ_FLAG_CLICKABLE);
     s_time_xiaozhi = make_label(server_row, "--:--", &lv_font_montserrat_20, COLOR_MUTED);
-    lv_obj_set_width(s_time_xiaozhi, 40);
+    lv_obj_set_width(s_time_xiaozhi, 44);
     lv_label_set_long_mode(s_time_xiaozhi, LV_LABEL_LONG_CLIP);
     lv_obj_set_style_text_align(s_time_xiaozhi, LV_TEXT_ALIGN_CENTER, 0);
     s_xiaozhi_server = make_label(server_row, "等待服务连接", &ui_font_cjk_20, COLOR_MUTED);
-    lv_obj_set_width(s_xiaozhi_server, 154);
+    lv_obj_set_width(s_xiaozhi_server, 186);
     lv_label_set_long_mode(s_xiaozhi_server, LV_LABEL_LONG_DOT);
     lv_obj_set_style_text_align(s_xiaozhi_server, LV_TEXT_ALIGN_CENTER, 0);
-    make_page_dots(content, 1);
 }
 
 static void build_custom(void)
@@ -2196,20 +2192,34 @@ static void update_snapshot(const codex_snapshot_t *snapshot)
     lv_obj_set_style_bg_color(s_xiaozhi_status_pill, color(xiaozhi_color), 0);
     lv_obj_set_style_arc_color(s_xiaozhi_status_pill, color(xiaozhi_color), 0);
     const char *activation_code = xiaozhi_client_activation_code(&s_xiaozhi);
+    const bool xiaozhi_busy =
+        xiaozhi_session == XIAOZHI_STATE_LISTENING ||
+        xiaozhi_session == XIAOZHI_STATE_THINKING ||
+        xiaozhi_session == XIAOZHI_STATE_SPEAKING;
+    /* The face owns the whole panel. A normal connected session is expressed
+       through the eyes, so the pill only appears when the user actually has
+       something to read or act on: a pairing code or a connection error. */
+    const bool xiaozhi_pill_visible =
+        activation_code != NULL || xiaozhi_session == XIAOZHI_STATE_ERROR;
+    if (xiaozhi_pill_visible) {
+        lv_obj_remove_flag(s_xiaozhi_status_pill, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_add_flag(s_xiaozhi_status_pill, LV_OBJ_FLAG_HIDDEN);
+    }
     if (activation_code != NULL) {
         /* Pairing needs the widest single hint row we have. */
         lv_obj_add_flag(s_time_xiaozhi, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_set_width(s_xiaozhi_server, 204);
+        lv_obj_set_width(s_xiaozhi_server, 236);
         lv_label_set_text_fmt(s_xiaozhi_emotion, "配对码 %s", activation_code);
         lv_label_set_text(s_xiaozhi_server, "xiaozhi.me 输入设备码");
-    } else if (s_xiaozhi.connected) {
+    } else if (xiaozhi_busy) {
         lv_obj_remove_flag(s_time_xiaozhi, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_set_width(s_xiaozhi_server, 154);
-        lv_label_set_text(s_xiaozhi_server, "长按说话，松开发送");
+        lv_obj_set_width(s_xiaozhi_server, 186);
+        lv_label_set_text(s_xiaozhi_server, s_xiaozhi.connected ? "长按说话，松开发送" : "等待小智服务连接");
     } else {
         lv_obj_remove_flag(s_time_xiaozhi, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_set_width(s_xiaozhi_server, 154);
-        lv_label_set_text(s_xiaozhi_server, "等待小智服务连接");
+        lv_obj_set_width(s_xiaozhi_server, 186);
+        lv_label_set_text(s_xiaozhi_server, "长按说话");
     }
     const bool xiaozhi_wants_run = snapshot->xiaozhi_enabled &&
                                    snapshot->xiaozhi_server_url[0] != '\0';
@@ -2353,8 +2363,14 @@ static void ui_timer(lv_timer_t *timer)
     }
     const uint32_t active_screen_off_timeout = s_external_power ?
         s_charging_screen_off_timeout_seconds : s_screen_off_timeout_seconds;
-    const uint32_t active_sleep_timeout = s_external_power ?
+    /* Docked (USB powered) is always network-resident: the panel may still
+       follow the screen-off timeout, but deep sleep stays disabled no matter
+       what the stored profile or the management center asks for. Deep sleep
+       drops the USB serial port and takes Wi-Fi, BLE and CodexBridge offline,
+       which is never what a plugged-in desk device should do. */
+    uint32_t active_sleep_timeout = s_external_power ?
         s_charging_sleep_timeout_seconds : s_sleep_timeout_seconds;
+    if (s_external_power) active_sleep_timeout = 0;
     if (s_screen_on && !s_screen_saver_active && active_screen_off_timeout > 0 &&
         inactive_ms > active_screen_off_timeout * 1000U) {
         if (!enter_screen_saver()) screen_off();
