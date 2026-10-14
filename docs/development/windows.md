@@ -50,12 +50,12 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\packaging\build_windows.ps
 
 1. 检查固件、管理中心和两个 EXE 的版本一致。
 2. 检查管理页面、托盘、登录启动、后台退出和 `/health`。
-3. 校验发布目录 `SHA256SUMS.txt` 和便携 ZIP 的 SHA-256。
-4. 在新的 Windows 用户目录中解压并启动。
+3. 校验发布目录 `SHA256SUMS.txt`、安装程序和便携 ZIP 的 SHA-256。
+4. 在新的 Windows 用户目录中安装并启动，同时验证托盘“关于”显示正确版本。
 5. 验证 USB 烧录、BLE 配网、重置后的配对恢复、Codex 与 Bambu 真实功能。
 6. 检查固定工具链与第三方许可证。
 
-安装 Inno Setup 时，以 `/DAppVersion=<版本>` 编译 `packaging/DotiiManagementCenter.iss`。打包脚本从固件版本派生发布版本，并拒绝不一致的版本参数。
+打包脚本会自动调用 Inno Setup，以 `/DAppVersion=<版本>` 编译 `packaging/DotiiManagementCenter.iss`，生成 `release\Dotii-Setup-<版本>.exe`。简体中文语言文件随仓库保存在 `packaging\languages`；没有 Inno Setup 时可用 `-SkipInstaller` 只生成便携版。打包脚本从固件版本派生发布版本，并拒绝不一致的版本参数。
 
 `packaging/DotiiBridge.spec` 必须使用 `collect_data_files("esptool")` 收集 flasher stub JSON。后台桥接使用控制台型 PyInstaller bootloader，但由托盘程序以 `CREATE_NO_WINDOW` 隐藏启动，确保 esptool 可以回传进度且不会弹出未处理异常窗口。
 

@@ -1,6 +1,6 @@
 # Dotii 桌面交互屏
 
-Dotii 是一套由 ESP32-S3 圆形 AMOLED 桌面屏、CodexBridge 与小智 AI 组成的开源桌面对话终端。设备固件原生运行小智语音助手，内置可切换形象与表情状态机，既能随对话与触摸切换表情，也能显示 Codex 状态。CodexBridge 是常驻托盘、以通用设备协议提供 Codex 额度、近 7 日 Token、任务状态与多设备已读同步的桥接器；Dotii 管理中心则是独立的按需 EXE，只管小智连接、小智表情、自定义页面、显示设置、BLE 配网与烧录。
+Dotii 是一套由 ESP32-S3 圆形 AMOLED 桌面屏、CodexBridge 与小智 AI 组成的开源桌面对话终端。设备固件原生运行小智语音助手，内置可切换形象与表情状态机，既能随对话与触摸切换表情，也能显示 Codex 状态。CodexBridge 是常驻托盘、以通用设备协议提供 Codex 额度、近 7 日 Token、任务状态与多设备已读同步的桥接器；Dotii 管理中心是可安装到本机的独立后台程序，只管小智连接、小智表情、自定义页面、显示设置、BLE 配网与烧录。
 
 ![Dotii 桌面交互屏产品渲染图](assets/dotii-product-render.png)
 
@@ -29,14 +29,14 @@ macOS 预览版目前不支持 Intel Mac。由于尚未经过苹果公证，首�
 ## Windows 快速上手
 
 1. 从 [CodexBridge Releases](https://github.com/Cvencent/CodexBridge/releases) 下载并运行 `CodexBridge.exe`。它是常驻系统托盘的 Codex 桥接器，负责 Codex 采集与设备协议，默认管理接口为 `http://127.0.0.1:8788`。
-2. 打开 `DotiiManagementCenter.exe`（从本仓库 Releases 下载，按需启动、关闭即退出）。它与 CodexBridge 是两个独立 EXE，只负责设备管理。
+2. 从本仓库 Releases 下载 `Dotii-Setup-1.1.3.exe` 并安装到本机；也可以继续使用便携版。它与 CodexBridge 是两个独立程序，只负责设备管理。安装后可在系统托盘右键选择“关于 Dotii 管理中心”查看版本。
 3. 用 USB 线连接 Dotii，在管理中心“设置”中识别设备。首次使用时可通过“一键烧录”写入随包固件。
 4. 使用蓝牙配网，将 2.4 GHz Wi-Fi 同步到 Dotii，并写入与 CodexBridge 配对的设备令牌。
 5. 在管理中心“小智”中填写小智服务端地址与唤醒词，设备即可直接进行语音对话。
 6. 在 CodexBridge 托盘中按设备启用 `quota` 能力，Codex 额度与近 7 日 Token 会通过通用协议下发到设备。
-`CodexBridge.exe` 常驻托盘，负责 Codex 采集、统一协议、设备能力开关与已读同步；`DotiiManagementCenter.exe` 按需启动，负责刷机、蓝牙配网、小智、表情与显示设置，关闭后不常驻。
+`CodexBridge.exe` 常驻托盘，负责 Codex 采集、统一协议、设备能力开关与已读同步；`DotiiManagementCenter.exe` 负责刷机、蓝牙配网、小智、表情与显示设置，关闭后不常驻。Windows 安装版默认安装在 `%LOCALAPPDATA%\Programs\Dotii Management Center`，并提供开始菜单、桌面快捷方式和卸载入口。
 
-### 更新 Windows 便携包
+### 更新 Windows 管理中心
 
 先从系统托盘彻底退出旧版 CodexBridge，安装新版；再单独更新 `DotiiManagementCenter.exe`。CodexBridge 的设备配对、能力与语音设置保存在 `%LOCALAPPDATA%\CodexBridge`；Dotii 的小智连接、小智表情、自定义页、显示、配网与烧录配置继续保存在 `%LOCALAPPDATA%\StateDisplay`。若新版本包含 Dotii 固件更新，请在管理中心重新执行“一键烧录”。
 

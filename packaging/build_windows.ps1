@@ -1,6 +1,7 @@
 param(
     [string]$Version = "",
-    [switch]$Clean
+    [switch]$Clean,
+    [switch]$SkipInstaller
 )
 
 $ErrorActionPreference = "Stop"
@@ -132,3 +133,25 @@ $Checksums | Set-Content -LiteralPath (Join-Path $ReleaseRoot "SHA256SUMS.txt") 
 Compress-Archive -Path (Join-Path $ReleaseRoot "*") -DestinationPath $Archive -Force
 Get-FileHash -Algorithm SHA256 $Archive | Format-List
 Write-Host "Portable package created: $Archive"
+
+$Installer = Join-Path $ProjectRoot "release\Dotii-Setup-$Version.exe"
+if (-not $SkipInstaller) {
+    $IsccCandidates = @(
+        "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
+        "$env:ProgramFiles\Inno Setup 6\ISCC.exe",
+        "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe"
+    )
+    $Iscc = $IsccCandidates | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
+    if (-not $Iscc) {
+        throw "Inno Setup 6 compiler not found. Install Inno Setup or pass -SkipInstaller."
+    }
+    & $Iscc "/DAppVersion=$Version" "packaging\DotiiManagementCenter.iss"
+    if ($LASTEXITCODE -ne 0) {
+        throw "Inno Setup failed with exit code $LASTEXITCODE."
+    }
+    if (-not (Test-Path -LiteralPath $Installer -PathType Leaf)) {
+        throw "Inno Setup did not produce $Installer."
+    }
+    Get-FileHash -Algorithm SHA256 $Installer | Format-List
+    Write-Host "Installer created: $Installer"
+}

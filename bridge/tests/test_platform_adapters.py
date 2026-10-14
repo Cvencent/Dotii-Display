@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -25,6 +26,7 @@ from platforms.macos import MacOSPlatformAdapter, parse_serial_ports as parse_ma
 from platforms.windows import WindowsPlatformAdapter, parse_serial_ports  # noqa: E402
 from bluetooth_bridge import BluetoothBridge  # noqa: E402
 import runtime_paths  # noqa: E402
+import bridge_app  # noqa: E402
 
 
 class WindowsPlatformAdapterTests(unittest.TestCase):
@@ -58,6 +60,65 @@ class WindowsPlatformAdapterTests(unittest.TestCase):
         ports = parse_serial_ports(payload)
         self.assertEqual([item["port"] for item in ports], ["COM17", "COM8"])
         self.assertTrue(ports[0]["dotii"])
+
+
+@unittest.skipUnless(os.name == "nt", "Windows tray host only")
+class TrayHostTests(unittest.TestCase):
+    def _host(self) -> bridge_app.TrayHost:
+        host = object.__new__(bridge_app.TrayHost)
+        host.hwnd = 123
+        host.user32 = mock.Mock()
+        host.user32.CreatePopupMenu.return_value = 456
+        host.user32.AppendMenuW.return_value = True
+        host.user32.DestroyMenu.return_value = True
+        return host
+
+    def test_context_menu_contains_about_entry(self) -> None:
+        host = self._host()
+        host._create_menu()
+        labels = [
+            call.args[3]
+            for call in host.user32.AppendMenuW.call_args_list
+            if len(call.args) >= 4 and call.args[3]
+        ]
+        self.assertIn("关于 Dotii 管理中心", labels)
+
+    def test_about_dialog_reports_application_version(self) -> None:
+        host = self._host()
+        with mock.patch.object(bridge_app, "application_version", return_value="9.8.7"):
+            host._show_about()
+        dialog_text = host.user32.MessageBoxW.call_args.args[1]
+        self.assertIn("版本 9.8.7", dialog_text)
+
+
+class RuntimePathTests(unittest.TestCase):
+    def test_application_version_reads_cmake_project_version(self) -> None:
+        with tempfile.TemporaryDirectory(dir=BRIDGE.parent / ".codx") as temporary:
+            root = Path(temporary)
+            (root / "CMakeLists.txt").write_text(
+                'set(PROJECT_VER "9.8.7")',
+                encoding="utf-8",
+            )
+            with (
+                mock.patch.object(runtime_paths, "application_root", return_value=root),
+                mock.patch.object(runtime_paths, "bundle_root", return_value=root),
+                mock.patch.object(runtime_paths, "is_frozen", return_value=False),
+            ):
+                self.assertEqual(runtime_paths.application_version(), "9.8.7")
+
+    def test_application_version_falls_back_when_cmake_version_is_missing(self) -> None:
+        with tempfile.TemporaryDirectory(dir=BRIDGE.parent / ".codx") as temporary:
+            root = Path(temporary)
+            (root / "CMakeLists.txt").write_text(
+                "set(IDF_TARGET esp32s3)",
+                encoding="utf-8",
+            )
+            with (
+                mock.patch.object(runtime_paths, "application_root", return_value=root),
+                mock.patch.object(runtime_paths, "bundle_root", return_value=root),
+                mock.patch.object(runtime_paths, "is_frozen", return_value=False),
+            ):
+                self.assertEqual(runtime_paths.application_version(), "未知")
 
 
 class MacOSPlatformAdapterTests(unittest.TestCase):

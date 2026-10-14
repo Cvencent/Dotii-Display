@@ -17,7 +17,13 @@ from ctypes import wintypes
 from pathlib import Path
 
 from platforms import current_platform
-from runtime_paths import application_root, is_frozen, resource_path, runtime_folder
+from runtime_paths import (
+    application_root,
+    application_version,
+    is_frozen,
+    resource_path,
+    runtime_folder,
+)
 
 
 APP_NAME = "Dotii 管理中心"
@@ -49,6 +55,7 @@ LR_DEFAULTSIZE = 0x00000040
 CMD_OPEN = 1001
 CMD_LOG = 1002
 CMD_EXIT = 1003
+CMD_ABOUT = 1004
 ERROR_ALREADY_EXISTS = 183
 JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
 JOB_OBJECT_EXTENDED_LIMIT_INFORMATION_CLASS = 9
@@ -264,6 +271,15 @@ class TrayHost:
         except OSError:
             self.user32.MessageBoxW(self.hwnd, str(self.log_path), "日志文件", 0x40)
 
+    def _show_about(self) -> None:
+        self.user32.MessageBoxW(
+            self.hwnd,
+            f"{APP_NAME}\n版本 {application_version()}\n\n"
+            "https://github.com/Cvencent/Dotii-Display",
+            f"关于 {APP_NAME}",
+            0x40,
+        )
+
     def _load_icon(self) -> tuple[int, bool]:
         icon = self.user32.LoadImageW(
             None,
@@ -287,6 +303,8 @@ class TrayHost:
         entries = (
             (MF_STRING, CMD_OPEN, "打开 Dotii 管理中心"),
             (MF_STRING, CMD_LOG, "查看运行日志"),
+            (MF_SEPARATOR, 0, None),
+            (MF_STRING, CMD_ABOUT, "关于 Dotii 管理中心"),
             (MF_SEPARATOR, 0, None),
             (MF_STRING, CMD_EXIT, "退出 Dotii 管理中心"),
         )
@@ -316,6 +334,8 @@ class TrayHost:
             self._open_dashboard()
         elif command == CMD_LOG:
             self._open_log()
+        elif command == CMD_ABOUT:
+            self._show_about()
         elif command == CMD_EXIT:
             self.user32.DestroyWindow(self.hwnd)
 
