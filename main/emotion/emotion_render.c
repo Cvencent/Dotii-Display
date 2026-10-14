@@ -58,6 +58,34 @@ static inline void put_px(eb_surface_t *s, int x, int y, uint16_t c)
     s->px[(size_t)y * (size_t)s->size + (size_t)x] = c;
 }
 
+/* Blend into the existing RGB565 canvas. Eye polygons cover only a small part
+   of the panel, so this integer coverage blend is cheap enough to run at
+   animation rate and removes the hard, jagged polygon edges. */
+static inline void blend_px(eb_surface_t *s, int x, int y, uint16_t color, uint32_t alpha)
+{
+    if (x < 0 || y < 0 || x >= s->size || y >= s->size || alpha == 0u) {
+        return;
+    }
+    if (alpha >= 256u) {
+        s->px[(size_t)y * (size_t)s->size + (size_t)x] = color;
+        return;
+    }
+
+    const uint16_t dst = s->px[(size_t)y * (size_t)s->size + (size_t)x];
+    const uint32_t inv = 256u - alpha;
+    const uint32_t dr = (dst >> 11) & 0x1Fu;
+    const uint32_t dg = (dst >> 5) & 0x3Fu;
+    const uint32_t db = dst & 0x1Fu;
+    const uint32_t sr = (color >> 11) & 0x1Fu;
+    const uint32_t sg = (color >> 5) & 0x3Fu;
+    const uint32_t sb = color & 0x1Fu;
+    const uint32_t r = (dr * inv + sr * alpha + 128u) >> 8;
+    const uint32_t g = (dg * inv + sg * alpha + 128u) >> 8;
+    const uint32_t b = (db * inv + sb * alpha + 128u) >> 8;
+    s->px[(size_t)y * (size_t)s->size + (size_t)x] =
+        (uint16_t)((r << 11) | (g << 5) | b);
+}
+
 /* -- animation primitives (ported from engine.js ANIM_TYPES) ---------------- */
 
 typedef enum {
@@ -233,10 +261,21 @@ static void fill_polygon(eb_surface_t *surf, const float *xs, const float *ys, i
             xint[b + 1] = key;
         }
         for (int a = 0; a + 1 < count; a += 2) {
-            const int xa = clampi((int)ceilf(xint[a] - 0.5f), 0, surf->size - 1);
-            const int xb = clampi((int)floorf(xint[a + 1] - 0.5f), 0, surf->size - 1);
+            const float span_left = xint[a];
+            const float span_right = xint[a + 1];
+            const int xa = clampi((int)floorf(span_left), 0, surf->size - 1);
+            const int xb = clampi((int)ceilf(span_right) - 1, 0, surf->size - 1);
             for (int x = xa; x <= xb; ++x) {
-                put_px(surf, x, y, color);
+                /* Pixel x covers [x, x+1]. Full interior pixels take the
+                   direct path; only the two boundary pixels use blending. */
+                const float overlap_left = fmaxf(span_left, (float)x);
+                const float overlap_right = fminf(span_right, (float)x + 1.0f);
+                const float coverage = clampf(overlap_right - overlap_left, 0.0f, 1.0f);
+                if (coverage >= 0.999f) {
+                    put_px(surf, x, y, color);
+                } else if (coverage > 0.001f) {
+                    blend_px(surf, x, y, color, (uint32_t)(coverage * 256.0f + 0.5f));
+                }
             }
         }
     }

@@ -2361,8 +2361,11 @@ static void ui_timer(lv_timer_t *timer)
     if (s_ignore_next_dotii_click && inactive_ms > 1000) {
         s_ignore_next_dotii_click = false;
     }
+    /* Docked means the panel is on a desk with power attached. Treat it as an
+       always-visible desk device: do not enter the screen saver or blank the
+       panel. Wi-Fi, BLE and CodexBridge stay resident as before. */
     const uint32_t active_screen_off_timeout = s_external_power ?
-        s_charging_screen_off_timeout_seconds : s_screen_off_timeout_seconds;
+        0u : s_screen_off_timeout_seconds;
     /* Docked (USB powered) is always network-resident: the panel may still
        follow the screen-off timeout, but deep sleep stays disabled no matter
        what the stored profile or the management center asks for. Deep sleep
@@ -2411,8 +2414,8 @@ void state_ui_start(QueueHandle_t snapshot_queue)
     /* One-second updates are sufficient for the clock and avoid redrawing the
        full AMOLED frame twice for the same displayed second. */
     lv_timer_create(ui_timer, 1000, NULL);
-    /* The compact geometric character uses eight 100 ms phases. */
-    lv_timer_create(dotii_timer, 100, NULL);
+    /* 30 FPS keeps the eye motion fluid without overdriving the AMOLED. */
+    lv_timer_create(dotii_timer, 33, NULL);
 }
 
 void state_ui_button_a_short(void)
