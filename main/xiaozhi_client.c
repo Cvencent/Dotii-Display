@@ -52,6 +52,48 @@ static bool starts_with(const char *value, const char *prefix)
     return value != NULL && prefix != NULL && strncmp(value, prefix, strlen(prefix)) == 0;
 }
 
+/* The management center stores whatever address the user paired against, and
+   a websocket address is a common choice. The official activation flow always
+   needs the OTA endpoint, so a ws(s):// address is mapped back onto its OTA
+   counterpart instead of being treated as an already-paired session. */
+static bool derive_ota_url(const char *server, char *out, size_t capacity)
+{
+    if (server == NULL || out == NULL || capacity == 0) return false;
+    if (starts_with(server, "http://") || starts_with(server, "https://")) {
+        copy_bounded(out, capacity, server);
+        return out[0] != '\0';
+    }
+
+    const char *rest;
+    const char *scheme;
+    if (starts_with(server, "wss://")) {
+        rest = server + 6;
+        scheme = "https://";
+    } else if (starts_with(server, "ws://")) {
+        rest = server + 5;
+        scheme = "http://";
+    } else {
+        return false;
+    }
+    if (rest[0] == '\0') return false;
+
+    char base[192];
+    copy_bounded(base, sizeof(base), rest);
+    size_t length = strlen(base);
+    while (length > 0 && base[length - 1] == '/') base[--length] = '\0';
+    char *suffix = strrchr(base, '/');
+    if (suffix != NULL && strcmp(suffix, "/v1") == 0) {
+        *suffix = '\0';
+    }
+    if (base[0] == '\0') return false;
+
+    /* A bare host gets the official path; anything else keeps its own prefix. */
+    if (strchr(base, '/') == NULL) {
+        return snprintf(out, capacity, "%s%s/xiaozhi/ota/", scheme, base) > 0;
+    }
+    return snprintf(out, capacity, "%s%s/ota/", scheme, base) > 0;
+}
+
 static uint32_t now_ms(void)
 {
     return (uint32_t)(esp_timer_get_time() / 1000);
@@ -62,28 +104,66 @@ typedef struct {
     const char *id;
 } emotion_alias_t;
 
+/* English/label synonyms an LLM is likely to send, mapped onto the local
+   catalog. The catalog itself carries all 32 aora-bot expressions; this table
+   only widens what the model may call them. */
 static const emotion_alias_t k_emotion_aliases[] = {
+    { "sleeping", "00" },
+    { "sleep", "00" },
+    { "waking", "01" },
+    { "idle", "02" },
+    { "neutral", "02" },
+    { "curious", "03" },
+    { "spacing_out", "04" },
+    { "booting", "05" },
+    { "dormant", "06" },
+    { "shake_awake", "07" },
     { "happy", "10" },
     { "joy", "10" },
     { "excited", "10" },
+    { "smile", "10" },
     { "puzzled", "11" },
+    { "confused", "20" },
     { "sad", "12" },
     { "down", "12" },
+    { "unhappy", "12" },
     { "surprised", "13" },
     { "surprise", "13" },
     { "shy", "14" },
+    { "embarrassed", "14" },
     { "tired", "15" },
     { "sleepy", "15" },
+    { "exhausted", "15" },
     { "focused", "16" },
+    { "concentrating", "16" },
+    { "panicked", "17" },
+    { "panic", "17" },
+    { "resigned", "18" },
+    { "helpless", "18" },
+    { "satisfied", "19" },
+    { "content", "19" },
     { "angry", "21" },
+    { "mad", "21" },
     { "thinking", "30" },
+    { "receiving", "31" },
+    { "busy", "32" },
+    { "working", "32" },
     { "done", "33" },
     { "success", "33" },
+    { "completed", "33" },
     { "error", "34" },
+    { "failed", "34" },
     { "listening", "35" },
     { "loading", "36" },
+    { "connecting", "36" },
+    { "recalling", "37" },
+    { "refusing", "38" },
+    { "refused", "38" },
     { "replying", "39" },
     { "speaking", "39" },
+    { "searching", "40" },
+    { "powering_off", "41" },
+    { "stopping", "41" },
 };
 
 static const char *normalize_emotion(const char *name)
@@ -107,8 +187,14 @@ static void load_persisted(xiaozhi_client_t *client)
     (void)nvs_get_str(handle, "activation_code", client->activation_code, &length);
     length = sizeof(client->activation_message);
     (void)nvs_get_str(handle, "activation_msg", client->activation_message, &length);
+    uint8_t paired = 0;
+    if (nvs_get_u8(handle, "paired", &paired) != ESP_OK) paired = 0;
     nvs_close(handle);
-    client->activated = client->websocket_url[0] != '\0';
+    /* A websocket address alone does not mean the device is paired: older
+       firmware stored the endpoint before the user ever bound a code. Only an
+       explicit flag written after a bound OTA reply counts. Without it the
+       activation task asks the server again and puts the code back on screen. */
+    client->activated = paired != 0 && client->websocket_url[0] != '\0';
 }
 
 static void persist_activation(xiaozhi_client_t *client)
@@ -119,6 +205,7 @@ static void persist_activation(xiaozhi_client_t *client)
     (void)nvs_set_str(handle, "token", client->token);
     (void)nvs_set_str(handle, "activation_code", client->activation_code);
     (void)nvs_set_str(handle, "activation_msg", client->activation_message);
+    (void)nvs_set_u8(handle, "paired", client->activated ? 1 : 0);
     (void)nvs_commit(handle);
     nvs_close(handle);
 }
@@ -214,6 +301,7 @@ static void set_emotion(xiaozhi_client_t *client, const char *name)
     if (normalized == NULL) return;
     copy_bounded(client->last_emotion, sizeof(client->last_emotion), normalized);
     client->emotion_until_ms = now_ms() + 5000;
+    ESP_LOGI(TAG, "emotion -> %s (raw %s)", normalized, name);
 }
 
 static bool map_server_state(const char *value, xiaozhi_session_state_t *out)
@@ -335,12 +423,15 @@ static bool parse_ota_response(xiaozhi_client_t *client, const char *json)
     bool complete = false;
 
     const cJSON *activation = cJSON_GetObjectItemCaseSensitive(root, "activation");
+    bool activation_pending = false;
     if (cJSON_IsObject(activation)) {
         const cJSON *code = cJSON_GetObjectItemCaseSensitive(activation, "code");
         const cJSON *message = cJSON_GetObjectItemCaseSensitive(activation, "message");
         if (cJSON_IsString(code) && code->valuestring != NULL) {
             copy_bounded(client->activation_code, sizeof(client->activation_code), code->valuestring);
             client->state = XIAOZHI_STATE_ACTIVATING;
+            activation_pending = true;
+            ESP_LOGI(TAG, "activation code %s", client->activation_code);
         }
         if (cJSON_IsString(message) && message->valuestring != NULL) {
             copy_bounded(client->activation_message, sizeof(client->activation_message), message->valuestring);
@@ -356,29 +447,60 @@ static bool parse_ota_response(xiaozhi_client_t *client, const char *json)
             if (cJSON_IsString(token) && token->valuestring != NULL) {
                 copy_bounded(client->token, sizeof(client->token), token->valuestring);
             }
-            client->activated = true;
-            client->activation_code[0] = '\0';
-            persist_activation(client);
-            complete = true;
+            /* The official server returns the websocket endpoint and the
+               pairing code together. Until the user binds the code at
+               xiaozhi.me the device is not paired yet, so the code stays on
+               screen and the activation task keeps polling for confirmation. */
+            if (activation_pending) {
+                persist_activation(client);
+                complete = false;
+            } else {
+                client->activated = true;
+                client->activation_code[0] = '\0';
+                client->activation_message[0] = '\0';
+                persist_activation(client);
+                complete = true;
+            }
         }
     }
     cJSON_Delete(root);
     return complete;
 }
 
+/* A self-hosted xiaozhi-server is spoken to directly over its websocket, while
+   the official service requires the OTA activation handshake first. */
+static bool is_official_server(const char *server)
+{
+    return server != NULL && strstr(server, "tenclass.net") != NULL;
+}
+
 static bool fetch_ota(xiaozhi_client_t *client)
 {
-    if (starts_with(client->config.server_url, "ws://") ||
-        starts_with(client->config.server_url, "wss://")) {
-        copy_bounded(client->websocket_url, sizeof(client->websocket_url), client->config.server_url);
+    const char *configured = client->config.server_url[0] != '\0' ?
+        client->config.server_url : XIAOZHI_DEFAULT_OTA_URL;
+
+    if (!is_official_server(configured) &&
+        (starts_with(configured, "ws://") || starts_with(configured, "wss://"))) {
+        /* Self-hosted server: the websocket endpoint is used as-is. */
+        copy_bounded(client->websocket_url, sizeof(client->websocket_url), configured);
+        client->activation_code[0] = '\0';
+        client->activation_message[0] = '\0';
         client->activated = true;
         persist_activation(client);
+        ESP_LOGI(TAG, "self-hosted websocket %s", client->websocket_url);
         return true;
     }
 
-    const char *url = client->config.server_url[0] != '\0' ?
-        client->config.server_url : XIAOZHI_DEFAULT_OTA_URL;
-    char response[4096] = {0};
+    char url[192];
+    if (!derive_ota_url(configured, url, sizeof(url))) {
+        copy_bounded(url, sizeof(url), XIAOZHI_DEFAULT_OTA_URL);
+    }
+    ESP_LOGI(TAG, "requesting activation from %s", url);
+    /* One activation task runs at a time, so this scratch area is shared
+       instead of eating 4 KB of an already tight task stack (the TLS
+       handshake on this call needs the room). */
+    static char response[4096];
+    response[0] = '\0';
     ota_body_t body = {.body = response, .capacity = sizeof(response)};
     esp_http_client_config_t config = {
         .url = url,
@@ -394,7 +516,7 @@ static bool fetch_ota(xiaozhi_client_t *client)
     esp_http_client_set_header(http, "Activation-Version", "1");
     esp_http_client_set_header(http, "Device-Id", device_identity_get_mac());
     esp_http_client_set_header(http, "Client-Id", device_identity_get_client_id());
-    esp_http_client_set_header(http, "User-Agent", "Dotii/1.1.6");
+    esp_http_client_set_header(http, "User-Agent", "Dotii/1.1.7");
     esp_http_client_set_header(http, "Accept-Language", "zh-CN");
     esp_http_client_set_header(http, "Content-Type", "application/json");
     esp_http_client_set_post_field(http, "{}", 2);
@@ -405,6 +527,7 @@ static bool fetch_ota(xiaozhi_client_t *client)
         ESP_LOGW(TAG, "OTA request failed: %s HTTP %d", esp_err_to_name(error), status);
         return false;
     }
+    ESP_LOGI(TAG, "OTA reply %d bytes", (int)body.length);
     return parse_ota_response(client, response);
 }
 
@@ -422,6 +545,9 @@ static void send_hello(xiaozhi_client_t *client)
     cJSON_AddNumberToObject(root, "version", 1);
     cJSON *features = cJSON_CreateObject();
     cJSON_AddBoolToObject(features, "mcp", client->config.mcp_enabled);
+    /* Tells a compatible server that this device can render the full local
+       emotion palette, so the model may pick the expression itself. */
+    cJSON_AddBoolToObject(features, "emotion", true);
     cJSON_AddItemToObject(root, "features", features);
     cJSON_AddStringToObject(root, "transport", "websocket");
     cJSON *audio = cJSON_CreateObject();
@@ -484,6 +610,9 @@ static void ws_event_handler(void *handler_arg, esp_event_base_t base, int32_t e
     }
 }
 
+static void playback_task(void *argument);
+static void microphone_task(void *argument);
+
 static bool open_websocket(xiaozhi_client_t *client)
 {
     if (client->websocket_url[0] == '\0') return false;
@@ -522,13 +651,18 @@ static void activation_task(void *argument)
             vTaskDelay(pdMS_TO_TICKS(1000));
             continue;
         }
-        if (client->websocket_url[0] == '\0' && fetch_ota(client)) {
+        if (!client->activated && fetch_ota(client)) {
             ESP_LOGI(TAG, "xiaozhi activation complete");
         }
-        if (client->websocket_url[0] != '\0') {
-            open_websocket(client);
+        if (client->activated) {
+            if (open_websocket(client)) {
+                xTaskCreate(playback_task, "xz_play", 4096, client, 4, NULL);
+                xTaskCreate(microphone_task, "xz_mic", 4096, client, 5, NULL);
+            }
             break;
         }
+        /* Still waiting for the user to bind the code at xiaozhi.me. Keep the
+           code visible and ask again shortly. */
         client->state = XIAOZHI_STATE_ACTIVATING;
         vTaskDelay(pdMS_TO_TICKS(5000));
     }
@@ -774,18 +908,22 @@ bool xiaozhi_client_start(xiaozhi_client_t *client)
     client->running = true;
     client->state = client->activated ? XIAOZHI_STATE_CONNECTING : XIAOZHI_STATE_ACTIVATING;
     if (s_audio_queue == NULL) s_audio_queue = xQueueCreate(12, sizeof(audio_packet_t));
-    if (client->websocket_url[0] != '\0') {
+    if (client->activated && client->websocket_url[0] != '\0') {
         if (open_websocket(client)) {
             xTaskCreate(playback_task, "xz_play", 4096, client, 4, NULL);
             xTaskCreate(microphone_task, "xz_mic", 4096, client, 5, NULL);
             return true;
         }
     }
-    if (xTaskCreate(activation_task, "xz_act", 6144, client, 4, NULL) != pdPASS) {
+    /* 8 KB covers the HTTP client and the TLS handshake; the response body
+       lives in a file-scope buffer so it costs only internal DRAM, not stack. */
+    if (xTaskCreate(activation_task, "xz_act", 8192, client, 4, NULL) != pdPASS) {
+        ESP_LOGE(TAG, "activation task create failed");
         client->running = false;
         client->state = XIAOZHI_STATE_ERROR;
         return false;
     }
+    ESP_LOGI(TAG, "activation task started");
     return true;
 }
 

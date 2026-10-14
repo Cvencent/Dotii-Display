@@ -2210,7 +2210,9 @@ static void update_snapshot(const codex_snapshot_t *snapshot)
        through the eyes, so the pill only appears when the user actually has
        something to read or act on: a pairing code or a connection error. */
     const bool xiaozhi_pill_visible =
-        activation_code != NULL || xiaozhi_session == XIAOZHI_STATE_ERROR;
+        activation_code != NULL ||
+        xiaozhi_session == XIAOZHI_STATE_ACTIVATING ||
+        xiaozhi_session == XIAOZHI_STATE_ERROR;
     if (xiaozhi_pill_visible) {
         lv_obj_remove_flag(s_xiaozhi_status_pill, LV_OBJ_FLAG_HIDDEN);
     } else {
@@ -2220,8 +2222,14 @@ static void update_snapshot(const codex_snapshot_t *snapshot)
         /* Pairing needs the widest single hint row we have. */
         lv_obj_add_flag(s_time_xiaozhi, LV_OBJ_FLAG_HIDDEN);
         lv_obj_set_width(s_xiaozhi_server, 236);
-        lv_label_set_text_fmt(s_xiaozhi_emotion, "配对码 %s", activation_code);
+        lv_label_set_text_fmt(s_xiaozhi_emotion, "设备码 %s", activation_code);
         lv_label_set_text(s_xiaozhi_server, "xiaozhi.me 输入设备码");
+    } else if (xiaozhi_session == XIAOZHI_STATE_ACTIVATING) {
+        lv_obj_add_flag(s_time_xiaozhi, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_width(s_xiaozhi_server, 236);
+        lv_label_set_text(s_xiaozhi_emotion, "获取设备码中");
+        lv_label_set_text(s_xiaozhi_server, s_xiaozhi.connected ?
+                          "等待 xiaozhi.me 完成配对" : "正在连接小智服务");
     } else if (xiaozhi_busy) {
         lv_obj_remove_flag(s_time_xiaozhi, LV_OBJ_FLAG_HIDDEN);
         lv_obj_set_width(s_xiaozhi_server, 186);
