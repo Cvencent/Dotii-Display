@@ -47,9 +47,13 @@ static const audio_codec_data_if_t *i2s_data_if = NULL; /* Codec data interface 
 #define LCD_TRANSFORM_PIXELS (BSP_LCD_H_RES * BSP_LCD_V_RES)
 #define LCD_TRANSFORM_CENTER_FP ((BSP_LCD_H_RES - 1) << 15)
 #define LCD_TRANSFORM_RADIUS2 ((BSP_LCD_H_RES - 1) * (BSP_LCD_H_RES - 1))
-#define LCD_TRANSFORM_ANGLE_DEFAULT_TENTHS 840
+#define LCD_TRANSFORM_ANGLE_DEFAULT_TENTHS 900
 #define LCD_TRANSFORM_ANGLE_MIN_TENTHS 800
 #define LCD_TRANSFORM_ANGLE_MAX_TENTHS 1000
+/* Angles within this window of a right angle snap to exactly 90.0 deg. At
+   90 deg the sampling grid is pixel-aligned, so the bilinear resampler becomes
+   an exact copy and curved edges stay crisp instead of stair-stepping. */
+#define LCD_TRANSFORM_ANGLE_SNAP_WINDOW_TENTHS 20
 
 typedef struct {
     uint16_t *logical_fb;
@@ -88,8 +92,19 @@ static inline uint16_t lcd_rgb565_to_wire(uint16_t value)
     return __builtin_bswap16(value);
 }
 
+static int16_t lcd_transform_snap_angle(int16_t angle_tenths)
+{
+    const int16_t delta = (int16_t)(angle_tenths - 900);
+    if (delta >= -LCD_TRANSFORM_ANGLE_SNAP_WINDOW_TENTHS &&
+        delta <= LCD_TRANSFORM_ANGLE_SNAP_WINDOW_TENTHS) {
+        return 900;
+    }
+    return angle_tenths;
+}
+
 static void lcd_transform_set_coefficients(int16_t angle_tenths)
 {
+    angle_tenths = lcd_transform_snap_angle(angle_tenths);
     if (angle_tenths == 900) {
         s_lcd_transform.cos_q16 = 0;
         s_lcd_transform.sin_q16 = 65536;
@@ -197,11 +212,28 @@ static inline uint16_t lcd_transform_sample_bilinear(int32_t source_x_fp, int32_
     return (uint16_t)((red << 11) | (green << 5) | blue);
 }
 
+static inline uint16_t lcd_transform_sample_nearest(int32_t source_x_fp, int32_t source_y_fp)
+{
+    if (source_x_fp < 0 || source_y_fp < 0) {
+        return 0;
+    }
+    const int x = source_x_fp >> 16;
+    const int y = source_y_fp >> 16;
+    if (x >= BSP_LCD_H_RES || y >= BSP_LCD_V_RES) {
+        return 0;
+    }
+    return s_lcd_transform.logical_fb[(size_t)y * BSP_LCD_H_RES + x];
+}
+
 static void lcd_transform_render_area(int x_start, int y_start, int width, int height)
 {
     const int32_t center_fp = LCD_TRANSFORM_CENTER_FP;
     const int32_t cos_q16 = s_lcd_transform.cos_q16;
     const int32_t sin_q16 = s_lcd_transform.sin_q16;
+    /* At exactly 90 degrees the sampling grid lands on whole pixels, so the
+       bilinear filter degenerates to a copy. Take the direct path to keep the
+       50 FPS face animation cheap. */
+    const bool exact_copy = cos_q16 == 0 && sin_q16 == 65536;
     size_t output_index = 0;
 
     for (int physical_y = y_start; physical_y < y_start + height; ++physical_y) {
@@ -218,7 +250,8 @@ static void lcd_transform_render_area(int x_start, int y_start, int width, int h
             uint16_t color = 0;
             if (physical_dx2 * physical_dx2 + physical_dy2 * physical_dy2 <=
                 LCD_TRANSFORM_RADIUS2) {
-                color = lcd_transform_sample_bilinear(source_x_fp, source_y_fp);
+                color = exact_copy ? lcd_transform_sample_nearest(source_x_fp, source_y_fp)
+                                   : lcd_transform_sample_bilinear(source_x_fp, source_y_fp);
             }
             s_lcd_transform.dma_tile[output_index++] = lcd_rgb565_to_wire(color);
             source_x_fp += cos_q16;
@@ -1140,6 +1173,7 @@ esp_err_t bsp_display_transform_set_angle(int16_t angle_tenths)
         angle_tenths > LCD_TRANSFORM_ANGLE_MAX_TENTHS) {
         return ESP_ERR_INVALID_ARG;
     }
+    angle_tenths = lcd_transform_snap_angle(angle_tenths);
     const bool changed = s_lcd_transform.angle_tenths != angle_tenths;
     s_lcd_transform.angle_tenths = angle_tenths;
     lcd_transform_set_coefficients(angle_tenths);

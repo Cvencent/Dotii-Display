@@ -29,7 +29,7 @@ static const int16_t k_blob_ring[48 * 2] = {
 static const character_def_t k_characters[] = {
     {
         "dotii", "Dotii", "dotii",
-        0x1B2230, 0xF1F8F5, 0xE5705F, 0xF1F8F5,
+        0x36446E, 0xF1F8F5, 0xE5705F, 0xF1F8F5,
         { 46, 100, 34, 44, 22 },
         48, k_dotii_ring,
     },

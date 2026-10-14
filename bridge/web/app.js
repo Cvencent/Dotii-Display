@@ -1073,7 +1073,7 @@ function renderOverview(overview) {
   renderDotii(snapshot.dotii || {}, dotiiEnabled);
   const displayConfig = overview.display_config || snapshot.display || {};
   if (!state.displayDirty && !state.displaySaving) {
-    const angle = Math.max(80, Math.min(100, Number(displayConfig.docked_rotation_tenths || 840) / 10));
+    const angle = Math.max(80, Math.min(100, Number(displayConfig.docked_rotation_tenths || 900) / 10));
     const screenOffTimeout = DISPLAY_TIMEOUT_OPTIONS.includes(Number(displayConfig.screen_off_timeout_seconds))
       ? Number(displayConfig.screen_off_timeout_seconds) : 60;
     const sleepTimeout = DISPLAY_TIMEOUT_OPTIONS.includes(Number(displayConfig.sleep_timeout_seconds))

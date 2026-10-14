@@ -10,6 +10,7 @@
 #include "esp_io_expander.h"
 #include "esp_log.h"
 #include "esp_sleep.h"
+#include "driver/usb_serial_jtag.h"
 #include "esp_timer.h"
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
@@ -291,10 +292,18 @@ static void input_task(void *argument)
             }
         }
 
+        /* USB-Serial-JTAG SOF packets are a reliable "connected to a host"
+           signal even when the AXP2101 VBUS status bit is unreliable on some
+           chargers or hubs. Treat either VBUS or an active USB host as docked. */
+        const bool usb_connected = usb_serial_jtag_is_connected();
+        bool publish_power = false;
+        if (usb_connected && !external_power) {
+            external_power = true;
+            publish_power = true;
+        }
         if (s_pmu != NULL && now_ms - last_pmu_read >= PMU_STATUS_INTERVAL_MS) {
             uint8_t status1 = 0;
             uint8_t status2 = 0;
-            bool publish_power = false;
             bool status_valid = false;
             bool raw_external_power = false;
             bool raw_charging = false;
@@ -306,13 +315,14 @@ static void input_task(void *argument)
                 raw_charging = ((status2 >> 5) & 0x03) == 0x01;
                 battery_present = (status1 & 0x08) != 0;
                 batfet_open = (status1 & 0x10) != 0;
-                if (!power_candidate_valid || raw_external_power != power_candidate) {
-                    power_candidate = raw_external_power;
+                const bool raw_docked = raw_external_power || usb_connected;
+                if (!power_candidate_valid || raw_docked != power_candidate) {
+                    power_candidate = raw_docked;
                     power_candidate_valid = true;
                     power_candidate_since = now_ms;
-                } else if (raw_external_power != external_power &&
+                } else if (raw_docked != external_power &&
                            now_ms - power_candidate_since >= PMU_POWER_DEBOUNCE_MS) {
-                    external_power = raw_external_power;
+                    external_power = raw_docked;
                     publish_power = true;
                 }
             }
@@ -360,21 +370,22 @@ static void input_task(void *argument)
 
                 if (first_pmu_sample || publish_power) {
                     ESP_LOGI(TAG,
-                             "AXP2101 status1=0x%02X status2=0x%02X vbus=%d battery=%d batfet_open=%d raw_charging=%d ui_charging=%d full_latched=%d",
-                             status1, status2, raw_external_power, battery_present,
-                             batfet_open, raw_charging, charging, charge_complete_latched);
+                             "AXP2101 status1=0x%02X status2=0x%02X vbus=%d usb=%d docked=%d battery=%d batfet_open=%d raw_charging=%d ui_charging=%d full_latched=%d",
+                             status1, status2, raw_external_power, usb_connected,
+                             external_power, battery_present, batfet_open, raw_charging,
+                             charging, charge_complete_latched);
                     if (!battery_present) {
                         ESP_LOGW(TAG, "No battery detected; unplugging VBUS cannot be sustained");
                     }
                     first_pmu_sample = false;
                 }
             }
-            if (publish_power) power_ui_pending = true;
-            if (power_ui_pending && bsp_display_lock(100) == ESP_OK) {
-                state_ui_set_power(battery_percent, external_power, charging);
-                power_ui_pending = false;
-                bsp_display_unlock();
-            }
+        }
+        if (publish_power) power_ui_pending = true;
+        if (power_ui_pending && bsp_display_lock(100) == ESP_OK) {
+            state_ui_set_power(battery_percent, external_power, charging);
+            power_ui_pending = false;
+            bsp_display_unlock();
         }
         if (s_shutdown_requested) {
             s_shutdown_requested = false;

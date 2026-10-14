@@ -205,7 +205,7 @@ DOTII_STATE_DURATION_VALUES = {
 DISPLAY_DEFAULTS = {
     "revision": 0,
     "codex_ui": "classic",
-    "docked_rotation_tenths": 840,
+    "docked_rotation_tenths": 900,
     "screen_off_timeout_seconds": 60,
     "sleep_timeout_seconds": 300,
     "charging_screen_off_timeout_seconds": 60,
@@ -601,6 +601,11 @@ def validate_display_config(payload: Any) -> dict[str, Any]:
     angle = payload.get("docked_rotation_tenths", DISPLAY_DEFAULTS["docked_rotation_tenths"])
     if isinstance(angle, bool) or not isinstance(angle, int) or not 800 <= angle <= 1000:
         raise ValueError("display.docked_rotation_tenths must be an integer between 800 and 1000")
+    # 84.0 deg was the pre-1.1.5 default. Config files written by older
+    # management centers still carry it and would re-enable the blurry
+    # bilinear rotation, so migrate that single legacy value on load.
+    if angle == 840:
+        angle = DISPLAY_DEFAULTS["docked_rotation_tenths"]
     screen_off_page = payload.get("screen_off_page", DISPLAY_DEFAULTS["screen_off_page"])
     if screen_off_page not in SCREEN_OFF_PAGE_OPTIONS:
         raise ValueError("display.screen_off_page must be none, custom or dotii")
@@ -999,7 +1004,7 @@ class BridgeHandler(BaseHTTPRequestHandler):
         address = local_ipv4()
         runtime = self.bridge.runtime.snapshot()
         return {
-            "app": {"name": "Dotii 管理中心", "version": "1.1.3"},
+            "app": {"name": "Dotii 管理中心", "version": "1.1.5"},
             "bridge": {
                 "online": True,
                 "local_url": f"http://127.0.0.1:{self.bridge.server_port}",

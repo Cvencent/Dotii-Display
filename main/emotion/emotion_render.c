@@ -43,6 +43,42 @@ static inline uint16_t rgb565(uint8_t r, uint8_t g, uint8_t b)
     return (uint16_t)(((r & 0xF8u) << 8) | ((g & 0xFCu) << 3) | (b >> 3));
 }
 
+static inline uint32_t blend_rgb(uint32_t a, uint32_t b, uint32_t alpha256)
+{
+    const uint32_t inv = 256u - alpha256;
+    const uint32_t ar = (a >> 16) & 0xFFu, ag = (a >> 8) & 0xFFu, ab = a & 0xFFu;
+    const uint32_t br = (b >> 16) & 0xFFu, bg = (b >> 8) & 0xFFu, bb = b & 0xFFu;
+    const uint32_t r = (ar * inv + br * alpha256 + 128u) >> 8;
+    const uint32_t g = (ag * inv + bg * alpha256 + 128u) >> 8;
+    const uint32_t bl = (ab * inv + bb * alpha256 + 128u) >> 8;
+    return (r << 16) | (g << 8) | bl;
+}
+
+static inline int luma8(uint32_t rgb)
+{
+    const int r = (int)((rgb >> 16) & 0xFFu);
+    const int g = (int)((rgb >> 8) & 0xFFu);
+    const int b = (int)(rgb & 0xFFu);
+    return (r * 54 + g * 183 + b * 19) >> 8;
+}
+
+/* Keep each character recognisable: emotion colour is a subtle tint of the
+   character body, and the body is pushed away from the eye colour if the
+   resulting pair would read as a flat silhouette. */
+static uint32_t face_body_color(uint32_t base, uint32_t eye, uint32_t accent,
+                                bool has_accent)
+{
+    uint32_t body = base;
+    if (has_accent) {
+        body = blend_rgb(body, accent, 96u);
+    }
+    for (int i = 0; i < 4 && abs(luma8(body) - luma8(eye)) < 72; ++i) {
+        body = luma8(eye) > 128 ? blend_rgb(body, 0x000000u, 80u)
+                                 : blend_rgb(body, 0xFFFFFFu, 80u);
+    }
+    return body;
+}
+
 /* -- canvas ---------------------------------------------------------------- */
 
 typedef struct {
@@ -224,10 +260,21 @@ static void eb_pose_from_look(const eb_look_t *look, float t_ms, float openness,
     }
 }
 
-/* Scanline polygon fill for the eye rings. */
+/* Subsampled scanline polygon fill. Four sub-scanlines per output row give
+   real vertical coverage instead of the previous hard floor/ceil edge, which
+   is what produced the stair-stepped "毛刺" on curved eye rings. */
+#define EB_SUBSCAN 8u
+#define EB_COV_ROW_PIXELS 512u
+static float s_sub_edges[EB_SUBSCAN][EB_MAX_POINTS];
+static int s_sub_edge_count[EB_SUBSCAN];
+static uint16_t s_cov_row[EB_COV_ROW_PIXELS];
+
 static void fill_polygon(eb_surface_t *surf, const float *xs, const float *ys, int n,
                          uint16_t color)
 {
+    if (surf->size > (int32_t)EB_COV_ROW_PIXELS) {
+        return;
+    }
     float ymin = ys[0], ymax = ys[0];
     for (int i = 1; i < n; ++i) {
         ymin = ys[i] < ymin ? ys[i] : ymin;
@@ -235,51 +282,74 @@ static void fill_polygon(eb_surface_t *surf, const float *xs, const float *ys, i
     }
     const int y0 = clampi((int)floorf(ymin), 0, surf->size - 1);
     const int y1 = clampi((int)ceilf(ymax), 0, surf->size - 1);
-    float xint[EB_MAX_POINTS];
+
     for (int y = y0; y <= y1; ++y) {
-        const float scan = (float)y + 0.5f;
-        int count = 0;
-        for (int i = 0; i < n; ++i) {
-            const int j = (i + 1) % n;
-            const float ay = ys[i], by = ys[j];
-            if ((ay <= scan && by > scan) || (by <= scan && ay > scan)) {
-                if (count < EB_MAX_POINTS) {
-                    xint[count++] = xs[i] + (scan - ay) / (by - ay) * (xs[j] - xs[i]);
+        int min_x = surf->size;
+        int max_x = -1;
+        for (uint32_t s = 0; s < EB_SUBSCAN; ++s) {
+            const float scan = (float)y + ((float)s + 0.5f) / (float)EB_SUBSCAN;
+            int count = 0;
+            for (int i = 0; i < n; ++i) {
+                const int j = (i + 1) % n;
+                const float ay = ys[i], by = ys[j];
+                if ((ay <= scan && by > scan) || (by <= scan && ay > scan)) {
+                    if (count < EB_MAX_POINTS) {
+                        s_sub_edges[s][count++] =
+                            xs[i] + (scan - ay) / (by - ay) * (xs[j] - xs[i]);
+                    }
                 }
             }
+            s_sub_edge_count[s] = count;
+            for (int a = 1; a < count; ++a) {
+                const float key = s_sub_edges[s][a];
+                int b = a - 1;
+                while (b >= 0 && s_sub_edges[s][b] > key) {
+                    s_sub_edges[s][b + 1] = s_sub_edges[s][b];
+                    --b;
+                }
+                s_sub_edges[s][b + 1] = key;
+            }
+            if (count >= 2) {
+                const int xa = clampi((int)floorf(s_sub_edges[s][0]), 0, surf->size - 1);
+                const int xb = clampi((int)ceilf(s_sub_edges[s][count - 1]) - 1,
+                                      0, surf->size - 1);
+                if (xa < min_x) min_x = xa;
+                if (xb > max_x) max_x = xb;
+            }
         }
-        if (count < 2) {
+        if (min_x > max_x) {
             continue;
         }
-        for (int a = 1; a < count; ++a) {
-            const float key = xint[a];
-            int b = a - 1;
-            while (b >= 0 && xint[b] > key) {
-                xint[b + 1] = xint[b];
-                --b;
-            }
-            xint[b + 1] = key;
+        for (int x = min_x; x <= max_x; ++x) {
+            s_cov_row[x] = 0;
         }
-        for (int a = 0; a + 1 < count; a += 2) {
-            const float span_left = xint[a];
-            const float span_right = xint[a + 1];
-            const int xa = clampi((int)floorf(span_left), 0, surf->size - 1);
-            const int xb = clampi((int)ceilf(span_right) - 1, 0, surf->size - 1);
-            for (int x = xa; x <= xb; ++x) {
-                /* Pixel x covers [x, x+1]. Full interior pixels take the
-                   direct path; only the two boundary pixels use blending. */
-                const float overlap_left = fmaxf(span_left, (float)x);
-                const float overlap_right = fminf(span_right, (float)x + 1.0f);
-                const float coverage = clampf(overlap_right - overlap_left, 0.0f, 1.0f);
-                if (coverage >= 0.999f) {
-                    put_px(surf, x, y, color);
-                } else if (coverage > 0.001f) {
-                    blend_px(surf, x, y, color, (uint32_t)(coverage * 256.0f + 0.5f));
+        for (uint32_t s = 0; s < EB_SUBSCAN; ++s) {
+            const int count = s_sub_edge_count[s];
+            for (int a = 0; a + 1 < count; a += 2) {
+                const float span_left = s_sub_edges[s][a];
+                const float span_right = s_sub_edges[s][a + 1];
+                const int xa = clampi((int)floorf(span_left), min_x, max_x);
+                const int xb = clampi((int)ceilf(span_right) - 1, min_x, max_x);
+                for (int x = xa; x <= xb; ++x) {
+                    const float overlap_left = fmaxf(span_left, (float)x);
+                    const float overlap_right = fminf(span_right, (float)x + 1.0f);
+                    const float coverage = clampf(overlap_right - overlap_left, 0.0f, 1.0f);
+                    if (coverage > 0.0f) {
+                        uint32_t acc = (uint32_t)s_cov_row[x] +
+                            (uint32_t)(coverage * (256.0f / (float)EB_SUBSCAN) + 0.5f);
+                        s_cov_row[x] = (uint16_t)(acc > 255u ? 255u : acc);
+                    }
                 }
+            }
+        }
+        for (int x = min_x; x <= max_x; ++x) {
+            if (s_cov_row[x] > 0u) {
+                blend_px(surf, x, y, color, s_cov_row[x]);
             }
         }
     }
 }
+
 static void eb_centroid(const int16_t *ring, float *cx, float *cy)
 {
     const uint16_t n = emotion_geometry_ring_points();
@@ -386,6 +456,22 @@ static void eb_fill_body(eb_surface_t *surf, uint32_t body_rgb)
     }
 }
 
+static void eb_fill_rect(eb_surface_t *surf, int32_t x1, int32_t y1,
+                         int32_t x2, int32_t y2, uint32_t body_rgb)
+{
+    const uint16_t color565 = rgb565(c8(body_rgb, 16), c8(body_rgb, 8), c8(body_rgb, 0));
+    x1 = clampi(x1, 0, surf->size - 1);
+    y1 = clampi(y1, 0, surf->size - 1);
+    x2 = clampi(x2, 0, surf->size - 1);
+    y2 = clampi(y2, 0, surf->size - 1);
+    for (int32_t y = y1; y <= y2; ++y) {
+        uint16_t *row = surf->px + (size_t)y * (size_t)surf->size;
+        for (int32_t x = x1; x <= x2; ++x) {
+            row[x] = color565;
+        }
+    }
+}
+
 /* -- public API ------------------------------------------------------------ */
 
 bool emotion_render_attach(emotion_render_t *render, lv_obj_t *parent, int size)
@@ -428,6 +514,12 @@ bool emotion_render_attach(emotion_render_t *render, lv_obj_t *parent, int size)
     render->shape_index = 0;
     render->ring_index = 0;
     render->ring_valid = false;
+    render->dirty_x1 = 0;
+    render->dirty_y1 = 0;
+    render->dirty_x2 = px - 1;
+    render->dirty_y2 = px - 1;
+    render->full_redraw = true;
+    render->last_body_color = 0;
     render->attached = true;
     return true;
 }
@@ -441,6 +533,7 @@ void emotion_render_set_shape(emotion_render_t *render, const char *shape_id)
     if (idx != render->shape_index) {
         render->shape_index = idx;
         render->ring_valid = false;
+        render->full_redraw = true;
     }
 }
 
@@ -525,11 +618,8 @@ void emotion_render_update(emotion_render_t *render,
     const eb_look_t *look = resolve_look(def);
     const eb_shape_t *shape = emotion_geometry_shape(render->shape_index);
     const uint32_t now_ms = lv_tick_get();
-
     const float size = (float)render->size;
 
-    /* Viewer gaze is expressed in normalised units; upstream clamps the look
-       offset to +/-24 horizontal and +/-15 vertical viewBox units. */
     float gaze_x = 0.0f;
     float gaze_y = 0.0f;
     if (state != NULL && (def == NULL || def->gaze)) {
@@ -547,29 +637,75 @@ void emotion_render_update(emotion_render_t *render,
     surface.px = (uint16_t *)render->buffer;
     surface.size = render->size;
 
-    uint32_t body_rgb = pack->body_color;
-    if (look->color_index != EB_NO_COLOR) {
-        body_rgb = emotion_geometry_body_colors()[look->color_index];
+    uint32_t accent = 0;
+    const bool has_accent = look->color_index != EB_NO_COLOR;
+    if (has_accent) {
+        accent = emotion_geometry_body_colors()[look->color_index];
     }
-    eb_fill_body(&surface, body_rgb);
+    const uint32_t body_rgb = face_body_color(pack->body_color, pack->eye_color,
+                                              accent, has_accent);
+    const bool full_redraw = render->full_redraw || body_rgb != render->last_body_color;
 
-    /* Eyes: the pool rotates the expression ring; each eye owns slot 1 or 2
-       after the compositor folded the shared "both" spec into it. */
     const uint8_t expression = eb_pool_expression(look, now_ms);
     const uint16_t eye_color = rgb565(c8(pack->eye_color, 16),
                                       c8(pack->eye_color, 8),
                                       c8(pack->eye_color, 0));
     const uint16_t ring_points = emotion_geometry_ring_points();
-    /* Ring units are roughly 100 across; scale them into the round panel. */
     const float eye_scale = size * 0.0043f;
-    float eye_x[EB_MAX_POINTS];
-    float eye_y[EB_MAX_POINTS];
+    float point_x[2][EB_MAX_POINTS];
+    float point_y[2][EB_MAX_POINTS];
+    float min_x = size, min_y = size, max_x = -1.0f, max_y = -1.0f;
     for (int eye = 0; eye < 2; ++eye) {
         const int16_t *ring = emotion_geometry_ring(expression, (uint8_t)eye);
         const int slot = eye == 0 ? 1 : 2;
-        eb_eye_points(&pose, shape, ring, slot, size, eye_scale, eye_x, eye_y);
-        fill_polygon(&surface, eye_x, eye_y, ring_points, eye_color);
+        eb_eye_points(&pose, shape, ring, slot, size, eye_scale,
+                      point_x[eye], point_y[eye]);
+        for (uint16_t i = 0; i < ring_points; ++i) {
+            if (point_x[eye][i] < min_x) min_x = point_x[eye][i];
+            if (point_y[eye][i] < min_y) min_y = point_y[eye][i];
+            if (point_x[eye][i] > max_x) max_x = point_x[eye][i];
+            if (point_y[eye][i] > max_y) max_y = point_y[eye][i];
+        }
+    }
+    if (max_x < min_x || max_y < min_y) {
+        return;
+    }
+    const int32_t new_x1 = clampi((int32_t)floorf(min_x) - 2, 0, render->size - 1);
+    const int32_t new_y1 = clampi((int32_t)floorf(min_y) - 2, 0, render->size - 1);
+    const int32_t new_x2 = clampi((int32_t)ceilf(max_x) + 2, 0, render->size - 1);
+    const int32_t new_y2 = clampi((int32_t)ceilf(max_y) + 2, 0, render->size - 1);
+
+    int32_t paint_x1 = 0, paint_y1 = 0;
+    int32_t paint_x2 = render->size - 1, paint_y2 = render->size - 1;
+    if (full_redraw) {
+        eb_fill_body(&surface, body_rgb);
+    } else {
+        paint_x1 = render->dirty_x1 < new_x1 ? render->dirty_x1 : new_x1;
+        paint_y1 = render->dirty_y1 < new_y1 ? render->dirty_y1 : new_y1;
+        paint_x2 = render->dirty_x2 > new_x2 ? render->dirty_x2 : new_x2;
+        paint_y2 = render->dirty_y2 > new_y2 ? render->dirty_y2 : new_y2;
+        eb_fill_rect(&surface, paint_x1, paint_y1, paint_x2, paint_y2, body_rgb);
     }
 
-    lv_obj_invalidate(render->canvas);
+    for (int eye = 0; eye < 2; ++eye) {
+        fill_polygon(&surface, point_x[eye], point_y[eye], ring_points, eye_color);
+    }
+
+    /* The canvas is 1:1 with the round panel and is anchored at (0,0), so
+       the dirty rectangle is already in display coordinates. */
+    lv_area_t area = {
+        .x1 = full_redraw ? 0 : paint_x1,
+        .y1 = full_redraw ? 0 : paint_y1,
+        .x2 = full_redraw ? render->size - 1 : paint_x2,
+        .y2 = full_redraw ? render->size - 1 : paint_y2,
+    };
+    lv_obj_invalidate_area(render->canvas, &area);
+
+    render->dirty_x1 = new_x1;
+    render->dirty_y1 = new_y1;
+    render->dirty_x2 = new_x2;
+    render->dirty_y2 = new_y2;
+    render->last_body_color = body_rgb;
+    render->full_redraw = false;
 }
+

@@ -29,6 +29,14 @@ typedef struct {
     uint8_t shape_index;
     uint8_t ring_index;    /* last expression ring pair drawn */
     bool ring_valid;
+    /* Dirty rectangle of the animated eye region in canvas-local pixel
+       coordinates. Body colour changes mark the whole canvas dirty. */
+    int32_t dirty_x1;
+    int32_t dirty_y1;
+    int32_t dirty_x2;
+    int32_t dirty_y2;
+    bool full_redraw;
+    uint32_t last_body_color;
 } emotion_render_t;
 
 /* Creates the canvas under parent at the given pixel size. Idempotent. */

@@ -120,7 +120,7 @@ void app_state_make_preview(codex_snapshot_t *snapshot)
     snapshot->custom_enabled = true;
     snapshot->dotii_enabled = true;
     snapshot->custom_ring_enabled = true;
-    snapshot->docked_rotation_tenths = 840;
+    snapshot->docked_rotation_tenths = 900;
     snapshot->screen_off_timeout_seconds = 60;
     snapshot->sleep_timeout_seconds = 300;
     snapshot->charging_screen_off_timeout_seconds = 60;

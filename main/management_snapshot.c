@@ -257,7 +257,7 @@ static void reset_display_config(codex_snapshot_t *snapshot)
 {
     snapshot->codex_ui_dual_limit = false;
     snapshot->display_revision = 0;
-    snapshot->docked_rotation_tenths = 840;
+    snapshot->docked_rotation_tenths = 900;
     snapshot->screen_off_timeout_seconds = 60;
     snapshot->sleep_timeout_seconds = 300;
     snapshot->charging_screen_off_timeout_seconds = 60;

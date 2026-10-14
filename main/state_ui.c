@@ -51,7 +51,7 @@ LV_FONT_DECLARE(ui_font_fixed_20);
 #define COLOR_DANGER 0xFF766F
 #define PAGE_COUNT 4
 #define TITLE_HEIGHT 30
-#define DISPLAY_ANGLE_DEFAULT_TENTHS 840
+#define DISPLAY_ANGLE_DEFAULT_TENTHS 900
 #define DISPLAY_ANGLE_MIN_TENTHS 800
 #define DISPLAY_ANGLE_MAX_TENTHS 1000
 
@@ -590,7 +590,11 @@ static void load_persisted_settings(void)
     int16_t angle;
     if (nvs_get_i16(handle, "dock_angle", &angle) == ESP_OK &&
         angle >= DISPLAY_ANGLE_MIN_TENTHS && angle <= DISPLAY_ANGLE_MAX_TENTHS) {
-        s_display_angle_tenths = angle;
+        /* 84.0 deg was the firmware default before the pixel-exact 90 deg
+           transform. Devices upgrading in place still have it persisted in
+           NVS, which would keep the face blurry, so migrate that legacy
+           default while leaving deliberate custom angles alone. */
+        s_display_angle_tenths = (angle == 840) ? DISPLAY_ANGLE_DEFAULT_TENTHS : angle;
     }
     nvs_get_u32(handle, "display_rev", &s_display_revision);
     nvs_close(handle);
@@ -1704,10 +1708,12 @@ static void render_dotii_expression(void)
     const character_def_t *pack = character_pack_lookup(character_id);
     if (pack == NULL) pack = character_pack_fallback();
 
-    if (s_dotii_render.attached) {
+    const bool update_dotii = s_current == s_dotii || s_current == NULL;
+    const bool update_xiaozhi = s_current == s_xiaozhi_page || s_current == NULL;
+    if (update_dotii && s_dotii_render.attached) {
         emotion_render_update(&s_dotii_render, state, def, pack);
     }
-    if (s_xiaozhi_render.attached) {
+    if (update_xiaozhi && s_xiaozhi_render.attached) {
         emotion_render_update(&s_xiaozhi_render, state, def, pack);
     }
 
@@ -2414,8 +2420,9 @@ void state_ui_start(QueueHandle_t snapshot_queue)
     /* One-second updates are sufficient for the clock and avoid redrawing the
        full AMOLED frame twice for the same displayed second. */
     lv_timer_create(ui_timer, 1000, NULL);
-    /* 30 FPS keeps the eye motion fluid without overdriving the AMOLED. */
-    lv_timer_create(dotii_timer, 33, NULL);
+    /* 50 FPS keeps the eye motion fluid. The 90-degree transform is a
+       pixel-exact copy, so the per-frame cost stays low. */
+    lv_timer_create(dotii_timer, 20, NULL);
 }
 
 void state_ui_button_a_short(void)

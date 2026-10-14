@@ -44,6 +44,7 @@ idf_component_register(
         mbedtls
         nvs_flash
         waveshare__esp32_s3_touch_amoled_1_75
+        esp_driver_usb_serial_jtag
 )
 
 # LVGL 9.4 + GCC 15 can emit a benign warning when IRAM declarations and
