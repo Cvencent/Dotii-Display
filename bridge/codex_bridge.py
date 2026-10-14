@@ -209,7 +209,9 @@ DISPLAY_DEFAULTS = {
     "screen_off_timeout_seconds": 60,
     "sleep_timeout_seconds": 300,
     "charging_screen_off_timeout_seconds": 60,
-    "charging_sleep_timeout_seconds": 300,
+    # Docked Dotii keeps its network link (and Codex updates) while the panel
+    # still turns off to avoid AMOLED burn-in.
+    "charging_sleep_timeout_seconds": 0,
     "screen_off_page": "none",
 }
 DISPLAY_TIMEOUT_OPTIONS = {0, 10, 30, 60, 180, 300, 600, 1800}

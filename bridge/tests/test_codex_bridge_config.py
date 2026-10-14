@@ -94,5 +94,13 @@ class CodexUiConfigTests(unittest.TestCase):
             })
 
 
+    def test_display_defaults_keep_a_docked_device_awake(self) -> None:
+        display = validate_display_config(None)
+
+        self.assertEqual(display["charging_screen_off_timeout_seconds"], 60)
+        self.assertEqual(display["charging_sleep_timeout_seconds"], 0)
+        self.assertEqual(display["sleep_timeout_seconds"], 300)
+
+
 if __name__ == "__main__":
     unittest.main()

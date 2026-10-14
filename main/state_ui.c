@@ -152,7 +152,9 @@ static uint32_t s_display_revision;
 static uint32_t s_screen_off_timeout_seconds = 60;
 static uint32_t s_sleep_timeout_seconds = 300;
 static uint32_t s_charging_screen_off_timeout_seconds = 60;
-static uint32_t s_charging_sleep_timeout_seconds = 300;
+/* Docked: only the panel turns off so Wi-Fi, BLE and the Codex Bridge link
+   stay alive. Deep sleep stays on the battery profile. */
+static uint32_t s_charging_sleep_timeout_seconds = 0;
 static display_screen_off_page_t s_screen_off_page = DISPLAY_SCREEN_OFF_PAGE_NONE;
 static bool s_external_power;
 static uint32_t s_last_activity;
