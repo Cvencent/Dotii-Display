@@ -315,7 +315,7 @@ static void input_task(void *argument)
                 raw_charging = ((status2 >> 5) & 0x03) == 0x01;
                 battery_present = (status1 & 0x08) != 0;
                 batfet_open = (status1 & 0x10) != 0;
-                const bool raw_docked = raw_external_power || usb_connected;
+                const bool raw_docked = raw_external_power || usb_connected || raw_charging;
                 if (!power_candidate_valid || raw_docked != power_candidate) {
                     power_candidate = raw_docked;
                     power_candidate_valid = true;
@@ -393,7 +393,25 @@ static void input_task(void *argument)
         }
         if (s_sleep_requested) {
             s_sleep_requested = false;
-            enter_deep_sleep();
+            /* Re-check the hardware immediately before sleeping. The timeout
+               path runs off the cached docked flag, but that flag can lag a
+               replug by one debounce window. Deep sleep would drop the USB
+               serial port, Wi-Fi and CodexBridge, so any live external-supply
+               signal here wins over the stored battery profile. */
+            uint8_t status1 = 0;
+            const bool vbus_now = pmu_read(AXP2101_STATUS1, &status1) && (status1 & 0x20) != 0;
+            const bool usb_now = usb_serial_jtag_is_connected();
+            if (vbus_now || usb_now || external_power) {
+                ESP_LOGW(TAG,
+                         "Sleep request ignored: external supply present (usb=%d vbus=%d docked=%d)",
+                         usb_now, vbus_now, external_power);
+                external_power = true;
+                power_ui_pending = true;
+            } else {
+                ESP_LOGW(TAG, "Entering deep-sleep on battery (usb=%d vbus=%d)",
+                         usb_now, vbus_now);
+                enter_deep_sleep();
+            }
         }
         vTaskDelay(pdMS_TO_TICKS(25));
     }

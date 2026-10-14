@@ -2513,6 +2513,13 @@ void state_ui_set_power(uint8_t percent, bool external_power, bool charging)
     if (s_external_power != external_power) {
         s_external_power = external_power;
         s_last_activity = lv_tick_get();
+        /* A transient battery classification can blank the panel before
+           VBUS is re-detected. Restoring external power must also light
+           the panel again, otherwise a docked device stays black and
+           looks like it went to sleep. */
+        if (external_power && !s_screen_on) {
+            screen_wake();
+        }
     }
     s_battery = percent;
     if (percent <= 100) {
