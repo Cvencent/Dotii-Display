@@ -21,6 +21,7 @@ idf_component_register(
         "emotion/emotion_router.c"
         "emotion/emotion_pose.c"
         "emotion/emotion_render.c"
+        "emotion/emotion_geometry.c"
         "generated/ui_font_cjk_20.c"
         "generated/ui_font_fixed_20.c"
         "generated/ui_font_cjk_24.c"

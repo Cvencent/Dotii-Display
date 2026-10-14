@@ -4,7 +4,7 @@ Dotii 是一套由 ESP32-S3 圆形 AMOLED 桌面屏、CodexBridge 与小智 AI �
 
 ![Dotii 桌面交互屏产品渲染图](assets/dotii-product-render.png)
 
-[Windows 下载](https://github.com/Cvencent/Dotii-Display/releases/tag/management-center-v1.1.3) · [MakerWorld 模型与打印文件](https://makerworld.com.cn/zh/models/2918764-dotii-zhuo-mian-jiao-hu-ping#profileId-3421401) · [开发指南](开发指南.md)
+[Windows 下载](https://github.com/Cvencent/Dotii-Display/releases/tag/management-center-v1.1.3) · [固件 1.1.4](https://github.com/Cvencent/Dotii-Display/releases/tag/firmware-v1.1.4) · [MakerWorld 模型与打印文件](https://makerworld.com.cn/zh/models/2918764-dotii-zhuo-mian-jiao-hu-ping#profileId-3421401) · [开发指南](开发指南.md)
 
 ## 选择你的系统
 

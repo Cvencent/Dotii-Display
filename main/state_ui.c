@@ -106,7 +106,6 @@ static lv_obj_t *s_xiaozhi_status_dot;
 static lv_obj_t *s_xiaozhi_status;
 static lv_obj_t *s_xiaozhi_emotion;
 static lv_obj_t *s_xiaozhi_server;
-static lv_obj_t *s_xiaozhi_hint;
 static lv_obj_t *s_settings_list;
 static lv_obj_t *s_battery_label;
 static lv_obj_t *s_settings_wifi;
@@ -1397,62 +1396,81 @@ static void build_xiaozhi(void)
     lv_obj_center(content);
     lv_obj_remove_flag(content, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_remove_flag(content, LV_OBJ_FLAG_CLICKABLE);
-
-    lv_obj_t *title = make_label(content, "小智", &ui_font_cjk_28, COLOR_TEXT);
-    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 40);
-    s_time_xiaozhi = make_label(content, "--:--", &lv_font_montserrat_20, COLOR_MUTED);
-    lv_obj_align(s_time_xiaozhi, LV_ALIGN_TOP_MID, 0, 74);
-
+    /* Round-screen layout: a 360 px face keeps the panel's dominant visual,
+       while the title and a two-row status card sit inside the top and bottom
+       arcs so no text lands on the eyes or the body silhouette. */
     lv_obj_t *face = lv_obj_create(content);
     lv_obj_remove_style_all(face);
-    lv_obj_set_size(face, 300, 300);
-    lv_obj_align(face, LV_ALIGN_CENTER, 0, 4);
+    lv_obj_set_size(face, 380, 380);
+    lv_obj_align(face, LV_ALIGN_TOP_MID, 0, 20);
     lv_obj_remove_flag(face, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_remove_flag(face, LV_OBJ_FLAG_CLICKABLE);
-    emotion_render_attach(&s_xiaozhi_render, face, 300);
+    emotion_render_attach(&s_xiaozhi_render, face, 380);
 
-    lv_obj_t *ring = lv_arc_create(face);
-    lv_obj_set_size(ring, 300, 300);
-    lv_obj_center(ring);
-    lv_arc_set_range(ring, 0, 100);
-    lv_arc_set_value(ring, 100);
-    lv_arc_set_bg_angles(ring, 0, 360);
-    lv_obj_set_style_arc_width(ring, 5, LV_PART_MAIN);
-    lv_obj_set_style_arc_color(ring, color(0x263A42), LV_PART_MAIN);
-    lv_obj_set_style_arc_width(ring, 5, LV_PART_INDICATOR);
-    lv_obj_set_style_arc_color(ring, color(COLOR_XIAOZHI), LV_PART_INDICATOR);
-    lv_obj_remove_style(ring, NULL, LV_PART_KNOB);
-    lv_obj_remove_flag(ring, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_t *title = make_label(content, "小智", &ui_font_cjk_28, COLOR_TEXT);
+    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 2);
 
     s_xiaozhi_status_pill = lv_obj_create(content);
-    lv_obj_set_size(s_xiaozhi_status_pill, 196, 48);
-    lv_obj_set_style_radius(s_xiaozhi_status_pill, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_bg_opa(s_xiaozhi_status_pill, LV_OPA_20, 0);
-    lv_obj_set_style_border_width(s_xiaozhi_status_pill, 0, 0);
-    lv_obj_set_style_pad_column(s_xiaozhi_status_pill, 8, 0);
+    lv_obj_set_size(s_xiaozhi_status_pill, 216, 60);
+    lv_obj_set_style_radius(s_xiaozhi_status_pill, 26, 0);
+    lv_obj_set_style_bg_color(s_xiaozhi_status_pill, color(0x0B1113), 0);
+    lv_obj_set_style_bg_opa(s_xiaozhi_status_pill, LV_OPA_70, 0);
+    lv_obj_set_style_border_width(s_xiaozhi_status_pill, 1, 0);
+    lv_obj_set_style_border_color(s_xiaozhi_status_pill, color(0x1E2A2E), 0);
+    lv_obj_set_style_pad_row(s_xiaozhi_status_pill, 5, 0);
+    lv_obj_set_style_pad_all(s_xiaozhi_status_pill, 6, 0);
     lv_obj_set_layout(s_xiaozhi_status_pill, LV_LAYOUT_FLEX);
-    lv_obj_set_flex_flow(s_xiaozhi_status_pill, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_flow(s_xiaozhi_status_pill, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(s_xiaozhi_status_pill, LV_FLEX_ALIGN_CENTER,
                           LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_remove_flag(s_xiaozhi_status_pill, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_remove_flag(s_xiaozhi_status_pill, LV_OBJ_FLAG_CLICKABLE);
-    s_xiaozhi_status_dot = lv_obj_create(s_xiaozhi_status_pill);
+    lv_obj_align(s_xiaozhi_status_pill, LV_ALIGN_BOTTOM_MID, 0, -26);
+
+    /* Row 1: connection dot, session state, current expression. */
+    lv_obj_t *status_row = lv_obj_create(s_xiaozhi_status_pill);
+    lv_obj_remove_style_all(status_row);
+    lv_obj_set_size(status_row, 204, 22);
+    lv_obj_set_layout(status_row, LV_LAYOUT_FLEX);
+    lv_obj_set_flex_flow(status_row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(status_row, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(status_row, 6, 0);
+    lv_obj_remove_flag(status_row, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_remove_flag(status_row, LV_OBJ_FLAG_CLICKABLE);
+    s_xiaozhi_status_dot = lv_obj_create(status_row);
     lv_obj_remove_style_all(s_xiaozhi_status_dot);
-    lv_obj_set_size(s_xiaozhi_status_dot, 14, 14);
+    lv_obj_set_size(s_xiaozhi_status_dot, 8, 8);
     lv_obj_set_style_radius(s_xiaozhi_status_dot, LV_RADIUS_CIRCLE, 0);
     lv_obj_set_style_bg_opa(s_xiaozhi_status_dot, LV_OPA_COVER, 0);
-    s_xiaozhi_status = make_label(s_xiaozhi_status_pill, "未连接", &ui_font_cjk_20, COLOR_MUTED);
-    lv_obj_align(s_xiaozhi_status_pill, LV_ALIGN_CENTER, 0, 122);
+    s_xiaozhi_status = make_label(status_row, "未连接", &ui_font_cjk_20, COLOR_MUTED);
+    lv_obj_set_width(s_xiaozhi_status, 74);
+    lv_label_set_long_mode(s_xiaozhi_status, LV_LABEL_LONG_DOT);
+    lv_obj_set_style_text_align(s_xiaozhi_status, LV_TEXT_ALIGN_CENTER, 0);
+    s_xiaozhi_emotion = make_label(status_row, "等待配对", &ui_font_cjk_20, COLOR_TEXT);
+    lv_obj_set_width(s_xiaozhi_emotion, 116);
+    lv_label_set_long_mode(s_xiaozhi_emotion, LV_LABEL_LONG_DOT);
+    lv_obj_set_style_text_align(s_xiaozhi_emotion, LV_TEXT_ALIGN_CENTER, 0);
 
-    s_xiaozhi_emotion = make_label(content, "等待配对", &ui_font_cjk_20, COLOR_TEXT);
-    lv_obj_align(s_xiaozhi_emotion, LV_ALIGN_CENTER, 0, 160);
-    s_xiaozhi_server = make_label(content, "长按说话", &ui_font_cjk_20, COLOR_MUTED);
-    lv_obj_set_width(s_xiaozhi_server, 280);
+    /* Row 2: clock and server hint. */
+    lv_obj_t *server_row = lv_obj_create(s_xiaozhi_status_pill);
+    lv_obj_remove_style_all(server_row);
+    lv_obj_set_size(server_row, 204, 22);
+    lv_obj_set_layout(server_row, LV_LAYOUT_FLEX);
+    lv_obj_set_flex_flow(server_row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(server_row, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(server_row, 6, 0);
+    lv_obj_remove_flag(server_row, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_remove_flag(server_row, LV_OBJ_FLAG_CLICKABLE);
+    s_time_xiaozhi = make_label(server_row, "--:--", &lv_font_montserrat_20, COLOR_MUTED);
+    lv_obj_set_width(s_time_xiaozhi, 40);
+    lv_label_set_long_mode(s_time_xiaozhi, LV_LABEL_LONG_CLIP);
+    lv_obj_set_style_text_align(s_time_xiaozhi, LV_TEXT_ALIGN_CENTER, 0);
+    s_xiaozhi_server = make_label(server_row, "等待服务连接", &ui_font_cjk_20, COLOR_MUTED);
+    lv_obj_set_width(s_xiaozhi_server, 154);
     lv_label_set_long_mode(s_xiaozhi_server, LV_LABEL_LONG_DOT);
     lv_obj_set_style_text_align(s_xiaozhi_server, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_align(s_xiaozhi_server, LV_ALIGN_BOTTOM_MID, 0, -52);
-    s_xiaozhi_hint = make_label(content, "轻触回应 · 长按说话", &ui_font_cjk_20, COLOR_MUTED);
-    lv_obj_align(s_xiaozhi_hint, LV_ALIGN_BOTTOM_MID, 0, -22);
     make_page_dots(content, 1);
 }
 
@@ -1757,7 +1775,7 @@ static void dotii_touch_event(lv_event_t *event)
 static void dotii_timer(lv_timer_t *timer)
 {
     (void)timer;
-    if (s_current == s_dotii && s_screen_on) render_dotii_expression();
+    if ((s_current == s_dotii || s_current == s_xiaozhi_page) && s_screen_on) render_dotii_expression();
 }
 
 static void build_dotii(void)
@@ -1779,7 +1797,7 @@ static void build_dotii(void)
     s_dotii_accent_center = make_dotii_part(s_dotii, 12, 12, 0, 88, COLOR_CYAN);
     /* The native emotion renderer owns its own layer set. The legacy parts are
        hidden so the old accent logic stays harmless. */
-    emotion_render_attach(&s_dotii_render, s_dotii, 466);
+    emotion_render_attach(&s_dotii_render, s_dotii, SCREEN_SIZE);
     lv_obj_add_flag(s_dotii_left_eye, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s_dotii_right_eye, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s_dotii_mouth, LV_OBJ_FLAG_HIDDEN);
@@ -2179,11 +2197,18 @@ static void update_snapshot(const codex_snapshot_t *snapshot)
     lv_obj_set_style_arc_color(s_xiaozhi_status_pill, color(xiaozhi_color), 0);
     const char *activation_code = xiaozhi_client_activation_code(&s_xiaozhi);
     if (activation_code != NULL) {
+        /* Pairing needs the widest single hint row we have. */
+        lv_obj_add_flag(s_time_xiaozhi, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_width(s_xiaozhi_server, 204);
         lv_label_set_text_fmt(s_xiaozhi_emotion, "配对码 %s", activation_code);
-        lv_label_set_text(s_xiaozhi_server, "打开 xiaozhi.me 输入设备码");
+        lv_label_set_text(s_xiaozhi_server, "xiaozhi.me 输入设备码");
     } else if (s_xiaozhi.connected) {
+        lv_obj_remove_flag(s_time_xiaozhi, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_width(s_xiaozhi_server, 154);
         lv_label_set_text(s_xiaozhi_server, "长按说话，松开发送");
     } else {
+        lv_obj_remove_flag(s_time_xiaozhi, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_width(s_xiaozhi_server, 154);
         lv_label_set_text(s_xiaozhi_server, "等待小智服务连接");
     }
     const bool xiaozhi_wants_run = snapshot->xiaozhi_enabled &&
