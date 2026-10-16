@@ -21,7 +21,11 @@
 #include "esp_attr.h"
 #include "esp_app_desc.h"
 #include "esp_heap_caps.h"
+#include "esp_log.h"
 #include "esp_system.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
+#include "freertos/task.h"
 #include "lvgl.h"
 #include "src/misc/cache/instance/lv_image_cache.h"
 #include "nvs.h"
@@ -35,6 +39,8 @@ LV_FONT_DECLARE(ui_font_cjk_20);
 LV_FONT_DECLARE(ui_font_fixed_20);
 
 #define SCREEN_SIZE 466
+
+static const char *TAG = "state_ui";
 #define SAFE_SIZE 358
 #define COLOR_BG 0x000000
 #define COLOR_SURFACE 0x141A19
@@ -49,7 +55,7 @@ LV_FONT_DECLARE(ui_font_fixed_20);
 #define COLOR_XIAOZHI 0x20D6E6
 #define COLOR_WARNING 0xF2C66D
 #define COLOR_DANGER 0xFF766F
-#define PAGE_COUNT 4
+#define PAGE_COUNT 2
 #define TITLE_HEIGHT 30
 #define DISPLAY_ANGLE_DEFAULT_TENTHS 900
 #define DISPLAY_ANGLE_MIN_TENTHS 800
@@ -68,8 +74,9 @@ static lv_obj_t *s_plus_weekly_percent;
 static lv_obj_t *s_plus_five_reset;
 static lv_obj_t *s_plus_weekly_reset;
 static lv_obj_t *s_plus_weekly_reset_day;
-static lv_obj_t *s_plus_time;
-static lv_obj_t *s_plus_status;
+static lv_obj_t *s_plus_running_count;
+static lv_obj_t *s_plus_completed_count;
+static lv_obj_t *s_plus_failed_count;
 static lv_obj_t *s_plus_status_pill;
 static lv_obj_t *s_detail;
 static lv_obj_t *s_xiaozhi_page;
@@ -81,8 +88,6 @@ static lv_obj_t *s_assistant_speaker;
 static lv_obj_t *s_assistant_bubble;
 static lv_obj_t *s_detail_chat;
 static lv_obj_t *s_detail_footer;
-static lv_obj_t *s_custom;
-static lv_obj_t *s_dotii;
 static lv_obj_t *s_control;
 static lv_obj_t *s_settings;
 static lv_obj_t *s_power;
@@ -92,9 +97,10 @@ static lv_obj_t *s_before_screen_saver;
 static lv_obj_t *s_current;
 static lv_obj_t *s_main_arc;
 static lv_obj_t *s_percent;
-static lv_obj_t *s_status;
 static lv_obj_t *s_status_pill;
-static lv_obj_t *s_status_dot;
+static lv_obj_t *s_running_count;
+static lv_obj_t *s_completed_count;
+static lv_obj_t *s_failed_count;
 static lv_obj_t *s_weekly_tokens;
 static lv_obj_t *s_reset_day;
 static lv_obj_t *s_reset_time;
@@ -114,25 +120,20 @@ static lv_obj_t *s_settings_bridge;
 static lv_obj_t *s_settings_reset_button;
 static lv_obj_t *s_settings_reset_detail;
 static lv_obj_t *s_brightness_slider;
-static lv_obj_t *s_custom_ring;
-static lv_obj_t *s_custom_image;
-static lv_obj_t *s_custom_title;
-static lv_obj_t *s_custom_value;
-static lv_obj_t *s_custom_body;
-static lv_obj_t *s_custom_footer;
-static lv_obj_t *s_dotii_left_eye;
-static lv_obj_t *s_dotii_right_eye;
-static lv_obj_t *s_dotii_mouth;
-static lv_obj_t *s_dotii_accent_left;
-static lv_obj_t *s_dotii_accent_right;
-static lv_obj_t *s_dotii_accent_center;
-static emotion_engine_t s_dotii_engine;
-static emotion_router_t s_dotii_router;
-static emotion_render_t s_dotii_render;
+static emotion_engine_t s_xiaozhi_engine;
+static emotion_router_t s_xiaozhi_router;
 static emotion_render_t s_xiaozhi_render;
-static bool s_dotii_engine_ready;
-static char s_dotii_character[16] = "dotii";
+static bool s_xiaozhi_engine_ready;
+static char s_xiaozhi_character[16] = "dotii";
 static xiaozhi_client_t s_xiaozhi;
+/* Websocket start/stop can block for a long time (TLS connect, close
+   handshake). Those calls must never run inside an LVGL timer: a stalled close
+   used to hold the LVGL lock forever, which froze the screen and both hardware
+   keys. The UI thread only publishes the desired state here; the supervisor
+   task below owns the client lifecycle. */
+static SemaphoreHandle_t s_xiaozhi_request_lock;
+static bool s_xiaozhi_want_enabled;
+static xiaozhi_config_t s_xiaozhi_want_config;
 
 const xiaozhi_client_t *state_ui_xiaozhi_client(void)
 {
@@ -140,14 +141,13 @@ const xiaozhi_client_t *state_ui_xiaozhi_client(void)
 }
 static lv_obj_t *s_codex_quick;
 static lv_obj_t *s_xiaozhi_quick;
-static lv_obj_t *s_custom_quick;
-static lv_obj_t *s_dotii_quick;
 static lv_obj_t *s_page_dots[PAGE_COUNT][PAGE_COUNT];
 static lv_point_t s_press_point;
 static uint8_t s_battery = 0xFF;
 static int s_brightness = 64;
 static int16_t s_display_angle_tenths = DISPLAY_ANGLE_DEFAULT_TENTHS;
 static uint32_t s_display_revision;
+static SemaphoreHandle_t s_display_save_signal;
 static uint32_t s_screen_off_timeout_seconds = 60;
 static uint32_t s_sleep_timeout_seconds = 300;
 static uint32_t s_charging_screen_off_timeout_seconds = 60;
@@ -160,7 +160,6 @@ static uint32_t s_last_activity;
 static uint32_t s_last_press_event;
 static bool s_screen_on = true;
 static bool s_screen_saver_active;
-static bool s_ignore_next_dotii_click;
 static bool s_wake_touch_in_progress;
 static bool s_xiaozhi_touch_listening;
 static bool s_screen_load_pending;
@@ -174,8 +173,6 @@ typedef enum {
 } transition_t;
 static transition_t s_pending_transition;
 static lv_font_t s_ui_font;
-static lv_image_dsc_t s_custom_image_dsc;
-static uint32_t s_custom_image_revision;
 static char *s_rendered_conversation;
 static codex_task_detail_t *s_detail_task;
 static size_t s_detail_task_index;
@@ -183,7 +180,7 @@ static size_t s_detail_task_count;
 static char s_detail_thread_id[64];
 static char s_read_ack_message_id[80];
 static char s_read_ack_result_message_id[80];
-static uint32_t s_dotii_touch_started;
+static uint32_t s_xiaozhi_touch_started;
 static uint32_t s_dotii_state_started;
 static uint32_t s_dotii_state_token;
 static uint32_t s_dotii_state_duration_ms;
@@ -205,8 +202,9 @@ static lv_obj_t *page_screen(uint8_t page);
 static lv_obj_t *first_enabled_screen(void);
 static lv_obj_t *enabled_return_screen(lv_obj_t *screen);
 static void render_codex_detail(void);
-static void render_dotii_expression(void);
+static void render_xiaozhi_expression(void);
 static void xiaozhi_sync_config(void);
+static void xiaozhi_supervisor_task(void *argument);
 static void xiaozhi_touch_event(lv_event_t *event);
 static lv_color_t color(uint32_t hex);
 static void set_screen_background(lv_obj_t *screen);
@@ -238,6 +236,52 @@ static lv_obj_t *make_label(lv_obj_t *parent, const char *text, const lv_font_t 
     lv_obj_set_style_text_font(label, font, 0);
     lv_obj_set_style_text_color(label, color(text_color), 0);
     return label;
+}
+
+static lv_obj_t *make_task_counter(lv_obj_t *parent, const char *caption,
+                                   uint32_t accent)
+{
+    lv_obj_t *box = lv_obj_create(parent);
+    lv_obj_remove_style_all(box);
+    lv_obj_set_size(box, 94, 44);
+    lv_obj_remove_flag(box, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_remove_flag(box, LV_OBJ_FLAG_CLICKABLE);
+
+    lv_obj_t *value = make_label(box, "--", &lv_font_montserrat_22, accent);
+    lv_obj_set_size(value, 88, 24);
+    lv_obj_set_style_text_align(value, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_align(value, LV_ALIGN_TOP_MID, 0, -1);
+
+    lv_obj_t *caption_label = make_label(box, caption, &s_ui_font, COLOR_MUTED);
+    lv_obj_set_size(caption_label, 88, 20);
+    lv_obj_set_style_text_align(caption_label, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_align(caption_label, LV_ALIGN_BOTTOM_MID, 0, 1);
+    return value;
+}
+
+static void make_task_counters(lv_obj_t *pill, lv_obj_t **running,
+                               lv_obj_t **completed, lv_obj_t **failed)
+{
+    lv_obj_set_size(pill, 300, 52);
+    lv_obj_set_layout(pill, LV_LAYOUT_FLEX);
+    lv_obj_set_flex_flow(pill, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(pill, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_all(pill, 0, 0);
+    lv_obj_set_style_pad_column(pill, 0, 0);
+    *running = make_task_counter(pill, "运行中", COLOR_GREEN);
+    *completed = make_task_counter(pill, "已完成", COLOR_BLUE);
+    *failed = make_task_counter(pill, "失败", COLOR_DANGER);
+}
+
+static void update_task_counter(lv_obj_t *label, bool available, uint16_t value)
+{
+    if (label == NULL) return;
+    if (!available) {
+        lv_label_set_text(label, "--");
+    } else {
+        lv_label_set_text_fmt(label, "%u", (unsigned)value);
+    }
 }
 
 /* Centering a scaled label by its glyph bounds is unstable because Chinese
@@ -387,9 +431,7 @@ static void activity_event(lv_event_t *event)
     lv_event_code_t code = lv_event_get_code(event);
     if (code == LV_EVENT_PRESSED) {
         if (s_screen_saver_active) {
-            const bool was_dotii_saver = s_current == s_dotii;
             exit_screen_saver();
-            s_ignore_next_dotii_click = was_dotii_saver;
             s_wake_touch_in_progress = true;
             return;
         }
@@ -499,15 +541,6 @@ static void screen_wake(void)
 
 static lv_obj_t *screen_saver_target(void)
 {
-    /* An explicit saver choice is independent from the normal page-cycle
-       switches: disabling a page should not silently change the selected
-       ambient page. */
-    if (s_screen_off_page == DISPLAY_SCREEN_OFF_PAGE_CUSTOM) {
-        return s_custom;
-    }
-    if (s_screen_off_page == DISPLAY_SCREEN_OFF_PAGE_DOTII) {
-        return s_dotii;
-    }
     return NULL;
 }
 
@@ -582,11 +615,8 @@ static void load_persisted_settings(void)
                s_charging_sleep_timeout_seconds < s_charging_screen_off_timeout_seconds) {
         s_charging_screen_off_timeout_seconds = s_charging_sleep_timeout_seconds;
     }
-    uint8_t screen_off_page = DISPLAY_SCREEN_OFF_PAGE_NONE;
-    if (nvs_get_u8(handle, "off_page", &screen_off_page) == ESP_OK &&
-        screen_off_page <= DISPLAY_SCREEN_OFF_PAGE_DOTII) {
-        s_screen_off_page = (display_screen_off_page_t)screen_off_page;
-    }
+    /* Legacy custom/dotii ambient pages are no longer selectable. */
+    s_screen_off_page = DISPLAY_SCREEN_OFF_PAGE_NONE;
     int16_t angle;
     if (nvs_get_i16(handle, "dock_angle", &angle) == ESP_OK &&
         angle >= DISPLAY_ANGLE_MIN_TENTHS && angle <= DISPLAY_ANGLE_MAX_TENTHS) {
@@ -598,6 +628,26 @@ static void load_persisted_settings(void)
     }
     nvs_get_u32(handle, "display_rev", &s_display_revision);
     nvs_close(handle);
+}
+
+static void save_display_settings(void);
+
+/* NVS writes must not run on the LVGL worker: that task's stack lives in
+   PSRAM, and the flash driver freezes the external-memory cache while a
+   page is written. The timer only signals this worker, which owns an
+   internal stack for the actual commit. */
+static void display_settings_writer_task(void *argument)
+{
+    (void)argument;
+    for (;;) {
+        if (xSemaphoreTake(s_display_save_signal, portMAX_DELAY) != pdTRUE) continue;
+        save_display_settings();
+    }
+}
+
+static void request_display_settings_save(void)
+{
+    if (s_display_save_signal != NULL) xSemaphoreGive(s_display_save_signal);
 }
 
 static void save_display_settings(void)
@@ -784,17 +834,13 @@ static bool page_enabled(uint8_t page)
 {
     if (!s_snapshot.valid) return page < 2;
     if (page == 0) return s_snapshot.codex_enabled;
-    if (page == 1) return s_snapshot.xiaozhi_enabled;
-    if (page == 2) return s_snapshot.custom_enabled;
-    return s_snapshot.dotii_enabled;
+    return s_snapshot.xiaozhi_enabled;
 }
 
 static lv_obj_t *page_screen(uint8_t page)
 {
     if (page == 0) return s_snapshot.codex_ui_dual_limit ? s_plus_main : s_main;
-    if (page == 1) return s_xiaozhi_page;
-    if (page == 2) return s_custom;
-    return s_dotii;
+    return s_xiaozhi_page;
 }
 
 static lv_obj_t *first_enabled_screen(void)
@@ -809,8 +855,6 @@ static bool screen_enabled(lv_obj_t *screen)
 {
     if (screen == s_main || screen == s_plus_main || screen == s_detail) return page_enabled(0);
     if (screen == s_xiaozhi_page) return page_enabled(1);
-    if (screen == s_custom) return page_enabled(2);
-    if (screen == s_dotii) return page_enabled(3);
     return true;
 }
 
@@ -822,7 +866,7 @@ static lv_obj_t *enabled_return_screen(lv_obj_t *screen)
 
 static void update_page_dots(void)
 {
-    static const uint32_t active_colors[PAGE_COUNT] = {COLOR_BLUE, COLOR_XIAOZHI, COLOR_WARNING, COLOR_CYAN};
+    static const uint32_t active_colors[PAGE_COUNT] = {COLOR_BLUE, COLOR_XIAOZHI};
     for (uint8_t row = 0; row < PAGE_COUNT; ++row) {
         int total_width = 0;
         uint8_t count = 0;
@@ -904,33 +948,15 @@ static void build_main(void)
     lv_obj_align(s_percent, LV_ALIGN_CENTER, 0, -19);
 
     s_status_pill = lv_obj_create(s_main_content);
-    lv_obj_set_size(s_status_pill, 138, 48);
     lv_obj_set_style_radius(s_status_pill, LV_RADIUS_CIRCLE, 0);
     lv_obj_set_style_bg_color(s_status_pill, color(0x152A42), 0);
     lv_obj_set_style_bg_opa(s_status_pill, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(s_status_pill, 0, 0);
-    lv_obj_set_style_pad_hor(s_status_pill, 6, 0);
-    lv_obj_set_style_pad_ver(s_status_pill, 0, 0);
-    lv_obj_set_style_pad_column(s_status_pill, 4, 0);
-    lv_obj_set_layout(s_status_pill, LV_LAYOUT_FLEX);
-    lv_obj_set_flex_flow(s_status_pill, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(s_status_pill, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_remove_flag(s_status_pill, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_remove_flag(s_status_pill, LV_OBJ_FLAG_CLICKABLE);
-    s_status_dot = lv_obj_create(s_status_pill);
-    lv_obj_remove_style_all(s_status_dot);
-    lv_obj_set_size(s_status_dot, 14, 14);
-    lv_obj_set_style_radius(s_status_dot, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_bg_color(s_status_dot, color(COLOR_GREEN), 0);
-    lv_obj_set_style_bg_opa(s_status_dot, LV_OPA_COVER, 0);
-    s_status = make_label(s_status_pill, "工作中", &s_ui_font, COLOR_GREEN);
-    lv_obj_set_size(s_status, 82, 22);
-    lv_obj_set_style_text_align(s_status, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_transform_scale(s_status, 282, 0);
-    lv_obj_set_style_text_outline_stroke_color(s_status, color(COLOR_GREEN), 0);
-    lv_obj_set_style_text_outline_stroke_width(s_status, 2, 0);
-    lv_obj_set_style_text_outline_stroke_opa(s_status, LV_OPA_COVER, 0);
-    lv_obj_align(s_status_pill, LV_ALIGN_CENTER, 0, 52);
+    make_task_counters(s_status_pill, &s_running_count, &s_completed_count,
+                       &s_failed_count);
+    lv_obj_align(s_status_pill, LV_ALIGN_CENTER, 0, 50);
 
     s_weekly_tokens = make_metric(s_main_content, "18.4k", "近7日 Token", 92);
     make_reset_metric(s_main_content, 242);
@@ -1036,60 +1062,15 @@ static void build_plus_main(void)
     s_plus_five_reset = make_usage_reset_row(s_plus_main, 166, NULL);
 
     s_plus_status_pill = lv_obj_create(s_plus_main);
-    lv_obj_set_size(s_plus_status_pill, 224, 48);
     lv_obj_align(s_plus_status_pill, LV_ALIGN_CENTER, 0, 0);
     lv_obj_set_style_radius(s_plus_status_pill, LV_RADIUS_CIRCLE, 0);
     lv_obj_set_style_bg_color(s_plus_status_pill, color(0x152A42), 0);
     lv_obj_set_style_bg_opa(s_plus_status_pill, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(s_plus_status_pill, 0, 0);
-    lv_obj_set_style_pad_all(s_plus_status_pill, 0, 0);
     lv_obj_remove_flag(s_plus_status_pill, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_remove_flag(s_plus_status_pill, LV_OBJ_FLAG_CLICKABLE);
-
-    /* Font transforms do not participate in LVGL flex measurement.  Center a
-       dedicated row, then apply the small optical corrections measured on the
-       physical round display instead of centering the unscaled glyph boxes. */
-    lv_obj_t *status_content = lv_obj_create(s_plus_status_pill);
-    lv_obj_remove_style_all(status_content);
-    lv_obj_set_size(status_content, 210, 40);
-    lv_obj_align(status_content, LV_ALIGN_CENTER, -6, 0);
-    lv_obj_set_style_pad_all(status_content, 0, 0);
-    lv_obj_set_style_pad_column(status_content, 0, 0);
-    lv_obj_set_layout(status_content, LV_LAYOUT_FLEX);
-    lv_obj_set_flex_flow(status_content, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(status_content, LV_FLEX_ALIGN_CENTER,
-                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-
-    s_plus_time = make_label(status_content, "--:--", &s_ui_font, COLOR_TEXT);
-    lv_obj_set_height(s_plus_time, 26);
-    lv_obj_set_style_text_align(s_plus_time, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_transform_scale(s_plus_time, 310, 0);
-    lv_obj_set_style_text_outline_stroke_color(s_plus_time, color(COLOR_TEXT), 0);
-    lv_obj_set_style_text_outline_stroke_width(s_plus_time, 2, 0);
-    lv_obj_set_style_text_outline_stroke_opa(s_plus_time, LV_OPA_COVER, 0);
-
-    lv_obj_t *status_left_gap = lv_obj_create(status_content);
-    lv_obj_remove_style_all(status_left_gap);
-    lv_obj_set_size(status_left_gap, 10, 1);
-
-    lv_obj_t *status_separator = make_label(status_content, "·", &s_ui_font,
-                                            COLOR_MUTED);
-    lv_obj_set_height(status_separator, 30);
-    lv_obj_set_style_text_align(status_separator, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_transform_scale(status_separator, 460, 0);
-    lv_obj_set_style_translate_y(status_separator, -4, 0);
-
-    lv_obj_t *status_right_gap = lv_obj_create(status_content);
-    lv_obj_remove_style_all(status_right_gap);
-    lv_obj_set_size(status_right_gap, 12, 1);
-
-    s_plus_status = make_label(status_content, "工作中", &s_ui_font, COLOR_GREEN);
-    lv_obj_set_height(s_plus_status, 26);
-    lv_obj_set_style_text_align(s_plus_status, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_transform_scale(s_plus_status, 310, 0);
-    lv_obj_set_style_text_outline_stroke_color(s_plus_status, color(COLOR_GREEN), 0);
-    lv_obj_set_style_text_outline_stroke_width(s_plus_status, 2, 0);
-    lv_obj_set_style_text_outline_stroke_opa(s_plus_status, LV_OPA_COVER, 0);
+    make_task_counters(s_plus_status_pill, &s_plus_running_count,
+                       &s_plus_completed_count, &s_plus_failed_count);
 
     lv_obj_t *weekly_title = make_label(s_plus_main, "周剩余", &ui_font_cjk_24,
                                         COLOR_BLUE_USAGE);
@@ -1393,6 +1374,7 @@ static void build_xiaozhi(void)
     lv_obj_add_event_cb(s_xiaozhi_page, xiaozhi_touch_event, LV_EVENT_LONG_PRESSED, NULL);
     lv_obj_add_event_cb(s_xiaozhi_page, xiaozhi_touch_event, LV_EVENT_RELEASED, NULL);
     lv_obj_add_flag(s_xiaozhi_page, LV_OBJ_FLAG_CLICKABLE);
+    make_page_dots(s_xiaozhi_page, 1);
 
     lv_obj_t *content = lv_obj_create(s_xiaozhi_page);
     lv_obj_remove_style_all(content);
@@ -1478,79 +1460,7 @@ static void build_xiaozhi(void)
     lv_obj_set_style_text_align(s_xiaozhi_server, LV_TEXT_ALIGN_CENTER, 0);
 }
 
-static void build_custom(void)
-{
-    s_custom = lv_obj_create(NULL);
-    set_screen_background(s_custom);
-    add_activity_event(s_custom);
-    lv_obj_add_event_cb(s_custom, swipe_event, LV_EVENT_GESTURE, NULL);
 
-    lv_obj_t *content = lv_obj_create(s_custom);
-    lv_obj_remove_style_all(content);
-    lv_obj_set_size(content, SCREEN_SIZE, SCREEN_SIZE);
-    lv_obj_center(content);
-    lv_obj_remove_flag(content, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_remove_flag(content, LV_OBJ_FLAG_CLICKABLE);
-
-    s_custom_image = lv_image_create(content);
-    lv_obj_center(s_custom_image);
-    lv_obj_add_flag(s_custom_image, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_remove_flag(s_custom_image, LV_OBJ_FLAG_CLICKABLE);
-
-    s_custom_ring = lv_arc_create(content);
-    lv_obj_set_size(s_custom_ring, SCREEN_SIZE, SCREEN_SIZE);
-    lv_obj_center(s_custom_ring);
-    lv_arc_set_range(s_custom_ring, 0, 100);
-    lv_arc_set_value(s_custom_ring, 100);
-    lv_arc_set_bg_angles(s_custom_ring, 0, 360);
-    lv_obj_set_style_arc_width(s_custom_ring, 26, LV_PART_MAIN);
-    lv_obj_set_style_arc_color(s_custom_ring, color(0x2B2D28), LV_PART_MAIN);
-    lv_obj_set_style_arc_width(s_custom_ring, 26, LV_PART_INDICATOR);
-    lv_obj_set_style_arc_color(s_custom_ring, color(COLOR_WARNING), LV_PART_INDICATOR);
-    lv_obj_remove_style(s_custom_ring, NULL, LV_PART_KNOB);
-    lv_obj_remove_flag(s_custom_ring, LV_OBJ_FLAG_CLICKABLE);
-
-    s_custom_title = make_label(content, "我的页面", &ui_font_cjk_20, COLOR_MUTED);
-    lv_label_set_long_mode(s_custom_title, LV_LABEL_LONG_DOT);
-    lv_obj_set_width(s_custom_title, 280);
-    lv_obj_set_style_text_align(s_custom_title, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_align(s_custom_title, LV_ALIGN_TOP_MID, 0, 54);
-
-    s_custom_value = make_label(content, "你好，Dotii", &ui_font_cjk_20, COLOR_WARNING);
-    lv_label_set_long_mode(s_custom_value, LV_LABEL_LONG_WRAP);
-    lv_obj_set_width(s_custom_value, 304);
-    lv_obj_set_style_text_align(s_custom_value, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_align(s_custom_value, LV_ALIGN_CENTER, 0, -52);
-
-    s_custom_body = make_label(content, "在电脑端编辑内容，保存后会自动同步到设备。", &ui_font_cjk_20, 0xC6D0CC);
-    lv_label_set_long_mode(s_custom_body, LV_LABEL_LONG_WRAP);
-    lv_obj_set_width(s_custom_body, 300);
-    lv_obj_set_style_text_align(s_custom_body, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_align(s_custom_body, LV_ALIGN_CENTER, 0, 32);
-
-    s_custom_footer = make_label(content, "自定义内容", &ui_font_cjk_20, COLOR_MUTED);
-    lv_label_set_long_mode(s_custom_footer, LV_LABEL_LONG_DOT);
-    lv_obj_set_width(s_custom_footer, 270);
-    lv_obj_set_style_text_align(s_custom_footer, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_align(s_custom_footer, LV_ALIGN_BOTTOM_MID, 0, -54);
-
-    /* The custom page is designed as a clean ambient canvas and intentionally
-       does not show navigation dots. */
-}
-
-static lv_obj_t *make_dotii_part(lv_obj_t *parent, int width, int height,
-                                 int x, int y, uint32_t part_color)
-{
-    lv_obj_t *part = lv_obj_create(parent);
-    lv_obj_remove_style_all(part);
-    lv_obj_set_size(part, width, height);
-    lv_obj_align(part, LV_ALIGN_CENTER, x, y);
-    lv_obj_set_style_radius(part, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_bg_color(part, color(part_color), 0);
-    lv_obj_set_style_bg_opa(part, LV_OPA_COVER, 0);
-    lv_obj_remove_flag(part, LV_OBJ_FLAG_CLICKABLE);
-    return part;
-}
 
 static uint32_t dotii_expression_duration(dotii_expression_t expression)
 {
@@ -1559,65 +1469,17 @@ static uint32_t dotii_expression_duration(dotii_expression_t expression)
     return duration >= 800 && duration <= 10000 ? duration : 800;
 }
 
-static bool dotii_touch_active(void)
+static bool xiaozhi_touch_active(void)
 {
-    return s_dotii_touch_started != 0 &&
-           lv_tick_elaps(s_dotii_touch_started) <
+    return s_xiaozhi_touch_started != 0 &&
+           lv_tick_elaps(s_xiaozhi_touch_started) <
                dotii_expression_duration(s_snapshot.dotii_touch_expression);
 }
 
-static uint32_t dotii_blink_cycle_position(void)
-{
-    const uint32_t duration = dotii_expression_duration(s_snapshot.dotii_blink_expression);
-    return lv_tick_get() % (6000U + duration);
-}
 
-static bool dotii_business_animation_active(void)
-{
-    if (!s_snapshot.dotii_state_assigned || s_snapshot.dotii_base_idle) return false;
-    if (s_snapshot.dotii_state_duration_ms == 0) return true;
-    return s_dotii_state_seen &&
-           lv_tick_elaps(s_dotii_state_started) < s_snapshot.dotii_state_duration_ms;
-}
 
-static bool dotii_idle_fallback_active(void)
-{
-    return s_snapshot.dotii_base_idle || !dotii_business_animation_active();
-}
 
-static dotii_expression_t active_dotii_expression(void)
-{
-    if (dotii_touch_active()) {
-        return s_snapshot.dotii_touch_expression;
-    }
-    if (dotii_idle_fallback_active()) {
-        if (lv_tick_elaps(s_last_activity) > 60000) return s_snapshot.dotii_long_idle_expression;
-        if (dotii_blink_cycle_position() >= 6000U) return s_snapshot.dotii_blink_expression;
-        return DOTII_EXPRESSION_IDLE_BREATH;
-    }
-    return s_snapshot.dotii_expression;
-}
 
-static void set_dotii_part(lv_obj_t *part, int width, int height, int x, int y,
-                           uint32_t part_color, lv_opa_t opacity)
-{
-    /* Keep every expression in the same visual system while making the face
-       occupy more of the 466 px round display. Scale dimensions and offsets
-       together so animated accents retain their spacing and stay centered. */
-    const int scale_num = 6;
-    const int scale_den = 5;
-    width = (width * scale_num + scale_den / 2) / scale_den;
-    height = (height * scale_num + scale_den / 2) / scale_den;
-    x = x >= 0 ? (x * scale_num + scale_den / 2) / scale_den :
-                 -((-x * scale_num + scale_den / 2) / scale_den);
-    y = y >= 0 ? (y * scale_num + scale_den / 2) / scale_den :
-                 -((-y * scale_num + scale_den / 2) / scale_den);
-    lv_obj_remove_flag(part, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_set_size(part, width, height);
-    lv_obj_align(part, LV_ALIGN_CENTER, x, y);
-    lv_obj_set_style_bg_color(part, color(part_color), 0);
-    lv_obj_set_style_bg_opa(part, opacity, 0);
-}
 
 static const char *business_emotion_id(void)
 {
@@ -1637,20 +1499,20 @@ static const char *business_emotion_id(void)
 
 static const char *touch_emotion_id(void)
 {
-    if (!dotii_touch_active()) {
+    if (!xiaozhi_touch_active()) {
         return NULL;
     }
     return "13";
 }
 
-static void dotii_engine_ensure(void)
+static void xiaozhi_engine_ensure(void)
 {
-    if (s_dotii_engine_ready) {
+    if (s_xiaozhi_engine_ready) {
         return;
     }
-    emotion_engine_init(&s_dotii_engine, lv_tick_get());
-    emotion_router_init(&s_dotii_router, &s_dotii_engine);
-    s_dotii_engine_ready = true;
+    emotion_engine_init(&s_xiaozhi_engine, lv_tick_get());
+    emotion_router_init(&s_xiaozhi_router, &s_xiaozhi_engine);
+    s_xiaozhi_engine_ready = true;
 }
 
 static void xiaozhi_sync_config(void)
@@ -1665,28 +1527,74 @@ static void xiaozhi_sync_config(void)
             s_snapshot.xiaozhi_voice[0] ? s_snapshot.xiaozhi_voice : "default",
             sizeof(config.voice));
     config.mcp_enabled = s_snapshot.xiaozhi_mcp_enabled;
-    xiaozhi_client_configure(&s_xiaozhi, &config);
+
+    if (s_xiaozhi_request_lock == NULL) return;
+    if (xSemaphoreTake(s_xiaozhi_request_lock, pdMS_TO_TICKS(50)) != pdTRUE) return;
+    s_xiaozhi_want_enabled = s_snapshot.xiaozhi_enabled;
+    s_xiaozhi_want_config = config;
+    xSemaphoreGive(s_xiaozhi_request_lock);
 }
 
-static void render_dotii_expression(void)
+/* The wake word, voice and MCP flag travel in the websocket hello, so a change
+   to any of them needs a fresh session rather than a live field update. */
+static bool xiaozhi_config_differs(const xiaozhi_config_t *left, const xiaozhi_config_t *right)
 {
-    if (s_dotii == NULL) return;
-    dotii_engine_ensure();
+    return strcmp(left->server_url, right->server_url) != 0 ||
+           strcmp(left->wake_word, right->wake_word) != 0 ||
+           strcmp(left->voice, right->voice) != 0 ||
+           left->mcp_enabled != right->mcp_enabled;
+}
+
+static void xiaozhi_supervisor_task(void *argument)
+{
+    (void)argument;
+    for (;;) {
+        bool want_enabled = false;
+        xiaozhi_config_t want_config = {0};
+        if (s_xiaozhi_request_lock != NULL &&
+            xSemaphoreTake(s_xiaozhi_request_lock, portMAX_DELAY) == pdTRUE) {
+            want_enabled = s_xiaozhi_want_enabled;
+            want_config = s_xiaozhi_want_config;
+            xSemaphoreGive(s_xiaozhi_request_lock);
+        }
+
+        const bool want_run = want_enabled && want_config.server_url[0] != '\0';
+        if (want_run && !s_xiaozhi.running) {
+            xiaozhi_client_configure(&s_xiaozhi, &want_config);
+            xiaozhi_client_start(&s_xiaozhi);
+        } else if (!want_run && s_xiaozhi.running) {
+            xiaozhi_client_stop(&s_xiaozhi);
+        } else if (want_run && s_xiaozhi.running &&
+                   xiaozhi_config_differs(&s_xiaozhi.config, &want_config)) {
+            xiaozhi_client_stop(&s_xiaozhi);
+            xiaozhi_client_configure(&s_xiaozhi, &want_config);
+            xiaozhi_client_start(&s_xiaozhi);
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(200));
+    }
+}
+
+static void render_xiaozhi_expression(void)
+{
+    if (s_xiaozhi_page == NULL || !s_xiaozhi_render.attached ||
+        (s_current != s_xiaozhi_page && s_current != NULL)) return;
+    xiaozhi_engine_ensure();
 
     const uint32_t now = lv_tick_get();
     const char *touch = touch_emotion_id();
     if (touch != NULL) {
-        emotion_router_set_source(&s_dotii_router, EMOTION_SRC_TOUCH, touch,
+        emotion_router_set_source(&s_xiaozhi_router, EMOTION_SRC_TOUCH, touch,
                                   (uint16_t)dotii_expression_duration(s_snapshot.dotii_touch_expression), now);
     } else {
-        emotion_router_clear_source(&s_dotii_router, EMOTION_SRC_TOUCH, now);
+        emotion_router_clear_source(&s_xiaozhi_router, EMOTION_SRC_TOUCH, now);
     }
 
     const char *business = business_emotion_id();
     if (business != NULL) {
-        emotion_router_set_source(&s_dotii_router, EMOTION_SRC_BUSINESS, business, 0, now);
+        emotion_router_set_source(&s_xiaozhi_router, EMOTION_SRC_BUSINESS, business, 0, now);
     } else {
-        emotion_router_clear_source(&s_dotii_router, EMOTION_SRC_BUSINESS, now);
+        emotion_router_clear_source(&s_xiaozhi_router, EMOTION_SRC_BUSINESS, now);
     }
 
     if (s_snapshot.xiaozhi_enabled) {
@@ -1695,43 +1603,32 @@ static void render_dotii_expression(void)
             xiaozhi_emotion = xiaozhi_client_state_emotion(xiaozhi_client_state(&s_xiaozhi));
         }
         if (xiaozhi_emotion != NULL) {
-            emotion_router_set_source(&s_dotii_router, EMOTION_SRC_XIAOZHI, xiaozhi_emotion, 0, now);
+            emotion_router_set_source(&s_xiaozhi_router, EMOTION_SRC_XIAOZHI, xiaozhi_emotion, 0, now);
         } else {
-            emotion_router_clear_source(&s_dotii_router, EMOTION_SRC_XIAOZHI, now);
+            emotion_router_clear_source(&s_xiaozhi_router, EMOTION_SRC_XIAOZHI, now);
         }
     } else {
-        emotion_router_clear_source(&s_dotii_router, EMOTION_SRC_XIAOZHI, now);
+        emotion_router_clear_source(&s_xiaozhi_router, EMOTION_SRC_XIAOZHI, now);
     }
 
-    emotion_router_tick(&s_dotii_router, now);
+    emotion_router_tick(&s_xiaozhi_router, now);
 
-    const emotion_engine_state_t *state = emotion_engine_state(&s_dotii_engine);
-    const emotion_def_t *def = emotion_catalog_by_id(emotion_router_active_id(&s_dotii_router));
+    const emotion_engine_state_t *state = emotion_engine_state(&s_xiaozhi_engine);
+    const emotion_def_t *def = emotion_catalog_by_id(emotion_router_active_id(&s_xiaozhi_router));
     if (def == NULL) def = emotion_catalog_fallback();
-    const char *character_id = s_snapshot.character_id[0] != '\0' ? s_snapshot.character_id : s_dotii_character;
+    const char *character_id = s_snapshot.character_id[0] != '\0' ? s_snapshot.character_id : s_xiaozhi_character;
     const character_def_t *pack = character_pack_lookup(character_id);
     if (pack == NULL) pack = character_pack_fallback();
 
-    const bool update_dotii = s_current == s_dotii || s_current == NULL;
-    const bool update_xiaozhi = s_current == s_xiaozhi_page || s_current == NULL;
-    if (update_dotii && s_dotii_render.attached) {
-        emotion_render_update(&s_dotii_render, state, def, pack);
-    }
-    if (update_xiaozhi && s_xiaozhi_render.attached) {
-        emotion_render_update(&s_xiaozhi_render, state, def, pack);
-    }
-
-    lv_obj_add_flag(s_dotii_accent_left, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_add_flag(s_dotii_accent_right, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_add_flag(s_dotii_accent_center, LV_OBJ_FLAG_HIDDEN);
+    emotion_render_update(&s_xiaozhi_render, state, def, pack);
 }
 static void xiaozhi_listen_hold(void)
 {
     if (!s_snapshot.xiaozhi_enabled || !s_xiaozhi.running) return;
-    s_dotii_touch_started = lv_tick_get();
-    if (s_dotii_touch_started == 0) s_dotii_touch_started = 1;
+    s_xiaozhi_touch_started = lv_tick_get();
+    if (s_xiaozhi_touch_started == 0) s_xiaozhi_touch_started = 1;
     s_xiaozhi_touch_listening = xiaozhi_client_send_listen(&s_xiaozhi, true);
-    render_dotii_expression();
+    render_xiaozhi_expression();
 }
 
 static void xiaozhi_listen_release(void)
@@ -1750,67 +1647,19 @@ static void xiaozhi_touch_event(lv_event_t *event)
     } else if (code == LV_EVENT_RELEASED) {
         xiaozhi_listen_release();
     } else if (code == LV_EVENT_SHORT_CLICKED) {
-        s_dotii_touch_started = lv_tick_get();
-        if (s_dotii_touch_started == 0) s_dotii_touch_started = 1;
-        render_dotii_expression();
+        s_xiaozhi_touch_started = lv_tick_get();
+        if (s_xiaozhi_touch_started == 0) s_xiaozhi_touch_started = 1;
+        render_xiaozhi_expression();
     }
 }
 
-static void dotii_touch_event(lv_event_t *event)
-{
-    const lv_event_code_t code = lv_event_get_code(event);
-    if (code == LV_EVENT_LONG_PRESSED) {
-        xiaozhi_listen_hold();
-        return;
-    }
-    if (code == LV_EVENT_RELEASED) {
-        xiaozhi_listen_release();
-        return;
-    }
-    if (code != LV_EVENT_SHORT_CLICKED) return;
-    if (s_ignore_next_dotii_click) {
-        s_ignore_next_dotii_click = false;
-        return;
-    }
-    if (s_wake_touch_in_progress) return;
-    s_dotii_touch_started = lv_tick_get();
-    if (s_dotii_touch_started == 0) s_dotii_touch_started = 1;
-    render_dotii_expression();
-}
 
-static void dotii_timer(lv_timer_t *timer)
+static void xiaozhi_face_timer(lv_timer_t *timer)
 {
     (void)timer;
-    if ((s_current == s_dotii || s_current == s_xiaozhi_page) && s_screen_on) render_dotii_expression();
+    if (s_current == s_xiaozhi_page && s_screen_on) render_xiaozhi_expression();
 }
 
-static void build_dotii(void)
-{
-    s_dotii = lv_obj_create(NULL);
-    set_screen_background(s_dotii);
-    add_activity_event(s_dotii);
-    lv_obj_add_event_cb(s_dotii, swipe_event, LV_EVENT_GESTURE, NULL);
-    lv_obj_add_event_cb(s_dotii, dotii_touch_event, LV_EVENT_SHORT_CLICKED, NULL);
-    lv_obj_add_event_cb(s_dotii, dotii_touch_event, LV_EVENT_LONG_PRESSED, NULL);
-    lv_obj_add_event_cb(s_dotii, dotii_touch_event, LV_EVENT_RELEASED, NULL);
-    lv_obj_add_flag(s_dotii, LV_OBJ_FLAG_CLICKABLE);
-
-    s_dotii_left_eye = make_dotii_part(s_dotii, 52, 72, -78, -30, 0xF4EAD2);
-    s_dotii_right_eye = make_dotii_part(s_dotii, 52, 72, 78, -30, 0xF4EAD2);
-    s_dotii_mouth = make_dotii_part(s_dotii, 56, 12, 0, 70, 0xF4EAD2);
-    s_dotii_accent_left = make_dotii_part(s_dotii, 12, 12, -132, 52, COLOR_CYAN);
-    s_dotii_accent_right = make_dotii_part(s_dotii, 12, 12, 132, 52, COLOR_CYAN);
-    s_dotii_accent_center = make_dotii_part(s_dotii, 12, 12, 0, 88, COLOR_CYAN);
-    /* The native emotion renderer owns its own layer set. The legacy parts are
-       hidden so the old accent logic stays harmless. */
-    emotion_render_attach(&s_dotii_render, s_dotii, SCREEN_SIZE);
-    lv_obj_add_flag(s_dotii_left_eye, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_add_flag(s_dotii_right_eye, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_add_flag(s_dotii_mouth, LV_OBJ_FLAG_HIDDEN);
-    /* Like the custom canvas, Dotii is an immersive ambient page and does not
-       show the global navigation dots. */
-    render_dotii_expression();
-}
 
 static lv_obj_t *make_quick_button(lv_obj_t *parent,
                                    const lv_image_dsc_t *icon_source, uint32_t accent)
@@ -1880,16 +1729,9 @@ static void build_control(void)
     lv_obj_set_style_pad_column(row, 9, 0);
     s_codex_quick = make_quick_button(row, &ui_icon_openai_36, COLOR_BLUE);
     s_xiaozhi_quick = make_quick_button(row, &ui_icon_openai_36, COLOR_XIAOZHI);
-    s_custom_quick = make_quick_button(row, NULL, COLOR_WARNING);
-    s_dotii_quick = make_quick_button(row, NULL, COLOR_CYAN);
-    lv_obj_clean(s_dotii_quick);
-    make_dotii_part(s_dotii_quick, 12, 20, -12, -2, COLOR_CYAN);
-    make_dotii_part(s_dotii_quick, 12, 20, 12, -2, COLOR_CYAN);
-    lv_obj_add_flag(s_custom_quick, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_style_pad_column(row, 32, 0);
     lv_obj_add_event_cb(s_codex_quick, quick_clicked, LV_EVENT_CLICKED, s_main);
     lv_obj_add_event_cb(s_xiaozhi_quick, quick_clicked, LV_EVENT_CLICKED, s_xiaozhi_page);
-    lv_obj_add_event_cb(s_custom_quick, quick_clicked, LV_EVENT_CLICKED, s_custom);
-    lv_obj_add_event_cb(s_dotii_quick, quick_clicked, LV_EVENT_CLICKED, s_dotii);
 
     s_battery_label = make_label(safe, "电量 --", &s_ui_font, COLOR_MUTED);
     lv_obj_set_width(s_battery_label, 300);
@@ -2071,7 +1913,7 @@ static void update_snapshot(const codex_snapshot_t *snapshot)
         s_screen_off_page = snapshot->screen_off_page <= DISPLAY_SCREEN_OFF_PAGE_DOTII
             ? snapshot->screen_off_page : DISPLAY_SCREEN_OFF_PAGE_NONE;
         s_display_revision = snapshot->display_revision;
-        save_display_settings();
+        request_display_settings_save();
         bsp_display_transform_set_angle(s_display_angle_tenths);
         if (timeout_changed || screen_off_page_changed) {
             if (s_screen_saver_active) exit_screen_saver();
@@ -2089,19 +1931,14 @@ static void update_snapshot(const codex_snapshot_t *snapshot)
         lv_obj_set_style_arc_color(s_main_arc, color(COLOR_BLUE), LV_PART_INDICATOR);
     }
 
-    uint32_t status_color = COLOR_MUTED;
-    if (snapshot->status == CODEX_STATUS_WORKING || snapshot->status == CODEX_STATUS_COMPLETED) status_color = COLOR_GREEN;
-    else if (snapshot->status == CODEX_STATUS_WAITING) status_color = COLOR_WARNING;
-    else if (snapshot->status == CODEX_STATUS_FAILED) status_color = COLOR_DANGER;
-    lv_label_set_text(s_status, app_state_status_text(snapshot->status));
-    bool long_status = snapshot->status == CODEX_STATUS_OFFLINE;
-    lv_obj_set_width(s_status_pill, long_status ? 172 : 138);
-    lv_obj_set_width(s_status, long_status ? 116 : 82);
-    lv_obj_set_style_text_color(s_status, color(status_color), 0);
-    lv_obj_set_style_text_outline_stroke_color(s_status, color(status_color), 0);
-    lv_obj_set_style_bg_color(s_status_dot, color(status_color), 0);
-    lv_obj_set_style_bg_color(s_status_pill, color(status_color), 0);
-    lv_obj_set_style_bg_opa(s_status_pill, LV_OPA_20, 0);
+    const bool task_counts_available =
+        snapshot->valid && snapshot->codex_source_online;
+    update_task_counter(s_running_count, task_counts_available,
+                        snapshot->running_tasks);
+    update_task_counter(s_completed_count, task_counts_available,
+                        snapshot->completed_unread_tasks);
+    update_task_counter(s_failed_count, task_counts_available,
+                        snapshot->failed_unread_tasks);
 
     if (!snapshot->weekly_tokens_available) lv_label_set_text(s_weekly_tokens, "--");
     else if (snapshot->weekly_tokens >= 1000) lv_label_set_text_fmt(s_weekly_tokens, "%.1fk", snapshot->weekly_tokens / 1000.0);
@@ -2143,16 +1980,12 @@ static void update_snapshot(const codex_snapshot_t *snapshot)
         set_weekly_reset_text(s_plus_weekly_reset_day, s_plus_weekly_reset,
                               snapshot->reset_date);
     }
-    uint32_t plus_status_color = COLOR_MUTED;
-    if (snapshot->status == CODEX_STATUS_WORKING || snapshot->status == CODEX_STATUS_COMPLETED) plus_status_color = COLOR_GREEN;
-    else if (snapshot->status == CODEX_STATUS_WAITING) plus_status_color = COLOR_WARNING;
-    else if (snapshot->status == CODEX_STATUS_FAILED) plus_status_color = COLOR_DANGER;
-    lv_label_set_text(s_plus_status, app_state_status_text(snapshot->status));
-    lv_obj_set_width(s_plus_status_pill, 224);
-    lv_obj_set_style_text_color(s_plus_status, color(plus_status_color), 0);
-    lv_obj_set_style_text_outline_stroke_color(s_plus_status, color(plus_status_color), 0);
-    lv_obj_set_style_bg_color(s_plus_status_pill, color(plus_status_color), 0);
-    lv_obj_set_style_bg_opa(s_plus_status_pill, LV_OPA_20, 0);
+    update_task_counter(s_plus_running_count, task_counts_available,
+                        snapshot->running_tasks);
+    update_task_counter(s_plus_completed_count, task_counts_available,
+                        snapshot->completed_unread_tasks);
+    update_task_counter(s_plus_failed_count, task_counts_available,
+                        snapshot->failed_unread_tasks);
     render_codex_detail();
 
     const xiaozhi_session_state_t xiaozhi_session = xiaozhi_client_state(&s_xiaozhi);
@@ -2174,6 +2007,10 @@ static void update_snapshot(const codex_snapshot_t *snapshot)
         break;
     case XIAOZHI_STATE_SPEAKING:
         xiaozhi_emotion = "回应";
+        xiaozhi_color = COLOR_XIAOZHI;
+        break;
+    case XIAOZHI_STATE_MUSIC:
+        xiaozhi_emotion = "音乐律动";
         xiaozhi_color = COLOR_XIAOZHI;
         break;
     case XIAOZHI_STATE_ERROR:
@@ -2205,7 +2042,8 @@ static void update_snapshot(const codex_snapshot_t *snapshot)
     const bool xiaozhi_busy =
         xiaozhi_session == XIAOZHI_STATE_LISTENING ||
         xiaozhi_session == XIAOZHI_STATE_THINKING ||
-        xiaozhi_session == XIAOZHI_STATE_SPEAKING;
+        xiaozhi_session == XIAOZHI_STATE_SPEAKING ||
+        xiaozhi_session == XIAOZHI_STATE_MUSIC;
     /* The face owns the whole panel. A normal connected session is expressed
        through the eyes, so the pill only appears when the user actually has
        something to read or act on: a pairing code or a connection error. */
@@ -2239,70 +2077,15 @@ static void update_snapshot(const codex_snapshot_t *snapshot)
         lv_obj_set_width(s_xiaozhi_server, 186);
         lv_label_set_text(s_xiaozhi_server, "长按说话");
     }
-    const bool xiaozhi_wants_run = snapshot->xiaozhi_enabled &&
-                                   snapshot->xiaozhi_server_url[0] != '\0';
-    if (xiaozhi_wants_run && !s_xiaozhi.running) {
-        xiaozhi_sync_config();
-        xiaozhi_client_start(&s_xiaozhi);
-    } else if (!xiaozhi_wants_run && s_xiaozhi.running) {
-        xiaozhi_client_stop(&s_xiaozhi);
-    } else if (xiaozhi_wants_run &&
-               strcmp(s_xiaozhi.config.server_url, snapshot->xiaozhi_server_url) != 0) {
-        xiaozhi_client_stop(&s_xiaozhi);
-        xiaozhi_sync_config();
-        xiaozhi_client_start(&s_xiaozhi);
-    }
+    /* Hand the desired lifecycle to the supervisor task; starting or stopping
+       the websocket here would block the LVGL worker. */
+    xiaozhi_sync_config();
 
-    uint32_t custom_accent = snapshot->custom_accent ? snapshot->custom_accent : COLOR_WARNING;
-    lv_label_set_text(s_custom_title, snapshot->custom_title[0] ? snapshot->custom_title : "我的页面");
-    lv_label_set_text(s_custom_value, snapshot->custom_value[0] ? snapshot->custom_value : "--");
-    lv_label_set_text(s_custom_body, snapshot->custom_body[0] ? snapshot->custom_body : "暂无说明");
-    lv_label_set_text(s_custom_footer, snapshot->custom_footer[0] ? snapshot->custom_footer : "Dotii 自定义");
-    lv_obj_set_style_text_color(s_custom_value, color(custom_accent), 0);
-    lv_obj_set_style_arc_color(s_custom_ring, color(snapshot->custom_ring_start), LV_PART_INDICATOR);
-    lv_arc_set_value(s_custom_ring, 100);
-    const uint8_t *custom_image = snapshot->custom_image_available ?
-        connectivity_custom_image_data(snapshot->custom_image_revision) : NULL;
-    if (custom_image != NULL) {
-        if (s_custom_image_revision != snapshot->custom_image_revision) {
-            if (s_custom_image_revision != 0) {
-                lv_image_cache_drop(&s_custom_image_dsc);
-            }
-            memset(&s_custom_image_dsc, 0, sizeof(s_custom_image_dsc));
-            s_custom_image_dsc.header.magic = LV_IMAGE_HEADER_MAGIC;
-            s_custom_image_dsc.header.cf = LV_COLOR_FORMAT_RGB565;
-            s_custom_image_dsc.header.w = SCREEN_SIZE;
-            s_custom_image_dsc.header.h = SCREEN_SIZE;
-            s_custom_image_dsc.header.stride = SCREEN_SIZE * 2;
-            s_custom_image_dsc.data_size = SCREEN_SIZE * SCREEN_SIZE * 2;
-            s_custom_image_dsc.data = custom_image;
-            lv_image_set_src(s_custom_image, &s_custom_image_dsc);
-            s_custom_image_revision = snapshot->custom_image_revision;
-        }
-        lv_obj_remove_flag(s_custom_image, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_add_flag(s_custom_ring, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_add_flag(s_custom_title, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_add_flag(s_custom_value, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_add_flag(s_custom_body, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_add_flag(s_custom_footer, LV_OBJ_FLAG_HIDDEN);
-    } else {
-        lv_obj_add_flag(s_custom_image, LV_OBJ_FLAG_HIDDEN);
-        if (snapshot->custom_ring_enabled) lv_obj_remove_flag(s_custom_ring, LV_OBJ_FLAG_HIDDEN);
-        else lv_obj_add_flag(s_custom_ring, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_remove_flag(s_custom_title, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_remove_flag(s_custom_value, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_remove_flag(s_custom_body, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_remove_flag(s_custom_footer, LV_OBJ_FLAG_HIDDEN);
-    }
     if (snapshot->codex_enabled) lv_obj_remove_flag(s_codex_quick, LV_OBJ_FLAG_HIDDEN);
     else lv_obj_add_flag(s_codex_quick, LV_OBJ_FLAG_HIDDEN);
     if (snapshot->xiaozhi_enabled) lv_obj_remove_flag(s_xiaozhi_quick, LV_OBJ_FLAG_HIDDEN);
     else lv_obj_add_flag(s_xiaozhi_quick, LV_OBJ_FLAG_HIDDEN);
-    if (snapshot->custom_enabled) lv_obj_remove_flag(s_custom_quick, LV_OBJ_FLAG_HIDDEN);
-    else lv_obj_add_flag(s_custom_quick, LV_OBJ_FLAG_HIDDEN);
-    if (snapshot->dotii_enabled) lv_obj_remove_flag(s_dotii_quick, LV_OBJ_FLAG_HIDDEN);
-    else lv_obj_add_flag(s_dotii_quick, LV_OBJ_FLAG_HIDDEN);
-    render_dotii_expression();
+    render_xiaozhi_expression();
     update_page_dots();
 
     if ((s_current == s_main || s_current == s_plus_main) && s_current != page_screen(0)) {
@@ -2363,7 +2146,6 @@ static void ui_timer(lv_timer_t *timer)
     if (local.tm_year >= 120) snprintf(clock, sizeof(clock), "%02d:%02d", local.tm_hour, local.tm_min);
     else strlcpy(clock, "--:--", sizeof(clock));
     lv_label_set_text(s_time_main, clock);
-    lv_label_set_text(s_plus_time, clock);
     lv_label_set_text(s_time_detail, clock);
     lv_label_set_text(s_time_xiaozhi, clock);
 
@@ -2376,9 +2158,6 @@ static void ui_timer(lv_timer_t *timer)
     lv_label_set_text(s_settings_bridge, summary);
 
     uint32_t inactive_ms = lv_tick_elaps(s_last_activity);
-    if (s_ignore_next_dotii_click && inactive_ms > 1000) {
-        s_ignore_next_dotii_click = false;
-    }
     /* Docked means the panel is on a desk with power attached. Treat it as an
        always-visible desk device: do not enter the screen saver or blank the
        panel. Wi-Fi, BLE and CodexBridge stay resident as before. */
@@ -2410,16 +2189,26 @@ void state_ui_start(QueueHandle_t snapshot_queue)
     s_detail_task = heap_caps_calloc(1, sizeof(*s_detail_task),
                                      MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     load_persisted_settings();
+    s_display_save_signal = xSemaphoreCreateBinary();
+    if (s_display_save_signal != NULL) {
+        if (xTaskCreate(display_settings_writer_task, "ui_nvs", 3072, NULL, 3, NULL) != pdPASS) {
+            ESP_LOGE(TAG, "Unable to create the display settings writer task");
+        }
+    }
     ESP_ERROR_CHECK(bsp_display_transform_set_angle(s_display_angle_tenths));
     s_ui_font = ui_font_fixed_20;
     s_ui_font.fallback = &ui_font_cjk_20;
     xiaozhi_client_init(&s_xiaozhi);
+    s_xiaozhi_request_lock = xSemaphoreCreateMutex();
+    if (s_xiaozhi_request_lock == NULL) {
+        ESP_LOGE(TAG, "Unable to create the xiaozhi request lock");
+    } else if (xTaskCreate(xiaozhi_supervisor_task, "xz_sup", 4096, NULL, 5, NULL) != pdPASS) {
+        ESP_LOGE(TAG, "Unable to create the xiaozhi supervisor task");
+    }
     build_main();
     build_plus_main();
     build_detail();
     build_xiaozhi();
-    build_custom();
-    build_dotii();
     build_settings();
     build_control();
     build_power();
@@ -2434,7 +2223,7 @@ void state_ui_start(QueueHandle_t snapshot_queue)
     lv_timer_create(ui_timer, 1000, NULL);
     /* 50 FPS keeps the eye motion fluid. The 90-degree transform is a
        pixel-exact copy, so the per-frame cost stays low. */
-    lv_timer_create(dotii_timer, 20, NULL);
+    lv_timer_create(xiaozhi_face_timer, 20, NULL);
 }
 
 void state_ui_button_a_short(void)
@@ -2457,8 +2246,7 @@ void state_ui_button_a_short(void)
         return;
     }
     int current_page = (s_current == s_main || s_current == s_plus_main) ? 0 :
-        s_current == s_xiaozhi_page ? 1 : s_current == s_custom ? 2 :
-        s_current == s_dotii ? 3 : -1;
+        s_current == s_xiaozhi_page ? 1 : -1;
     if (current_page < 0) {
         load_screen(first_enabled_screen(), true);
         return;

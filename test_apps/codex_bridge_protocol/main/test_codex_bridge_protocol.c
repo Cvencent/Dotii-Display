@@ -267,6 +267,31 @@ TEST_CASE("unknown message type is ignored without closing", "[codex_bridge]")
     codex_bridge_protocol_reset_message(&message);
 }
 
+TEST_CASE("codex_state exposes aggregate unread counters", "[codex_bridge]")
+{
+    codex_bridge_message_t message = {0};
+    const char *line =
+        "{\"type\":\"codex_state\",\"running\":2,\"completed_unread\":3,"
+        "\"failed_unread\":1,\"done\":3,\"failed\":1}\n";
+    TEST_ESP_OK(codex_bridge_protocol_feed(line, strlen(line), &message));
+    TEST_ASSERT_EQUAL_STRING("codex_state", message.type);
+    TEST_ASSERT_FALSE(message.ignored);
+    TEST_ASSERT_NOT_NULL(message.data);
+    TEST_ASSERT_EQUAL_INT(
+        2,
+        cJSON_GetObjectItemCaseSensitive(message.data, "running")->valueint
+    );
+    TEST_ASSERT_EQUAL_INT(
+        3,
+        cJSON_GetObjectItemCaseSensitive(message.data, "completed_unread")->valueint
+    );
+    TEST_ASSERT_EQUAL_INT(
+        1,
+        cJSON_GetObjectItemCaseSensitive(message.data, "failed_unread")->valueint
+    );
+    codex_bridge_protocol_reset_message(&message);
+}
+
 TEST_CASE("read_state exposes message identity and readers", "[codex_bridge]")
 {
     codex_bridge_message_t message = {0};

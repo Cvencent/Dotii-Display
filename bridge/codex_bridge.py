@@ -1004,7 +1004,7 @@ class BridgeHandler(BaseHTTPRequestHandler):
         address = local_ipv4()
         runtime = self.bridge.runtime.snapshot()
         return {
-            "app": {"name": "Dotii 管理中心", "version": "1.1.7"},
+            "app": {"name": "Dotii 管理中心", "version": "1.1.9"},
             "bridge": {
                 "online": True,
                 "local_url": f"http://127.0.0.1:{self.bridge.server_port}",
@@ -1220,7 +1220,9 @@ class BridgeHandler(BaseHTTPRequestHandler):
             try:
                 payload = self._read_admin_action()
                 current = self.bridge.dotii.read()
-                candidate = {**payload, "revision": current["revision"] + 1}
+                # Merge like the display and xiaozhi endpoints: a partial
+                # payload must not drop the animations it did not mention.
+                candidate = {**current, **payload, "revision": current["revision"] + 1}
                 config = self.bridge.dotii.write(candidate)
                 self._send_json(HTTPStatus.OK, {"ok": True, "dotii_config": config})
             except (OSError, ValueError, UnicodeDecodeError, json.JSONDecodeError) as error:

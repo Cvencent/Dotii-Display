@@ -1,4 +1,4 @@
-menu "Dotii 桌面交互屏"
+menu "Dotii Desktop Display"
 
     config STATE_DISPLAY_DEMO_MODE
         bool "Show clearly labelled preview data when the bridge is unavailable"

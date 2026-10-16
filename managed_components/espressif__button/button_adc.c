@@ -10,6 +10,7 @@
 #include "esp_timer.h"
 #include "esp_idf_version.h"
 #include "soc/soc_caps.h"
+#include "hal/adc_ll.h"
 #include "esp_adc/adc_oneshot.h"
 #include "esp_adc/adc_cali.h"
 #include "esp_adc/adc_cali_scheme.h"
@@ -34,7 +35,11 @@ static const char *TAG = "adc_button";
 #define ADC_BUTTON_WIDTH          SOC_ADC_DIGI_MAX_BITWIDTH
 #endif
 
+#ifdef SOC_ADC_CHANNEL_NUM
 #define ADC_BUTTON_CHANNEL_MAX(adc_unit)    SOC_ADC_CHANNEL_NUM(adc_unit)
+#else
+#define ADC_BUTTON_CHANNEL_MAX(adc_unit)    ADC_LL_CHANNEL_NUM(adc_unit)
+#endif
 #define ADC_BUTTON_ATTEN          DEFAULT_ADC_ATTEN
 
 #define ADC_BUTTON_MAX_CHANNEL  CONFIG_ADC_BUTTON_MAX_CHANNEL
@@ -233,7 +238,12 @@ static uint32_t get_adc_voltage(adc_unit_t unit_id, uint8_t channel)
     //Convert adc_reading to voltage in mV
     int voltage = 0;
     if (g_button.unit[unit_id].adc_cali_handle != NULL) {
+#if CONFIG_IDF_TARGET_ESP32S31 && ADC_CALI_SCHEME_LINE_FITTING_SUPPORTED
+        // S31 line fitting and the channel-aware API were introduced together.
+        esp_err_t ret = adc_cali_chan_raw_to_voltage(g_button.unit[unit_id].adc_cali_handle, channel, adc_reading, &voltage);
+#else
         esp_err_t ret = adc_cali_raw_to_voltage(g_button.unit[unit_id].adc_cali_handle, adc_reading, &voltage);
+#endif
         if (ret != ESP_OK) {
             ESP_LOGE(TAG, "ADC calibration conversion failed: %s", esp_err_to_name(ret));
             return 0;

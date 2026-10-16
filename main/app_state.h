@@ -113,6 +113,9 @@ typedef struct {
     char thread_id[64];
     char message_id[80];
     uint32_t read_count;
+    uint16_t running_tasks;
+    uint16_t completed_unread_tasks;
+    uint16_t failed_unread_tasks;
     char last_user_message[1536];
     char last_assistant_message[256];
     char conversation_text[3073];

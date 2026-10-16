@@ -149,7 +149,10 @@ static bool pwr_button_start(void)
 
 static void call_ui(void (*handler)(void))
 {
-    if (bsp_display_lock(100) == ESP_OK) {
+    /* The LVGL worker can be busy with a full-screen transform for a few
+       hundred milliseconds; give buttons a chance to survive that instead of
+       dropping the press. */
+    if (bsp_display_lock(500) == ESP_OK) {
         handler();
         bsp_display_unlock();
     }

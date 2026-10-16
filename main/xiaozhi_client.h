@@ -22,6 +22,7 @@ typedef enum {
     XIAOZHI_STATE_LISTENING,
     XIAOZHI_STATE_THINKING,
     XIAOZHI_STATE_SPEAKING,
+    XIAOZHI_STATE_MUSIC,
     XIAOZHI_STATE_ERROR,
 } xiaozhi_session_state_t;
 
@@ -42,6 +43,7 @@ typedef struct {
     char last_emotion[24];
     uint32_t emotion_until_ms;
     char last_text[192];
+    char pending_audio_url[256];
     char session_id[64];
     char websocket_url[192];
     char token[160];
@@ -49,15 +51,24 @@ typedef struct {
     void *activation_task;
     void *playback_task;
     void *microphone_task;
+    void *music_task;
+    void *music_http;
+    void *wake_task;
+    void *wake_models;
+    void *wake_data;
+    void *wake_iface;
     void *audio_encode;
     void *audio_decode;
     void *input_resampler;
     void *output_resampler;
     void *speaker;
     void *microphone;
+    bool codec_ready;
     int server_sample_rate;
     int server_frame_duration;
     volatile bool listening;
+    volatile bool music_stop_requested;
+    bool wake_ready;
     xiaozhi_config_t config;
 } xiaozhi_client_t;
 
@@ -77,6 +88,7 @@ const char *xiaozhi_client_websocket_url(const xiaozhi_client_t *client);
 
 /* Latest server emotion, normalized to a local catalog id/name. */
 const char *xiaozhi_client_last_emotion(const xiaozhi_client_t *client);
+const char *xiaozhi_client_pending_audio_url(const xiaozhi_client_t *client);
 
 /* Maps a session state to a local emotion id, or NULL when no override is
    wanted (e.g. disabled/idle). */

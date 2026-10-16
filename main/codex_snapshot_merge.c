@@ -4,6 +4,9 @@
 #include <string.h>
 
 #include "esp_heap_caps.h"
+#include "esp_log.h"
+
+static const char *TAG = "codex_state";
 
 typedef struct {
     const char *id;
@@ -330,6 +333,37 @@ void codex_snapshot_merge_status(codex_snapshot_t *target, const cJSON *data)
     }
 }
 
+void codex_snapshot_merge_codex_state(codex_snapshot_t *target, const cJSON *data)
+{
+    if (target == NULL || !cJSON_IsObject(data)) return;
+
+    target->valid = true;
+    target->codex_source_online = true;
+    target->source_online = true;
+
+    copy_bounded_u16(data, "running", &target->running_tasks);
+
+    cJSON *completed = NULL;
+    if (json_number(data, "completed_unread", &completed)) {
+        copy_bounded_u16(data, "completed_unread", &target->completed_unread_tasks);
+    } else {
+        /* Older bridges only expose the terminal aliases. */
+        copy_bounded_u16(data, "done", &target->completed_unread_tasks);
+    }
+
+    cJSON *failed = NULL;
+    if (json_number(data, "failed_unread", &failed)) {
+        copy_bounded_u16(data, "failed_unread", &target->failed_unread_tasks);
+    } else {
+        copy_bounded_u16(data, "failed", &target->failed_unread_tasks);
+    }
+
+    ESP_LOGI(TAG, "running=%u completed_unread=%u failed_unread=%u",
+             (unsigned)target->running_tasks,
+             (unsigned)target->completed_unread_tasks,
+             (unsigned)target->failed_unread_tasks);
+}
+
 void codex_snapshot_merge_quota(codex_snapshot_t *target, const cJSON *data)
 {
     if (target == NULL || !cJSON_IsObject(data)) return;
@@ -457,6 +491,17 @@ void codex_snapshot_merge_result(codex_snapshot_t *target, const cJSON *data)
     codex_snapshot_refresh_dotii_state(target);
 }
 
+static void decrement_terminal_unread(codex_snapshot_t *target,
+                                      codex_task_status_t status)
+{
+    if (target == NULL) return;
+    if (status == CODEX_STATUS_COMPLETED && target->completed_unread_tasks > 0) {
+        target->completed_unread_tasks--;
+    } else if (status == CODEX_STATUS_FAILED && target->failed_unread_tasks > 0) {
+        target->failed_unread_tasks--;
+    }
+}
+
 void codex_snapshot_apply_read_state(
     codex_snapshot_t *target,
     codex_task_detail_t *tasks,
@@ -469,13 +514,24 @@ void codex_snapshot_apply_read_state(
     cJSON *read_by = json_array(data, "read_by");
     if (message_id == NULL || read_by == NULL) return;
     uint32_t read_count = (uint32_t)cJSON_GetArraySize(read_by);
+    bool decremented = false;
     for (size_t index = 0; index < count; ++index) {
-        if (strcmp(tasks[index].message_id, message_id->valuestring) == 0 ||
-            strcmp(tasks[index].result_message_id, message_id->valuestring) == 0) {
-            tasks[index].read_count = read_count;
+        const bool message_matches =
+            strcmp(tasks[index].message_id, message_id->valuestring) == 0;
+        const bool result_matches =
+            strcmp(tasks[index].result_message_id, message_id->valuestring) == 0;
+        if (!message_matches && !result_matches) continue;
+        if (result_matches && tasks[index].read_count == 0 && read_count > 0 &&
+            !decremented) {
+            decrement_terminal_unread(target, tasks[index].status);
+            decremented = true;
         }
+        tasks[index].read_count = read_count;
     }
     if (strcmp(target->message_id, message_id->valuestring) == 0) {
+        if (target->read_count == 0 && read_count > 0 && !decremented) {
+            decrement_terminal_unread(target, target->status);
+        }
         target->read_count = read_count;
     }
 }

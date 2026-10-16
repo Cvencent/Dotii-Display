@@ -104,21 +104,18 @@ static void copy_xiaozhi_config(cJSON *root, codex_snapshot_t *snapshot)
 
 static void copy_module_config(cJSON *root, codex_snapshot_t *snapshot)
 {
-    /* Codex capabilities are owned by CodexBridge, not the management center.
-       The management center now exposes xiaozhi, dotii and custom only. */
+    /* Codex capabilities are owned by CodexBridge. The retired custom and
+       standalone Dotii pages stay disabled even if an older management
+       snapshot still contains their flags. */
     snapshot->codex_enabled = true;
     snapshot->xiaozhi_enabled = true;
-    snapshot->dotii_enabled = true;
-    snapshot->custom_enabled = true;
+    snapshot->dotii_enabled = false;
+    snapshot->custom_enabled = false;
     cJSON *modules = cJSON_GetObjectItemCaseSensitive(root, "modules");
     if (!cJSON_IsObject(modules)) return;
 
     cJSON *xiaozhi = cJSON_GetObjectItemCaseSensitive(modules, "xiaozhi");
-    cJSON *dotii = cJSON_GetObjectItemCaseSensitive(modules, "dotii");
-    cJSON *custom = cJSON_GetObjectItemCaseSensitive(modules, "custom");
     if (cJSON_IsBool(xiaozhi)) snapshot->xiaozhi_enabled = cJSON_IsTrue(xiaozhi);
-    if (cJSON_IsBool(dotii)) snapshot->dotii_enabled = cJSON_IsTrue(dotii);
-    if (cJSON_IsBool(custom)) snapshot->custom_enabled = cJSON_IsTrue(custom);
 }
 
 static uint32_t dotii_state_token_from_string(const char *value)

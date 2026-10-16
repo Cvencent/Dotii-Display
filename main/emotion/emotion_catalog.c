@@ -85,6 +85,10 @@ static const emotion_def_t k_emotions[] = {
       { A(ANIM_TARGET_EYES, ANIM_PROP_LOOK_X, ANIM_SCAN, 1.0f, 1100.0f, 0.0f) } },
     { "41", "powering_off", "停止", EMOTION_GROUP_AGENT, 500, false, 0.45f, -1, -1, 1,
       { A(ANIM_TARGET_EYES, ANIM_PROP_OPEN, ANIM_SINE, 0.05f, 3000.0f, 0.0f) } },
+    { "42", "music", "音乐律动", EMOTION_GROUP_AGENT, 220, true, 1.0f, 1800, 3200, 3,
+      { A(ANIM_TARGET_BODY, ANIM_PROP_Y, ANIM_PULSE, 5.0f, 500.0f, 0.0f),
+        A(ANIM_TARGET_EYES, ANIM_PROP_SCALE, ANIM_PULSE, 0.16f, 500.0f, 0.0f),
+        A(ANIM_TARGET_BODY, ANIM_PROP_ROTATE, ANIM_SINE, 3.0f, 1000.0f, 0.0f) } },
 };
 
 static const emotion_def_t *k_fallback = &k_emotions[2]; /* 02 idle */

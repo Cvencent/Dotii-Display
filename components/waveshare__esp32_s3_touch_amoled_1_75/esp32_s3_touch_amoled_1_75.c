@@ -43,7 +43,7 @@ static i2s_chan_handle_t i2s_tx_chan = NULL;
 static i2s_chan_handle_t i2s_rx_chan = NULL;
 static const audio_codec_data_if_t *i2s_data_if = NULL; /* Codec data interface */
 
-#define LCD_TRANSFORM_TILE_SIZE 12
+#define LCD_TRANSFORM_TILE_SIZE 8
 #define LCD_TRANSFORM_PIXELS (BSP_LCD_H_RES * BSP_LCD_V_RES)
 #define LCD_TRANSFORM_CENTER_FP ((BSP_LCD_H_RES - 1) << 15)
 #define LCD_TRANSFORM_RADIUS2 ((BSP_LCD_H_RES - 1) * (BSP_LCD_H_RES - 1))
@@ -74,6 +74,7 @@ typedef struct {
 } lcd_transform_t;
 
 static uint16_t s_lcd_dma_tile[BSP_LCD_H_RES * LCD_TRANSFORM_TILE_SIZE];
+
 
 static lcd_transform_t s_lcd_transform = {
     .angle_tenths = LCD_TRANSFORM_ANGLE_DEFAULT_TENTHS,
@@ -672,11 +673,15 @@ esp_err_t bsp_audio_init(const i2s_std_config_t *i2s_config)
     return ESP_OK;
 
 err:
+    /* Drop the handles as well: bsp_audio_init() is retried after a failed
+       allocation and must not report ESP_OK for channels it freed. */
     if (i2s_tx_chan) {
         i2s_del_channel(i2s_tx_chan);
+        i2s_tx_chan = NULL;
     }
     if (i2s_rx_chan) {
         i2s_del_channel(i2s_rx_chan);
+        i2s_rx_chan = NULL;
     }
 
     return ret;
@@ -958,7 +963,7 @@ esp_err_t bsp_touch_new(const bsp_display_cfg_t *cfg, esp_lcd_touch_handle_t *re
  **************************************************************************************************/
 esp_io_expander_handle_t bsp_io_expander_init(void)
 {
-    BSP_ERROR_CHECK_RETURN_ERR(bsp_i2c_init());
+    BSP_ERROR_CHECK_RETURN_NULL(bsp_i2c_init());
     if (!io_expander)
     {
         BSP_ERROR_CHECK_RETURN_NULL(esp_io_expander_new_i2c_tca9554(i2c_handle, BSP_IO_EXPANDER_I2C_ADDRESS, &io_expander));
@@ -985,7 +990,7 @@ static lv_display_t *bsp_display_lcd_init(const bsp_display_cfg_t *cfg)
             .hor_res = BSP_LCD_H_RES,
             .ver_res = BSP_LCD_V_RES,
             /* QSPI DMA cannot transmit directly from PSRAM on ESP32-S3, so the
-               single 12-line transform tile stays in internal DMA memory
+               single 8-line transform tile stays in internal DMA memory
                while it streams out; the LVGL draw buffers live in PSRAM. */
             .buffer_height = LCD_TRANSFORM_TILE_SIZE,
             .use_psram = true,

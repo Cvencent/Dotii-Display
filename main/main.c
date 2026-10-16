@@ -8,6 +8,7 @@
 #include "device_identity.h"
 #include "esp_app_desc.h"
 #include "esp_err.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_sleep.h"
 #include "esp_system.h"
@@ -77,6 +78,17 @@ static void log_reset_diagnostics(void)
     }
 }
 
+/* Radio, panel and audio stacks all compete for the internal SRAM that the
+   DMA engines can reach, so every boot records what is left after the big
+   claimants have taken their share. */
+static void log_heap_health(const char *stage)
+{
+    ESP_LOGI(TAG, "heap[%s] internal=%u dma=%u psram=%u", stage,
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_DMA),
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+}
+
 void app_main(void)
 {
     esp_err_t nvs_error = nvs_flash_init();
@@ -97,6 +109,7 @@ void app_main(void)
        display claims its internal DMA buffers so coexistence has contiguous
        controller memory without sacrificing the screen pipeline. */
     connectivity_start();
+    log_heap_health("wifi");
     esp_err_t codex_bridge_error = codex_bridge_client_start(
         connectivity_apply_codex_bridge_message,
         NULL
@@ -111,7 +124,25 @@ void app_main(void)
         ESP_LOGE(TAG, "Bluetooth bridge unavailable: %s", esp_err_to_name(ble_error));
     }
 
-    lv_display_t *display = bsp_display_start();
+    /* The radio, the panel and the audio codec all draw from the internal
+       DMA-capable pool, and the I2S buffers need a contiguous chunk of it.
+       The LVGL worker stack is the largest single claimant under our control,
+       so it lives in PSRAM and the internal pool stays with the DMA engines. */
+    bsp_display_cfg_t display_cfg = {
+        .lv_adapter_cfg = ESP_LV_ADAPTER_DEFAULT_CONFIG(),
+        .rotation = ESP_LV_ADAPTER_ROTATE_0,
+        .tear_avoid_mode = ESP_LV_ADAPTER_TEAR_AVOID_MODE_NONE,
+        .touch_flags = {
+            .swap_xy = 0,
+            .mirror_x = 1,
+            .mirror_y = 1,
+        },
+    };
+    /* LVGL timers must not touch NVS from this PSRAM stack; display
+       settings are committed by the ui_nvs worker instead. */
+    display_cfg.lv_adapter_cfg.stack_in_psram = true;
+    lv_display_t *display = bsp_display_start_with_config(&display_cfg);
+    log_heap_health("display");
     ESP_ERROR_CHECK(display == NULL ? ESP_FAIL : ESP_OK);
     ESP_ERROR_CHECK(bsp_display_lock(1000));
     state_ui_start(queue);
@@ -119,4 +150,5 @@ void app_main(void)
 
     ESP_ERROR_CHECK(board_input_start());
     ESP_LOGI(TAG, "Dotii %s started", esp_app_get_description()->version);
+    log_heap_health("ui");
 }

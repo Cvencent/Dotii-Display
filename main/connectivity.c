@@ -268,6 +268,13 @@ void connectivity_apply_codex_bridge_message(
     (void)context;
     if (message == NULL || message->ignored) return;
     if (s_state_lock != NULL) xSemaphoreTake(s_state_lock, portMAX_DELAY);
+    if (strcmp(message->type, "codex_state") == 0) {
+        codex_snapshot_merge_codex_state(&s_work_snapshot, message->data);
+        s_last_snapshot = s_work_snapshot;
+        app_state_publish(&s_work_snapshot);
+        if (s_state_lock != NULL) xSemaphoreGive(s_state_lock);
+        return;
+    }
     if (strcmp(message->type, "read_state") == 0) {
         codex_snapshot_apply_read_state(
             &s_work_snapshot,
@@ -321,6 +328,8 @@ void connectivity_apply_codex_bridge_message(
 static void bridge_task(void *argument)
 {
     (void)argument;
+    const bool direct_requested =
+        strlen(device_config_get()->codex_bridge_token) >= 16;
     publish_current_state();
     while (true) {
         EventBits_t bits = xEventGroupWaitBits(
@@ -330,7 +339,15 @@ static void bridge_task(void *argument)
             pdFALSE,
             pdMS_TO_TICKS(CONFIG_STATE_DISPLAY_POLL_SECONDS * 1000));
 
-        if ((bits & WIFI_CONNECTED_BIT) || s_wifi_connected) {
+        /* The direct CodexBridge session is authoritative. The legacy HTTP
+           management snapshot is only a fallback for installations that still
+           use the old bridge URL, so an online direct session must not keep
+           polling a stale address every few seconds. */
+        bool direct_online = codex_bridge_client_is_online();
+        /* Only fall back to the retired management snapshot when this device
+           has no direct CodexBridge token at all. */
+        if (!direct_requested && !direct_online &&
+            ((bits & WIFI_CONNECTED_BIT) || s_wifi_connected)) {
             if (fetch_snapshot(&s_management_snapshot)) {
                 if (s_state_lock != NULL) xSemaphoreTake(s_state_lock, portMAX_DELAY);
                 management_snapshot_apply(&s_work_snapshot, &s_management_snapshot);
@@ -443,8 +460,13 @@ void connectivity_start(void)
     ESP_LOGI(TAG, "Bridge data buffers ready");
     setenv("TZ", CONFIG_STATE_DISPLAY_TIMEZONE, 1);
     tzset();
+    /* A provisioned direct CodexBridge token is the preferred transport. In
+       that mode the legacy HTTP snapshot must not run at all, including the
+       startup window before the direct session finishes its handshake. */
+    const bool direct_requested = strlen(device_config->codex_bridge_token) >= 16;
     strlcpy(s_bridge_note,
-            strlen(device_config->bridge_url) == 0 ? "未配置" : "等待管理中心",
+            direct_requested ? "等待 CodexBridge"
+                             : (strlen(device_config->bridge_url) == 0 ? "未配置" : "等待管理中心"),
             sizeof(s_bridge_note));
 
     /* Reserve the polling task before the Wi-Fi driver fragments internal RAM. */

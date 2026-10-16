@@ -9,6 +9,7 @@ static codex_snapshot_t *snapshot_for_test(void)
 {
     static codex_snapshot_t snapshot;
     memset(&snapshot, 0, sizeof(snapshot));
+    codex_snapshot_reset_dotii_mapping(&snapshot);
     return &snapshot;
 }
 
@@ -112,8 +113,10 @@ TEST_CASE("management snapshot applies mapping without overwriting live expressi
 TEST_CASE("management apply preserves CodexBridge-derived expression",
           "[management_merge]")
 {
-    codex_snapshot_t target = {0};
-    codex_snapshot_t source = {0};
+    static codex_snapshot_t target;
+    static codex_snapshot_t source;
+    memset(&target, 0, sizeof(target));
+    memset(&source, 0, sizeof(source));
     target.status = CODEX_STATUS_WORKING;
     codex_snapshot_reset_dotii_mapping(&target);
     codex_snapshot_refresh_dotii_state(&target);

@@ -3,19 +3,31 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 
 #include "cJSON.h"
-#include "connectivity.h"
-#include "device_identity.h"
-#include "esp_crt_bundle.h"
-#include "esp_http_client.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "nvs.h"
 #include "sdkconfig.h"
 
+/* The message/emotion mapping above is plain C and is covered by the host
+   tests in test_apps/emotion. Everything that needs the transport, the
+   codec or the Wi-Fi stack stays behind this switch. */
 #if CONFIG_XIAOZHI_ENABLE
 #include "bsp/esp-bsp.h"
+#include "connectivity.h"
+#include "device_identity.h"
+#include "esp_app_desc.h"
+#include "esp_crt_bundle.h"
+#include "esp_heap_caps.h"
+#include "esp_http_client.h"
+#include "esp_audio_dec_default.h"
+#include "esp_audio_simple_dec.h"
+#include "esp_audio_simple_dec_default.h"
+#include "model_path.h"
+#include "esp_wn_iface.h"
+#include "esp_wn_models.h"
 #include "esp_ae_rate_cvt.h"
 #include "esp_audio_types.h"
 #include "esp_codec_dev.h"
@@ -34,6 +46,10 @@
 #define XIAOZHI_CODEC_RATE 24000
 
 static const char *TAG = "xiaozhi";
+
+static bool xiaozhi_start_music(xiaozhi_client_t *client);
+static bool audio_init(xiaozhi_client_t *client);
+static void wake_task(void *argument);
 
 static void copy_bounded(char *dst, size_t size, const char *src)
 {
@@ -164,6 +180,8 @@ static const emotion_alias_t k_emotion_aliases[] = {
     { "searching", "40" },
     { "powering_off", "41" },
     { "stopping", "41" },
+    { "music", "42" },
+    { "playing_music", "42" },
 };
 
 static const char *normalize_emotion(const char *name)
@@ -250,6 +268,7 @@ const char *xiaozhi_client_state_name(xiaozhi_session_state_t state)
     case XIAOZHI_STATE_LISTENING: return "聆听中";
     case XIAOZHI_STATE_THINKING: return "思考中";
     case XIAOZHI_STATE_SPEAKING: return "说话中";
+    case XIAOZHI_STATE_MUSIC: return "播放音乐";
     case XIAOZHI_STATE_ERROR: return "连接异常";
     default: return "未启用";
     }
@@ -282,6 +301,12 @@ const char *xiaozhi_client_last_emotion(const xiaozhi_client_t *client)
     return client->last_emotion;
 }
 
+const char *xiaozhi_client_pending_audio_url(const xiaozhi_client_t *client)
+{
+    return client == NULL || client->pending_audio_url[0] == '\0' ?
+        NULL : client->pending_audio_url;
+}
+
 const char *xiaozhi_client_state_emotion(xiaozhi_session_state_t state)
 {
     switch (state) {
@@ -290,6 +315,7 @@ const char *xiaozhi_client_state_emotion(xiaozhi_session_state_t state)
     case XIAOZHI_STATE_LISTENING: return "35";
     case XIAOZHI_STATE_THINKING: return "30";
     case XIAOZHI_STATE_SPEAKING: return "39";
+    case XIAOZHI_STATE_MUSIC: return "42";
     case XIAOZHI_STATE_ERROR: return "34";
     default: return NULL;
     }
@@ -310,6 +336,7 @@ static bool map_server_state(const char *value, xiaozhi_session_state_t *out)
     if (strcmp(value, "listening") == 0) *out = XIAOZHI_STATE_LISTENING;
     else if (strcmp(value, "thinking") == 0) *out = XIAOZHI_STATE_THINKING;
     else if (strcmp(value, "speaking") == 0) *out = XIAOZHI_STATE_SPEAKING;
+    else if (strcmp(value, "music") == 0) *out = XIAOZHI_STATE_MUSIC;
     else if (strcmp(value, "idle") == 0) *out = XIAOZHI_STATE_IDLE;
     else if (strcmp(value, "connecting") == 0) *out = XIAOZHI_STATE_CONNECTING;
     else if (strcmp(value, "error") == 0) *out = XIAOZHI_STATE_ERROR;
@@ -336,6 +363,7 @@ bool xiaozhi_client_handle_text(xiaozhi_client_t *client, const char *json)
     const cJSON *state = cJSON_GetObjectItemCaseSensitive(root, "state");
     xiaozhi_session_state_t mapped;
     if (cJSON_IsString(state) && map_server_state(state->valuestring, &mapped)) {
+        client->listening = mapped == XIAOZHI_STATE_LISTENING;
         if (client->state != mapped) {
             client->state = mapped;
             changed = true;
@@ -376,12 +404,24 @@ bool xiaozhi_client_handle_text(xiaozhi_client_t *client, const char *json)
     } else if (type_value != NULL && strcmp(type_value, "tts") == 0) {
         const cJSON *tts_state = cJSON_GetObjectItemCaseSensitive(root, "state");
         if (cJSON_IsString(tts_state) && tts_state->valuestring != NULL) {
-            if (strcmp(tts_state->valuestring, "start") == 0) client->state = XIAOZHI_STATE_SPEAKING;
+            if (strcmp(tts_state->valuestring, "start") == 0) {
+                client->listening = false;
+                client->state = XIAOZHI_STATE_SPEAKING;
+            }
             else if (strcmp(tts_state->valuestring, "stop") == 0) client->state = XIAOZHI_STATE_IDLE;
             changed = true;
         }
+    } else if (type_value != NULL && strcmp(type_value, "notify") == 0) {
+        const cJSON *audio_url = cJSON_GetObjectItemCaseSensitive(root, "audio_url");
+        if (cJSON_IsString(audio_url) && audio_url->valuestring != NULL &&
+            audio_url->valuestring[0] != '\0') {
+            copy_bounded(client->pending_audio_url, sizeof(client->pending_audio_url),
+                         audio_url->valuestring);
+            client->listening = false;
+            client->state = XIAOZHI_STATE_MUSIC;
+            changed = true;
+        }
     }
-
     cJSON_Delete(root);
     return changed;
 }
@@ -400,8 +440,10 @@ typedef struct {
 } ota_body_t;
 
 static QueueHandle_t s_audio_queue;
+static uint32_t s_audio_init_tick;
 static char s_rx_buffer[2048];
 static size_t s_rx_length;
+static bool s_audio_decoders_ready;
 
 static esp_err_t ota_http_event(esp_http_client_event_t *event)
 {
@@ -516,7 +558,9 @@ static bool fetch_ota(xiaozhi_client_t *client)
     esp_http_client_set_header(http, "Activation-Version", "1");
     esp_http_client_set_header(http, "Device-Id", device_identity_get_mac());
     esp_http_client_set_header(http, "Client-Id", device_identity_get_client_id());
-    esp_http_client_set_header(http, "User-Agent", "Dotii/1.1.7");
+    char user_agent[64];
+    snprintf(user_agent, sizeof(user_agent), "Dotii/%s", esp_app_get_description()->version);
+    esp_http_client_set_header(http, "User-Agent", user_agent);
     esp_http_client_set_header(http, "Accept-Language", "zh-CN");
     esp_http_client_set_header(http, "Content-Type", "application/json");
     esp_http_client_set_post_field(http, "{}", 2);
@@ -592,7 +636,10 @@ static void ws_event_handler(void *handler_arg, esp_event_base_t base, int32_t e
             s_rx_length += copy;
             if (data->payload_offset + data->data_len >= data->payload_len) {
                 s_rx_buffer[s_rx_length] = '\0';
-                xiaozhi_client_handle_text(client, s_rx_buffer);
+                if (xiaozhi_client_handle_text(client, s_rx_buffer) &&
+                    client->state == XIAOZHI_STATE_MUSIC) {
+                    xiaozhi_start_music(client);
+                }
                 s_rx_length = 0;
             }
         } else if (data->op_code == 0x02 && data->data_len > 0 && s_audio_queue != NULL) {
@@ -610,8 +657,385 @@ static void ws_event_handler(void *handler_arg, esp_event_base_t base, int32_t e
     }
 }
 
+static bool send_listen_mode(xiaozhi_client_t *client, bool start, const char *mode);
+static void music_task(void *argument);
+
+static bool xiaozhi_start_music(xiaozhi_client_t *client)
+{
+    if (client == NULL || client->music_task != NULL ||
+        client->pending_audio_url[0] == '\0') {
+        return false;
+    }
+    client->music_stop_requested = false;
+    TaskHandle_t handle = NULL;
+    if (xTaskCreatePinnedToCoreWithCaps(music_task, "xz_music", 6144, client, 4,
+                                         &handle, tskNO_AFFINITY,
+                                         MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {
+        ESP_LOGE(TAG, "music task create failed");
+        client->state = XIAOZHI_STATE_IDLE;
+        client->pending_audio_url[0] = '\0';
+        return false;
+    }
+    client->music_task = handle;
+    return true;
+}
+
+static esp_audio_simple_dec_type_t music_decoder_type(const char *url)
+{
+    const char *end = strchr(url, '?');
+    if (end == NULL) end = url + strlen(url);
+    const char *dot = NULL;
+    for (const char *cursor = url; cursor < end; ++cursor) {
+        if (*cursor == '.') dot = cursor;
+    }
+    if (dot != NULL) {
+        if (strncasecmp(dot, ".mp3", 4) == 0) return ESP_AUDIO_SIMPLE_DEC_TYPE_MP3;
+        if (strncasecmp(dot, ".wav", 4) == 0) return ESP_AUDIO_SIMPLE_DEC_TYPE_WAV;
+        if (strncasecmp(dot, ".m4a", 4) == 0) return ESP_AUDIO_SIMPLE_DEC_TYPE_M4A;
+        if (strncasecmp(dot, ".ogg", 4) == 0 ||
+            strncasecmp(dot, ".opus", 5) == 0) {
+            return ESP_AUDIO_SIMPLE_DEC_TYPE_OGG;
+        }
+    }
+    return ESP_AUDIO_SIMPLE_DEC_TYPE_OGG;
+}
+
+static bool music_decoders_ensure(void)
+{
+    if (s_audio_decoders_ready) return true;
+    if (esp_audio_dec_register_default() != ESP_AUDIO_ERR_OK) return false;
+    if (esp_audio_simple_dec_register_default() != ESP_AUDIO_ERR_OK) return false;
+    s_audio_decoders_ready = true;
+    return true;
+}
+
+static bool music_write_pcm(xiaozhi_client_t *client,
+                            esp_ae_rate_cvt_handle_t *resampler,
+                            int *resampler_rate,
+                            const uint8_t *data, uint32_t size,
+                            const esp_audio_simple_dec_info_t *info)
+{
+    if (client == NULL || data == NULL || info == NULL ||
+        info->bits_per_sample != ESP_AUDIO_BIT16 ||
+        info->channel == 0 || info->channel > 2) {
+        return false;
+    }
+
+    const int channels = info->channel;
+    const int frames = (int)(size / ((uint32_t)channels * sizeof(int16_t)));
+    if (frames <= 0) return true;
+
+    const int16_t *source = (const int16_t *)data;
+    int16_t *mono = NULL;
+    if (channels == 2) {
+        mono = malloc((size_t)frames * sizeof(int16_t));
+        if (mono == NULL) return false;
+        for (int index = 0; index < frames; ++index) {
+            const int mixed = (int)source[index * 2] + (int)source[index * 2 + 1];
+            mono[index] = (int16_t)(mixed / 2);
+        }
+    }
+    const int16_t *pcm = mono != NULL ? mono : source;
+
+    bool ok = true;
+    if (info->sample_rate == XIAOZHI_CODEC_RATE) {
+        ok = esp_codec_dev_write((esp_codec_dev_handle_t)client->speaker, pcm,
+                                 frames * (int)sizeof(int16_t)) == ESP_CODEC_DEV_OK;
+    } else {
+        if (*resampler == NULL || *resampler_rate != (int)info->sample_rate) {
+            if (*resampler != NULL) {
+                esp_ae_rate_cvt_close(*resampler);
+                *resampler = NULL;
+            }
+            esp_ae_rate_cvt_cfg_t cfg = {
+                .src_rate = info->sample_rate,
+                .dest_rate = XIAOZHI_CODEC_RATE,
+                .channel = 1,
+                .bits_per_sample = ESP_AUDIO_BIT16,
+                .complexity = 2,
+                .perf_type = ESP_AE_RATE_CVT_PERF_TYPE_SPEED,
+            };
+            if (esp_ae_rate_cvt_open(&cfg, resampler) != ESP_AE_ERR_OK) {
+                *resampler = NULL;
+                ok = false;
+            } else {
+                *resampler_rate = (int)info->sample_rate;
+            }
+        }
+        if (ok && *resampler != NULL) {
+            uint32_t max_samples = 0;
+            esp_ae_rate_cvt_get_max_out_sample_num(*resampler, (uint32_t)frames,
+                                                   &max_samples);
+            int16_t *resampled = malloc((size_t)max_samples * sizeof(int16_t));
+            if (resampled == NULL) {
+                ok = false;
+            } else {
+                uint32_t produced = max_samples;
+                if (esp_ae_rate_cvt_process(*resampler, (esp_ae_sample_t)pcm,
+                                            (uint32_t)frames, (esp_ae_sample_t)resampled,
+                                            &produced) != ESP_AE_ERR_OK) {
+                    ok = false;
+                } else if (produced > 0) {
+                    ok = esp_codec_dev_write((esp_codec_dev_handle_t)client->speaker,
+                                             resampled,
+                                             (int)(produced * sizeof(int16_t))) == ESP_CODEC_DEV_OK;
+                }
+                free(resampled);
+            }
+        }
+    }
+    free(mono);
+    return ok;
+}
+
+static void music_task(void *argument)
+{
+    xiaozhi_client_t *client = (xiaozhi_client_t *)argument;
+    char url[sizeof(client->pending_audio_url)];
+    copy_bounded(url, sizeof(url), client->pending_audio_url);
+
+    esp_http_client_handle_t http = NULL;
+    esp_audio_simple_dec_handle_t decoder = NULL;
+    esp_ae_rate_cvt_handle_t resampler = NULL;
+    int resampler_rate = 0;
+    uint8_t *input = NULL;
+    uint8_t *output = NULL;
+    size_t input_capacity = 4096;
+    size_t input_length = 0;
+    size_t output_capacity = 32768;
+    bool eos = false;
+    bool success = false;
+
+    if (!audio_init(client) || !music_decoders_ensure()) {
+        ESP_LOGE(TAG, "music audio setup failed");
+        goto cleanup;
+    }
+
+    input = heap_caps_malloc(input_capacity, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    output = heap_caps_malloc(output_capacity, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (input == NULL || output == NULL) goto cleanup;
+
+    esp_audio_simple_dec_cfg_t decoder_config = {
+        .dec_type = music_decoder_type(url),
+        .dec_cfg = NULL,
+        .cfg_size = 0,
+        .use_frame_dec = false,
+    };
+    if (esp_audio_simple_dec_open(&decoder_config, &decoder) != ESP_AUDIO_ERR_OK) {
+        ESP_LOGE(TAG, "music decoder open failed");
+        goto cleanup;
+    }
+
+    esp_http_client_config_t http_config = {
+        .url = url,
+        .timeout_ms = 5000,
+        .buffer_size = 1024,
+        .crt_bundle_attach = esp_crt_bundle_attach,
+    };
+    http = esp_http_client_init(&http_config);
+    if (http == NULL) goto cleanup;
+    client->music_http = http;
+    esp_http_client_set_header(http, "Accept", "audio/ogg, application/ogg, audio/mpeg, audio/wav, audio/*");
+    esp_http_client_set_header(http, "Accept-Encoding", "identity");
+    if (esp_http_client_open(http, 0) != ESP_OK) {
+        ESP_LOGE(TAG, "music stream open failed");
+        goto cleanup;
+    }
+    if (esp_http_client_fetch_headers(http) < 0 ||
+        esp_http_client_get_status_code(http) < 200 ||
+        esp_http_client_get_status_code(http) >= 300) {
+        ESP_LOGE(TAG, "music stream HTTP status failed");
+        goto cleanup;
+    }
+
+    int flush_attempts = 0;
+    while (client->running && !client->music_stop_requested) {
+        if (input_length < input_capacity && !eos) {
+            int read = esp_http_client_read(http, (char *)input + input_length,
+                                            (int)(input_capacity - input_length));
+            if (read > 0) {
+                input_length += (size_t)read;
+            } else if (read == 0) {
+                eos = true;
+            } else {
+                ESP_LOGE(TAG, "music stream read failed");
+                break;
+            }
+        }
+
+        if (input_length == 0 && eos) {
+            success = true;
+            break;
+        }
+
+        esp_audio_simple_dec_raw_t raw = {
+            .buffer = input,
+            .len = (uint32_t)input_length,
+            .eos = eos,
+            .consumed = 0,
+            .frame_recover = ESP_AUDIO_SIMPLE_DEC_RECOVERY_NONE,
+        };
+        esp_audio_simple_dec_out_t out = {
+            .buffer = output,
+            .len = (uint32_t)output_capacity,
+            .needed_size = 0,
+            .decoded_size = 0,
+        };
+        esp_audio_err_t result = esp_audio_simple_dec_process(decoder, &raw, &out);
+        if (result == ESP_AUDIO_ERR_BUFF_NOT_ENOUGH) {
+            size_t needed = out.needed_size > output_capacity ?
+                out.needed_size + 4096 : output_capacity * 2;
+            uint8_t *larger = heap_caps_realloc(output, needed,
+                                                MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+            if (larger == NULL) break;
+            output = larger;
+            output_capacity = needed;
+            continue;
+        }
+        if (result != ESP_AUDIO_ERR_OK && result != ESP_AUDIO_ERR_CONTINUE &&
+            result != ESP_AUDIO_ERR_DATA_LACK) {
+            ESP_LOGE(TAG, "music decode failed: %d", (int)result);
+            break;
+        }
+
+        if (raw.consumed > 0 && raw.consumed <= input_length) {
+            memmove(input, input + raw.consumed, input_length - raw.consumed);
+            input_length -= raw.consumed;
+            flush_attempts = 0;
+        }
+        if (out.decoded_size > 0) {
+            esp_audio_simple_dec_info_t info = {0};
+            if (esp_audio_simple_dec_get_info(decoder, &info) != ESP_AUDIO_ERR_OK ||
+                !music_write_pcm(client, &resampler, &resampler_rate, output,
+                                 out.decoded_size, &info)) {
+                ESP_LOGE(TAG, "music PCM output failed");
+                break;
+            }
+            flush_attempts = 0;
+        }
+
+        if (raw.consumed == 0 && out.decoded_size == 0) {
+            if (input_length == input_capacity && !eos) {
+                size_t larger_capacity = input_capacity * 2;
+                uint8_t *larger = heap_caps_realloc(input, larger_capacity,
+                                                    MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+                if (larger == NULL) break;
+                input = larger;
+                input_capacity = larger_capacity;
+            } else if (eos) {
+                if (++flush_attempts >= 2) {
+                    success = true;
+                    break;
+                }
+            }
+        }
+    }
+
+cleanup:
+    if (client->music_http == http) client->music_http = NULL;
+    if (http != NULL) {
+        esp_http_client_close(http);
+        esp_http_client_cleanup(http);
+    }
+    if (decoder != NULL) esp_audio_simple_dec_close(decoder);
+    if (resampler != NULL) esp_ae_rate_cvt_close(resampler);
+    heap_caps_free(input);
+    heap_caps_free(output);
+
+    if (strcmp(client->pending_audio_url, url) == 0) {
+        client->pending_audio_url[0] = '\0';
+        if (client->running && !client->music_stop_requested) {
+            client->state = success ? XIAOZHI_STATE_IDLE : XIAOZHI_STATE_ERROR;
+        }
+    }
+    if (success) {
+        ESP_LOGI(TAG, "music playback complete");
+    } else if (client->running && !client->music_stop_requested) {
+        ESP_LOGW(TAG, "music playback stopped after an error");
+    }
+    if (client->music_task == (void *)xTaskGetCurrentTaskHandle()) {
+        client->music_task = NULL;
+    }
+    vTaskDeleteWithCaps(NULL);
+}
+
+static bool wake_word_start(xiaozhi_client_t *client)
+{
+    if (client == NULL || client->wake_ready) return client != NULL && client->wake_ready;
+    srmodel_list_t *models = esp_srmodel_init("model");
+    if (models == NULL || models->num <= 0) {
+        ESP_LOGW(TAG, "wake model partition unavailable");
+        if (models != NULL) esp_srmodel_deinit(models);
+        return false;
+    }
+    char *model_name = esp_srmodel_filter(models, ESP_WN_PREFIX, "nihaoxiaozhi");
+    if (model_name == NULL) model_name = esp_srmodel_filter(models, ESP_WN_PREFIX, NULL);
+    const esp_wn_iface_t *iface = model_name != NULL ?
+        esp_wn_handle_from_name(model_name) : NULL;
+    model_iface_data_t *data = iface != NULL ?
+        iface->create(model_name, DET_MODE_95) : NULL;
+    if (data == NULL || iface->get_samp_rate(data) != XIAOZHI_INPUT_RATE) {
+        ESP_LOGW(TAG, "wake model initialization failed");
+        if (data != NULL) iface->destroy(data);
+        esp_srmodel_deinit(models);
+        return false;
+    }
+    client->wake_models = models;
+    client->wake_iface = (void *)iface;
+    client->wake_data = data;
+    client->wake_ready = true;
+    ESP_LOGI(TAG, "wake word ready: %s", model_name != NULL ? model_name : "unknown");
+    return true;
+}
+
+static void wake_word_stop(xiaozhi_client_t *client)
+{
+    if (client == NULL) return;
+    if (client->wake_data != NULL && client->wake_iface != NULL) {
+        const esp_wn_iface_t *iface = (const esp_wn_iface_t *)client->wake_iface;
+        iface->destroy((model_iface_data_t *)client->wake_data);
+    }
+    if (client->wake_models != NULL) esp_srmodel_deinit((srmodel_list_t *)client->wake_models);
+    client->wake_data = NULL;
+    client->wake_iface = NULL;
+    client->wake_models = NULL;
+    client->wake_ready = false;
+}
 static void playback_task(void *argument);
 static void microphone_task(void *argument);
+static bool audio_init(xiaozhi_client_t *client);
+static void xiaozhi_start_wake_task(xiaozhi_client_t *client);
+
+/* Worker startup is serialized here on purpose: the playback and microphone
+   tasks used to initialize the shared codec/Opus handles lazily from their
+   own task, so a first reply and a first push-to-talk could open the codec
+   twice. Handles are stored so a stop can wait for the workers to leave
+   before the websocket client is destroyed underneath them. */
+static bool xiaozhi_start_workers(xiaozhi_client_t *client)
+{
+    (void)audio_init(client);
+    if (client->playback_task == NULL) {
+        TaskHandle_t handle = NULL;
+        if (xTaskCreatePinnedToCoreWithCaps(playback_task, "xz_play", 4096, client, 4,
+                                             &handle, tskNO_AFFINITY,
+                                             MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) == pdPASS) {
+            client->playback_task = handle;
+        }
+    }
+    if (client->microphone_task == NULL) {
+        TaskHandle_t handle = NULL;
+        if (xTaskCreatePinnedToCoreWithCaps(microphone_task, "xz_mic", 4096, client, 5,
+                                             &handle, tskNO_AFFINITY,
+                                             MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) == pdPASS) {
+            client->microphone_task = handle;
+        }
+    }
+    if (client->playback_task == NULL || client->microphone_task == NULL) {
+        ESP_LOGE(TAG, "xiaozhi audio task create failed");
+        return false;
+    }
+    return true;
+}
 
 static bool open_websocket(xiaozhi_client_t *client)
 {
@@ -622,9 +1046,18 @@ static bool open_websocket(xiaozhi_client_t *client)
         .network_timeout_ms = 12000,
         .buffer_size = 4096,
         .crt_bundle_attach = esp_crt_bundle_attach,
+        .task_stack = 4096,
     };
     esp_websocket_client_handle_t handle = esp_websocket_client_init(&config);
     if (handle == NULL) return false;
+    /* The library allocates its task on internal RAM. If the radio and
+       panel have momentarily starved the pool, wait and rebuild once
+       instead of leaving the client permanently unconnected. */
+    if (client->transport != NULL) {
+        esp_websocket_client_stop((esp_websocket_client_handle_t)client->transport);
+        esp_websocket_client_destroy((esp_websocket_client_handle_t)client->transport);
+        client->transport = NULL;
+    }
     esp_websocket_client_append_header(handle, "Protocol-Version", "1");
     esp_websocket_client_append_header(handle, "Device-Id", device_identity_get_mac());
     esp_websocket_client_append_header(handle, "Client-Id", device_identity_get_client_id());
@@ -634,9 +1067,13 @@ static bool open_websocket(xiaozhi_client_t *client)
         esp_websocket_client_append_header(handle, "Authorization", authorization);
     }
     esp_websocket_register_events(handle, WEBSOCKET_EVENT_ANY, ws_event_handler, client);
-    if (esp_websocket_client_start(handle) != ESP_OK) {
-        esp_websocket_client_destroy(handle);
-        return false;
+    for (int attempt = 0; attempt < 3; ++attempt) {
+        if (esp_websocket_client_start(handle) == ESP_OK) break;
+        if (attempt == 2) {
+            esp_websocket_client_destroy(handle);
+            return false;
+        }
+        vTaskDelay(pdMS_TO_TICKS(500));
     }
     client->transport = handle;
     client->state = XIAOZHI_STATE_CONNECTING;
@@ -654,38 +1091,80 @@ static void activation_task(void *argument)
         if (!client->activated && fetch_ota(client)) {
             ESP_LOGI(TAG, "xiaozhi activation complete");
         }
+        /* A stop during the OTA request must not leave a live session behind. */
+        if (!client->running) break;
         if (client->activated) {
-            if (open_websocket(client)) {
-                xTaskCreate(playback_task, "xz_play", 4096, client, 4, NULL);
-                xTaskCreate(microphone_task, "xz_mic", 4096, client, 5, NULL);
+            if (open_websocket(client) && xiaozhi_start_workers(client) &&
+                wake_word_start(client)) {
+                xiaozhi_start_wake_task(client);
+            } else {
+                ESP_LOGW(TAG, "activated session started without wake word");
             }
             break;
         }
         /* Still waiting for the user to bind the code at xiaozhi.me. Keep the
-           code visible and ask again shortly. */
+           code visible and ask again shortly. Sliced so a stop request is not
+           held up for the whole poll interval. */
         client->state = XIAOZHI_STATE_ACTIVATING;
-        vTaskDelay(pdMS_TO_TICKS(5000));
+        for (int slice = 0; slice < 50 && client->running; ++slice) {
+            vTaskDelay(pdMS_TO_TICKS(100));
+        }
     }
-    client->activation_task = NULL;
+    if (client->activation_task == (void *)xTaskGetCurrentTaskHandle()) {
+        client->activation_task = NULL;
+    }
     vTaskDelete(NULL);
 }
 
 static bool audio_init(xiaozhi_client_t *client)
 {
-    if (client->speaker != NULL && client->microphone != NULL) return true;
-    esp_codec_dev_handle_t speaker = bsp_audio_codec_speaker_init();
-    esp_codec_dev_handle_t microphone = bsp_audio_codec_microphone_init();
-    if (speaker == NULL || microphone == NULL) return false;
+    if (client->codec_ready) return true;
+    /* The playback and microphone workers both call this on every pass, so
+       keep the retries sparse instead of hammering the codec and the log. */
+    const uint32_t now = xTaskGetTickCount();
+    if ((uint32_t)(now - s_audio_init_tick) < pdMS_TO_TICKS(1000)) return false;
+    s_audio_init_tick = now;
+
+    /* The duplex I2S path needs a few KB of internal DMA memory for its
+       descriptors. Wi-Fi, BLE and the AMOLED panel can claim more than the
+       board has left, so a failure here is a soft error: the BSP returns
+       NULL instead of aborting, and the next pass tries again. */
+    if (client->speaker == NULL) client->speaker = bsp_audio_codec_speaker_init();
+    if (client->speaker == NULL) return false;
+    if (client->microphone == NULL) client->microphone = bsp_audio_codec_microphone_init();
+    if (client->microphone == NULL) return false;
+
     esp_codec_dev_sample_info_t info = {
         .sample_rate = XIAOZHI_CODEC_RATE,
         .channel = 1,
         .bits_per_sample = 16,
     };
-    if (esp_codec_dev_open(speaker, &info) != ESP_CODEC_DEV_OK) return false;
-    if (esp_codec_dev_open(microphone, &info) != ESP_CODEC_DEV_OK) return false;
-    esp_codec_dev_set_out_vol(speaker, 80);
-    client->speaker = speaker;
-    client->microphone = microphone;
+    if (esp_codec_dev_open((esp_codec_dev_handle_t)client->speaker, &info) != ESP_CODEC_DEV_OK) {
+        return false;
+    }
+    if (esp_codec_dev_open((esp_codec_dev_handle_t)client->microphone, &info) != ESP_CODEC_DEV_OK) {
+        return false;
+    }
+    if (client->input_resampler == NULL) {
+        esp_ae_rate_cvt_cfg_t input_config = {
+            .src_rate = XIAOZHI_CODEC_RATE,
+            .dest_rate = XIAOZHI_INPUT_RATE,
+            .channel = 1,
+            .bits_per_sample = ESP_AUDIO_BIT16,
+            .complexity = 2,
+            .perf_type = ESP_AE_RATE_CVT_PERF_TYPE_SPEED,
+        };
+        if (esp_ae_rate_cvt_open(&input_config, &client->input_resampler) != ESP_AE_ERR_OK) {
+            client->input_resampler = NULL;
+            return false;
+        }
+    }
+    esp_codec_dev_set_out_vol((esp_codec_dev_handle_t)client->speaker, 80);
+    client->codec_ready = true;
+    ESP_LOGI(TAG, "codec ready: dma free=%u largest=%u internal=%u",
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_DMA),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DMA),
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
     return true;
 }
 
@@ -796,7 +1275,10 @@ static void playback_task(void *argument)
         }
         free(packet.data);
     }
-    vTaskDelete(NULL);
+    if (client->playback_task == (void *)xTaskGetCurrentTaskHandle()) {
+        client->playback_task = NULL;
+    }
+    vTaskDeleteWithCaps(NULL);
 }
 
 static void microphone_task(void *argument)
@@ -808,7 +1290,7 @@ static void microphone_task(void *argument)
     uint8_t *encoded = malloc(2048);
     if (source == NULL || resampled == NULL || encoded == NULL) {
         free(source); free(resampled); free(encoded);
-        vTaskDelete(NULL);
+        vTaskDeleteWithCaps(NULL);
         return;
     }
     while (client->running) {
@@ -823,18 +1305,8 @@ static void microphone_task(void *argument)
             continue;
         }
         if (client->input_resampler == NULL) {
-            esp_ae_rate_cvt_cfg_t config = {
-                .src_rate = XIAOZHI_CODEC_RATE,
-                .dest_rate = XIAOZHI_INPUT_RATE,
-                .channel = 1,
-                .bits_per_sample = ESP_AUDIO_BIT16,
-                .complexity = 2,
-                .perf_type = ESP_AE_RATE_CVT_PERF_TYPE_SPEED,
-            };
-            if (esp_ae_rate_cvt_open(&config, &client->input_resampler) != ESP_AE_ERR_OK) {
-                vTaskDelay(pdMS_TO_TICKS(100));
-                continue;
-            }
+            vTaskDelay(pdMS_TO_TICKS(20));
+            continue;
         }
         uint32_t output_samples = XIAOZHI_INPUT_RATE;
         if (esp_ae_rate_cvt_process(client->input_resampler, (esp_ae_sample_t)source,
@@ -859,17 +1331,22 @@ static void microphone_task(void *argument)
         }
     }
     free(source); free(resampled); free(encoded);
-    vTaskDelete(NULL);
+    if (client->microphone_task == (void *)xTaskGetCurrentTaskHandle()) {
+        client->microphone_task = NULL;
+    }
+    vTaskDeleteWithCaps(NULL);
 }
 
-bool xiaozhi_client_send_listen(xiaozhi_client_t *client, bool start)
+static bool send_listen_mode(xiaozhi_client_t *client, bool start, const char *mode)
 {
     if (client == NULL || !client->connected || client->transport == NULL) return false;
     cJSON *root = cJSON_CreateObject();
     if (client->session_id[0] != '\0') cJSON_AddStringToObject(root, "session_id", client->session_id);
     cJSON_AddStringToObject(root, "type", "listen");
     cJSON_AddStringToObject(root, "state", start ? "start" : "stop");
-    cJSON_AddStringToObject(root, "mode", "manual");
+    if (start && mode != NULL && mode[0] != '\0') {
+        cJSON_AddStringToObject(root, "mode", mode);
+    }
     char *json = cJSON_PrintUnformatted(root);
     bool ok = false;
     if (json != NULL) {
@@ -883,6 +1360,10 @@ bool xiaozhi_client_send_listen(xiaozhi_client_t *client, bool start)
     return ok;
 }
 
+bool xiaozhi_client_send_listen(xiaozhi_client_t *client, bool start)
+{
+    return send_listen_mode(client, start, "manual");
+}
 bool xiaozhi_client_send_abort(xiaozhi_client_t *client)
 {
     if (client == NULL || !client->connected || client->transport == NULL) return false;
@@ -902,27 +1383,136 @@ bool xiaozhi_client_send_abort(xiaozhi_client_t *client)
     return ok;
 }
 
+static void xiaozhi_detect_wake_word(xiaozhi_client_t *client)
+{
+    if (client == NULL || !client->wake_ready || !client->running ||
+        !client->connected || client->listening || client->music_task != NULL ||
+        client->state == XIAOZHI_STATE_SPEAKING ||
+        client->state == XIAOZHI_STATE_THINKING ||
+        client->state == XIAOZHI_STATE_MUSIC) {
+        return;
+    }
+    if (!audio_init(client)) return;
+
+    const esp_wn_iface_t *iface = (const esp_wn_iface_t *)client->wake_iface;
+    model_iface_data_t *data = (model_iface_data_t *)client->wake_data;
+    const int target_samples = iface->get_samp_chunksize(data);
+    if (target_samples <= 0 || target_samples > 4096) return;
+
+    const int source_samples =
+        (target_samples * XIAOZHI_CODEC_RATE + XIAOZHI_INPUT_RATE - 1) /
+        XIAOZHI_INPUT_RATE;
+    int16_t *chunk = malloc((size_t)target_samples * sizeof(int16_t));
+    int16_t *source = malloc((size_t)source_samples * sizeof(int16_t));
+    if (chunk == NULL || source == NULL) {
+        free(chunk);
+        free(source);
+        return;
+    }
+
+    const int read = esp_codec_dev_read((esp_codec_dev_handle_t)client->microphone,
+                                        source, source_samples * (int)sizeof(int16_t));
+    if (read == ESP_CODEC_DEV_OK) {
+        uint32_t output_samples = (uint32_t)target_samples;
+        if (esp_ae_rate_cvt_process(client->input_resampler,
+                                    (esp_ae_sample_t)source, (uint32_t)source_samples,
+                                    (esp_ae_sample_t)chunk,
+                                    &output_samples) == ESP_AE_ERR_OK &&
+            output_samples >= (uint32_t)target_samples) {
+            const wakenet_state_t detected = iface->detect(data, chunk);
+            if (detected > 0) {
+                ESP_LOGI(TAG, "wake word detected: 你好小智");
+                if (send_listen_mode(client, true, "auto")) {
+                    ESP_LOGI(TAG, "auto listening started");
+                }
+            }
+        }
+    }
+    free(chunk);
+    free(source);
+}
+
+static void xiaozhi_start_wake_task(xiaozhi_client_t *client)
+{
+    if (client == NULL || client->wake_task != NULL || !client->running) return;
+    TaskHandle_t wake = NULL;
+    if (xTaskCreatePinnedToCoreWithCaps(wake_task, "xz_wake", 6144, client, 4,
+                                         &wake, tskNO_AFFINITY,
+                                         MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) == pdPASS) {
+        client->wake_task = wake;
+    } else {
+        ESP_LOGW(TAG, "wake task create failed");
+    }
+}
+
+static void wake_task(void *argument)
+{
+    xiaozhi_client_t *client = (xiaozhi_client_t *)argument;
+    if (!wake_word_start(client)) {
+        if (client->wake_task == (void *)xTaskGetCurrentTaskHandle()) {
+            client->wake_task = NULL;
+        }
+        vTaskDeleteWithCaps(NULL);
+        return;
+    }
+    while (client->running) {
+        xiaozhi_detect_wake_word(client);
+        vTaskDelay(pdMS_TO_TICKS(5));
+    }
+    if (client->wake_task == (void *)xTaskGetCurrentTaskHandle()) {
+        client->wake_task = NULL;
+    }
+    vTaskDeleteWithCaps(NULL);
+}
+
 bool xiaozhi_client_start(xiaozhi_client_t *client)
 {
     if (client == NULL || client->running) return false;
+    if (client->activation_task != NULL || client->playback_task != NULL ||
+        client->microphone_task != NULL || client->music_task != NULL ||
+        client->wake_task != NULL) {
+        /* A previous stop could not retire its workers (a stalled network call,
+           for example). Reusing the client now would orphan them together with
+           the socket they still hold, so refuse until they are really gone. */
+        ESP_LOGE(TAG, "xiaozhi start refused: previous workers still alive");
+        client->state = XIAOZHI_STATE_ERROR;
+        return false;
+    }
     client->running = true;
     client->state = client->activated ? XIAOZHI_STATE_CONNECTING : XIAOZHI_STATE_ACTIVATING;
     if (s_audio_queue == NULL) s_audio_queue = xQueueCreate(12, sizeof(audio_packet_t));
     if (client->activated && client->websocket_url[0] != '\0') {
         if (open_websocket(client)) {
-            xTaskCreate(playback_task, "xz_play", 4096, client, 4, NULL);
-            xTaskCreate(microphone_task, "xz_mic", 4096, client, 5, NULL);
-            return true;
+            if (xiaozhi_start_workers(client) &&
+                wake_word_start(client)) {
+                TaskHandle_t wake = NULL;
+                if (xTaskCreatePinnedToCoreWithCaps(wake_task, "xz_wake", 6144, client, 4,
+                                                     &wake, tskNO_AFFINITY,
+                                                     MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) == pdPASS) {
+                    client->wake_task = wake;
+                } else {
+                    ESP_LOGW(TAG, "wake task create failed");
+                }
+                return true;
+            }
+            esp_websocket_client_stop((esp_websocket_client_handle_t)client->transport);
+            esp_websocket_client_destroy((esp_websocket_client_handle_t)client->transport);
+            client->transport = NULL;
+            client->running = false;
+            client->state = XIAOZHI_STATE_ERROR;
+            return false;
         }
     }
     /* 8 KB covers the HTTP client and the TLS handshake; the response body
        lives in a file-scope buffer so it costs only internal DRAM, not stack. */
-    if (xTaskCreate(activation_task, "xz_act", 8192, client, 4, NULL) != pdPASS) {
+    TaskHandle_t activation = NULL;
+    if (xTaskCreate(activation_task, "xz_act", 8192, client, 4, &activation) != pdPASS) {
         ESP_LOGE(TAG, "activation task create failed");
         client->running = false;
         client->state = XIAOZHI_STATE_ERROR;
         return false;
     }
+    client->activation_task = activation;
     ESP_LOGI(TAG, "activation task started");
     return true;
 }
@@ -932,15 +1522,40 @@ void xiaozhi_client_stop(xiaozhi_client_t *client)
     if (client == NULL) return;
     client->running = false;
     client->listening = false;
+    client->music_stop_requested = true;
+    esp_http_client_handle_t music_http = (esp_http_client_handle_t)client->music_http;
+    if (music_http != NULL) {
+        esp_http_client_close(music_http);
+    }
+
+    /* Workers poll client->running and talk through client->transport, so a
+       restart must not create a second microphone/playback pair while the
+       old one is still running, and the socket must not be destroyed while
+       a worker can still send on it. */
+    while (client->activation_task != NULL || client->playback_task != NULL ||
+           client->microphone_task != NULL || client->music_task != NULL ||
+           client->wake_task != NULL) {
+        vTaskDelay(pdMS_TO_TICKS(20));
+    }
+
     if (client->transport != NULL) {
         esp_websocket_client_stop((esp_websocket_client_handle_t)client->transport);
         esp_websocket_client_destroy((esp_websocket_client_handle_t)client->transport);
         client->transport = NULL;
     }
+
+    if (s_audio_queue != NULL) {
+        audio_packet_t packet = {0};
+        while (xQueueReceive(s_audio_queue, &packet, 0) == pdTRUE) {
+            free(packet.data);
+        }
+    }
+
+    wake_word_stop(client);
     client->connected = false;
+    client->pending_audio_url[0] = '\0';
     client->state = XIAOZHI_STATE_IDLE;
 }
-
 bool xiaozhi_client_available(void)
 {
     return true;

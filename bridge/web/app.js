@@ -944,7 +944,9 @@ function drawCenteredText(context, text, y, maxWidth, lineHeight, maxLines) {
 
 function renderCustomPreview(custom = customFormValue()) {
   const canvas = byId("custom-device-preview");
-  const context = canvas.getContext("2d", { alpha: false });
+  // The same canvas is read back pixel-by-pixel for the device frame, so ask
+  // for the software backed context up front and avoid the readback warning.
+  const context = canvas.getContext("2d", { alpha: false, willReadFrequently: true });
   context.save();
   context.clearRect(0, 0, 466, 466);
   context.beginPath();
@@ -1268,7 +1270,8 @@ async function flashFirmware() {
 
 function canvasToRgb565() {
   const canvas = byId("custom-device-preview");
-  const pixels = canvas.getContext("2d", { alpha: false }).getImageData(0, 0, 466, 466).data;
+  const pixels = canvas.getContext("2d", { alpha: false, willReadFrequently: true })
+    .getImageData(0, 0, 466, 466).data;
   const output = new Uint8Array(466 * 466 * 2);
   for (let source = 0, target = 0; source < pixels.length; source += 4, target += 2) {
     const value = ((pixels[source] >> 3) << 11)

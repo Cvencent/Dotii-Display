@@ -20,6 +20,9 @@ static void test_lookup_by_name(void)
     assert(happy != NULL);
     assert(strcmp(happy->id, "10") == 0);
     assert(emotion_catalog_by_name("thinking")->id[0] == '3');
+    const emotion_def_t *music = emotion_catalog_by_name("music");
+    assert(music != NULL);
+    assert(strcmp(music->id, "42") == 0);
     assert(emotion_catalog_by_name("does_not_exist") == NULL);
 }
 

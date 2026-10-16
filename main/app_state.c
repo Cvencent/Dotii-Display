@@ -117,8 +117,8 @@ void app_state_make_preview(codex_snapshot_t *snapshot)
     snapshot->codex_enabled = true;
     snapshot->xiaozhi_enabled = true;
     strlcpy(snapshot->character_id, "dotii", sizeof(snapshot->character_id));
-    snapshot->custom_enabled = true;
-    snapshot->dotii_enabled = true;
+    snapshot->custom_enabled = false;
+    snapshot->dotii_enabled = false;
     snapshot->custom_ring_enabled = true;
     snapshot->docked_rotation_tenths = 900;
     snapshot->screen_off_timeout_seconds = 60;

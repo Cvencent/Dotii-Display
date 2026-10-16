@@ -39,6 +39,7 @@ idf_component_register(
         esp_websocket_client
         espressif__esp_audio_codec
         espressif__esp_audio_effects
+        espressif__esp-sr
         bt
         espressif__cjson
         mbedtls

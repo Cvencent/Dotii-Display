@@ -15,6 +15,7 @@ static codex_snapshot_t *snapshot_for_test(void)
 {
     static codex_snapshot_t snapshot;
     memset(&snapshot, 0, sizeof(snapshot));
+    codex_snapshot_reset_dotii_mapping(&snapshot);
     return &snapshot;
 }
 
@@ -301,6 +302,56 @@ TEST_CASE("configured state duration is applied to the mapped expression", "[cod
     codex_snapshot_refresh_dotii_state(snapshot);
     TEST_ASSERT_EQUAL_INT(DOTII_EXPRESSION_COMPLETE, snapshot->dotii_expression);
     TEST_ASSERT_EQUAL_UINT(3000, snapshot->dotii_state_duration_ms);
+}
+
+TEST_CASE("codex state merge stores running and unread terminal counters", "[codex_merge]")
+{
+    codex_snapshot_t *snapshot = snapshot_for_test();
+    cJSON *data = parse_json(
+        "{\"running\":2,\"completed_unread\":3,\"failed_unread\":1,"
+        "\"done\":3,\"failed\":1}"
+    );
+
+    codex_snapshot_merge_codex_state(snapshot, data);
+
+    TEST_ASSERT_TRUE(snapshot->valid);
+    TEST_ASSERT_TRUE(snapshot->codex_source_online);
+    TEST_ASSERT_EQUAL_UINT(2, snapshot->running_tasks);
+    TEST_ASSERT_EQUAL_UINT(3, snapshot->completed_unread_tasks);
+    TEST_ASSERT_EQUAL_UINT(1, snapshot->failed_unread_tasks);
+    cJSON_Delete(data);
+}
+
+TEST_CASE("repeated read state decrements a terminal count only once", "[codex_merge]")
+{
+    codex_snapshot_t *snapshot = snapshot_for_test();
+    codex_task_detail_t tasks[2] = {0};
+    snapshot->completed_unread_tasks = 1;
+    snapshot->failed_unread_tasks = 1;
+    tasks[0].status = CODEX_STATUS_COMPLETED;
+    strlcpy(tasks[0].result_message_id, "result:done:1",
+            sizeof(tasks[0].result_message_id));
+    tasks[1].status = CODEX_STATUS_FAILED;
+    strlcpy(tasks[1].result_message_id, "result:failed:2",
+            sizeof(tasks[1].result_message_id));
+
+    cJSON *completed = parse_json(
+        "{\"message_id\":\"result:done:1\",\"read_by\":[\"phone\"]}"
+    );
+    codex_snapshot_apply_read_state(snapshot, tasks, 2, completed);
+    codex_snapshot_apply_read_state(snapshot, tasks, 2, completed);
+    TEST_ASSERT_EQUAL_UINT(0, snapshot->completed_unread_tasks);
+    TEST_ASSERT_EQUAL_UINT(1, snapshot->failed_unread_tasks);
+
+    cJSON *failed = parse_json(
+        "{\"message_id\":\"result:failed:2\",\"read_by\":[\"phone\"]}"
+    );
+    codex_snapshot_apply_read_state(snapshot, tasks, 2, failed);
+    codex_snapshot_apply_read_state(snapshot, tasks, 2, failed);
+    TEST_ASSERT_EQUAL_UINT(0, snapshot->completed_unread_tasks);
+    TEST_ASSERT_EQUAL_UINT(0, snapshot->failed_unread_tasks);
+    cJSON_Delete(completed);
+    cJSON_Delete(failed);
 }
 
 TEST_CASE("read state updates every matching task detail", "[codex_merge]")
