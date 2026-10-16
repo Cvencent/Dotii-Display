@@ -118,10 +118,19 @@ void app_main(void)
         ESP_LOGW(TAG, "CodexBridge client unavailable: %s",
                  esp_err_to_name(codex_bridge_error));
     }
-    esp_err_t ble_error = ble_bridge_prepare();
-    if (ble_error == ESP_OK) ble_error = ble_bridge_start();
-    if (ble_error != ESP_OK) {
-        ESP_LOGE(TAG, "Bluetooth bridge unavailable: %s", esp_err_to_name(ble_error));
+    /* BLE is only needed until the device has been provisioned. Keeping the
+       NimBLE controller and host alive afterwards permanently removes the
+       internal memory that the Xiaozhi TLS session and wake-word task need.
+       Clearing provisioning from the device UI reboots into pairing mode. */
+    if (!device_config_get()->provisioned) {
+        esp_err_t ble_error = ble_bridge_prepare();
+        if (ble_error == ESP_OK) ble_error = ble_bridge_start();
+        if (ble_error != ESP_OK) {
+            ESP_LOGE(TAG, "Bluetooth bridge unavailable: %s", esp_err_to_name(ble_error));
+        }
+        log_heap_health("bluetooth");
+    } else {
+        ESP_LOGI(TAG, "Bluetooth provisioning idle: device already provisioned");
     }
 
     /* The radio, the panel and the audio codec all draw from the internal

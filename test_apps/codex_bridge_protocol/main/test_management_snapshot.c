@@ -118,17 +118,31 @@ TEST_CASE("management apply preserves CodexBridge-derived expression",
     memset(&target, 0, sizeof(target));
     memset(&source, 0, sizeof(source));
     target.status = CODEX_STATUS_WORKING;
+    target.running_tasks = 3;
+    target.completed_unread_tasks = 2;
+    target.failed_unread_tasks = 1;
     codex_snapshot_reset_dotii_mapping(&target);
     codex_snapshot_refresh_dotii_state(&target);
     source.custom_enabled = true;
+    strlcpy(source.xiaozhi_server_url, "wss://new.example/xiaozhi/v1/",
+            sizeof(source.xiaozhi_server_url));
+    source.display_revision = 17;
+    source.screen_off_timeout_seconds = 30;
     codex_snapshot_reset_dotii_mapping(&source);
 
     management_snapshot_apply(&target, &source);
 
     TEST_ASSERT_EQUAL_INT(CODEX_STATUS_WORKING, target.status);
+    TEST_ASSERT_EQUAL_UINT16(3, target.running_tasks);
+    TEST_ASSERT_EQUAL_UINT16(2, target.completed_unread_tasks);
+    TEST_ASSERT_EQUAL_UINT16(1, target.failed_unread_tasks);
     TEST_ASSERT_EQUAL_INT(DOTII_EXPRESSION_WORKING, target.dotii_expression);
     TEST_ASSERT_TRUE(target.dotii_state_assigned);
     TEST_ASSERT_TRUE(target.custom_enabled);
+    TEST_ASSERT_EQUAL_STRING("wss://new.example/xiaozhi/v1/",
+                             target.xiaozhi_server_url);
+    TEST_ASSERT_EQUAL_UINT(17, target.display_revision);
+    TEST_ASSERT_EQUAL_UINT(30, target.screen_off_timeout_seconds);
 }
 
 TEST_CASE("management snapshot requires schema one", "[management_merge]")

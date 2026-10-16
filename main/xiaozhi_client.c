@@ -623,8 +623,22 @@ static void ws_event_handler(void *handler_arg, esp_event_base_t base, int32_t e
         break;
     case WEBSOCKET_EVENT_DISCONNECTED:
         client->connected = false;
+        client->listening = false;
         client->state = XIAOZHI_STATE_ERROR;
         ESP_LOGW(TAG, "websocket disconnected");
+        break;
+    case WEBSOCKET_EVENT_CLOSED:
+        /* The service ends idle sessions with a clean close handshake. With
+           enable_close_reconnect the client reconnects and re-sends hello on
+           its own, so report "connecting" instead of a hard error; the wake
+           task below rebuilds the socket if that reconnect never lands. */
+        client->connected = false;
+        client->listening = false;
+        client->state = XIAOZHI_STATE_CONNECTING;
+        ESP_LOGW(TAG, "websocket closed by server");
+        break;
+    case WEBSOCKET_EVENT_ERROR:
+        ESP_LOGW(TAG, "websocket error");
         break;
     case WEBSOCKET_EVENT_DATA:
         if (data == NULL) break;
@@ -1047,6 +1061,9 @@ static bool open_websocket(xiaozhi_client_t *client)
         .buffer_size = 4096,
         .crt_bundle_attach = esp_crt_bundle_attach,
         .task_stack = 4096,
+        /* The service closes idle sessions cleanly; without this the client
+           stops for good after the first server-side close. */
+        .enable_close_reconnect = true,
     };
     esp_websocket_client_handle_t handle = esp_websocket_client_init(&config);
     if (handle == NULL) return false;
@@ -1402,7 +1419,14 @@ static void xiaozhi_detect_wake_word(xiaozhi_client_t *client)
     const int source_samples =
         (target_samples * XIAOZHI_CODEC_RATE + XIAOZHI_INPUT_RATE - 1) /
         XIAOZHI_INPUT_RATE;
-    int16_t *chunk = malloc((size_t)target_samples * sizeof(int16_t));
+    uint32_t max_output_samples = 0;
+    if (esp_ae_rate_cvt_get_max_out_sample_num(client->input_resampler,
+                                               (uint32_t)source_samples,
+                                               &max_output_samples) != ESP_AE_ERR_OK ||
+        max_output_samples < (uint32_t)target_samples) {
+        return;
+    }
+    int16_t *chunk = malloc((size_t)max_output_samples * sizeof(int16_t));
     int16_t *source = malloc((size_t)source_samples * sizeof(int16_t));
     if (chunk == NULL || source == NULL) {
         free(chunk);
@@ -1413,7 +1437,7 @@ static void xiaozhi_detect_wake_word(xiaozhi_client_t *client)
     const int read = esp_codec_dev_read((esp_codec_dev_handle_t)client->microphone,
                                         source, source_samples * (int)sizeof(int16_t));
     if (read == ESP_CODEC_DEV_OK) {
-        uint32_t output_samples = (uint32_t)target_samples;
+        uint32_t output_samples = max_output_samples;
         if (esp_ae_rate_cvt_process(client->input_resampler,
                                     (esp_ae_sample_t)source, (uint32_t)source_samples,
                                     (esp_ae_sample_t)chunk,
@@ -1455,8 +1479,26 @@ static void wake_task(void *argument)
         vTaskDeleteWithCaps(NULL);
         return;
     }
+    /* Last line of defence for voice control: the websocket library reconnects
+       transport errors by itself, and clean server closes once
+       enable_close_reconnect is set. If the socket is still down half a minute
+       after Wi-Fi came back, rebuild the session instead of staying silent
+       until the next reboot. */
+    uint32_t offline_since_ms = 0;
     while (client->running) {
         xiaozhi_detect_wake_word(client);
+        if (client->connected) {
+            offline_since_ms = 0;
+        } else if (offline_since_ms == 0) {
+            offline_since_ms = now_ms();
+        } else if ((uint32_t)(now_ms() - offline_since_ms) >= 30000 &&
+                   connectivity_is_wifi_connected()) {
+            offline_since_ms = now_ms();
+            ESP_LOGW(TAG, "xiaozhi offline for 30s, rebuilding session");
+            if (!open_websocket(client)) {
+                ESP_LOGW(TAG, "xiaozhi session rebuild failed");
+            }
+        }
         vTaskDelay(pdMS_TO_TICKS(5));
     }
     if (client->wake_task == (void *)xTaskGetCurrentTaskHandle()) {

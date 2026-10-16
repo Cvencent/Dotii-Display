@@ -11,13 +11,9 @@ BRIDGE = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BRIDGE))
 
 from codex_bridge import (  # noqa: E402
-    default_dotii_config,
     packaged_startup_command,
     startup_command,
     validate_display_config,
-    validate_dotii_config,
-    validate_module_config,
-    validate_snapshot,
 )
 from platforms.windows import WindowsPlatformAdapter  # noqa: E402
 
@@ -31,11 +27,15 @@ class CodexUiConfigTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate_display_config({"codex_ui": "replace-classic"})
 
-    def test_display_config_accepts_screen_off_page_targets(self) -> None:
-        for target in ("none", "custom", "dotii"):
+    def test_display_config_keeps_black_screen_and_migrates_removed_pages(self) -> None:
+        self.assertEqual(
+            validate_display_config({"screen_off_page": "none"})["screen_off_page"],
+            "none",
+        )
+        for target in ("custom", "dotii"):
             self.assertEqual(
                 validate_display_config({"screen_off_page": target})["screen_off_page"],
-                target,
+                "none",
             )
 
     def test_display_config_rejects_unknown_screen_off_page_target(self) -> None:

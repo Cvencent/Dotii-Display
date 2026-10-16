@@ -69,13 +69,20 @@ CONFIG_ESP_WIFI_STATIC_TX_BUFFER_NUM=8
 CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=6
 CONFIG_ESP_WIFI_RX_MGMT_BUF_NUM_DEF=3
 CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=16
+# The cache TX queue is copied into internal DMA RAM (about 1.6 KB per slot).
+# The Xiaozhi websocket tasks and the I2S descriptors need that same pool, and
+# they cannot run from PSRAM.
+CONFIG_ESP_WIFI_CACHE_TX_BUFFER_NUM=8
 CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
 # Every malloc up to 16 KB otherwise lands in internal SRAM; with Wi-Fi, BLE,
 # LVGL and the panel driver up that starves the I2S DMA pool and the codec
 # cannot start. Keep the internal-reserved window small and let the larger
 # buffers live in PSRAM.
-CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=1024
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=512
 CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y
+# Only one BLE link is ever used; the controller otherwise reserves activity
+# contexts for six.
+CONFIG_BT_CTRL_BLE_MAX_ACT=2
 # The board BSP wraps its DMA allocations in ESP_ERROR_CHECK, which turns a
 # transient shortage into a reboot loop; prefer error returns so the audio
 # path can retry once the radio and panel have settled.

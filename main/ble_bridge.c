@@ -19,6 +19,7 @@
 #include "host/util/util.h"
 #include "nimble/nimble_port.h"
 #include "nimble/nimble_port_freertos.h"
+#include "nvs.h"
 #include "services/gap/ble_svc_gap.h"
 #include "services/gatt/ble_svc_gatt.h"
 #include "store/config/ble_store_config.h"
@@ -26,6 +27,7 @@
 
 #define RX_MAX 1024
 #define RESPONSE_MAX 1536
+#define NIMBLE_BOND_NAMESPACE "nimble_bond"
 
 static const char *TAG = "ble_bridge";
 static uint8_t s_own_addr_type;
@@ -389,10 +391,30 @@ esp_err_t ble_bridge_start(void)
 
 esp_err_t ble_bridge_clear_bonds(void)
 {
-    if (!s_prepared) return ESP_ERR_INVALID_STATE;
-    int rc = ble_store_clear();
-    if (rc != 0) {
-        ESP_LOGW(TAG, "Unable to clear Bluetooth bonds: %d", rc);
+    /* A provisioned boot does not initialize NimBLE, so ble_store_clear()
+       is unavailable at the moment the settings screen resets provisioning.
+       Erase the persisted NimBLE namespace directly as well; this removes
+       stale host bonds before the next Bluetooth pairing attempt. */
+    nvs_handle_t handle;
+    esp_err_t storage_error = nvs_open(NIMBLE_BOND_NAMESPACE, NVS_READWRITE, &handle);
+    if (storage_error == ESP_OK) {
+        storage_error = nvs_erase_all(handle);
+        if (storage_error == ESP_OK) storage_error = nvs_commit(handle);
+        nvs_close(handle);
+    }
+    if (storage_error != ESP_OK && storage_error != ESP_ERR_NVS_NOT_FOUND) {
+        ESP_LOGW(TAG, "Unable to clear persisted Bluetooth bonds: %s",
+                 esp_err_to_name(storage_error));
+    }
+
+    if (s_prepared) {
+        int rc = ble_store_clear();
+        if (rc != 0) {
+            ESP_LOGW(TAG, "Unable to clear Bluetooth bonds: %d", rc);
+            return ESP_FAIL;
+        }
+    }
+    if (storage_error != ESP_OK && storage_error != ESP_ERR_NVS_NOT_FOUND) {
         return ESP_FAIL;
     }
     ESP_LOGI(TAG, "Bluetooth bonds cleared");

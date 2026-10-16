@@ -30,9 +30,6 @@
 #define WIFI_CONNECTED_BIT BIT0
 #define REFRESH_REQUESTED_BIT BIT1
 #define HTTP_BODY_INITIAL_CAPACITY 49152
-#define CUSTOM_IMAGE_WIDTH 466
-#define CUSTOM_IMAGE_HEIGHT 466
-#define CUSTOM_IMAGE_BYTES (CUSTOM_IMAGE_WIDTH * CUSTOM_IMAGE_HEIGHT * 2)
 
 static const char *TAG = "connectivity";
 static EventGroupHandle_t s_events;
@@ -47,9 +44,6 @@ EXT_RAM_BSS_ATTR static codex_snapshot_t s_last_snapshot;
 EXT_RAM_BSS_ATTR static codex_snapshot_t s_work_snapshot;
 EXT_RAM_BSS_ATTR static codex_snapshot_t s_management_snapshot;
 static bool s_have_snapshot;
-static uint8_t *s_custom_image_buffers[2];
-static uint32_t s_custom_image_revisions[2];
-static int s_custom_image_active = -1;
 static codex_task_detail_t *s_work_tasks;
 static size_t s_work_task_count;
 static SemaphoreHandle_t s_state_lock;
@@ -60,35 +54,6 @@ typedef struct {
     size_t length;
     bool overflow;
 } http_body_t;
-
-static void blacken_custom_frame_near_black_edge(uint8_t *data)
-{
-    const int edge = 12;
-    for (int y = 0; y < CUSTOM_IMAGE_HEIGHT; ++y) {
-        for (int x = 0; x < CUSTOM_IMAGE_WIDTH; ++x) {
-            if (x >= edge && x < CUSTOM_IMAGE_WIDTH - edge &&
-                y >= edge && y < CUSTOM_IMAGE_HEIGHT - edge) {
-                continue;
-            }
-            size_t offset = ((size_t)y * CUSTOM_IMAGE_WIDTH + x) * 2;
-            uint16_t pixel = (uint16_t)data[offset] | ((uint16_t)data[offset + 1] << 8);
-            uint16_t red = (pixel >> 11) & 0x1F;
-            uint16_t green = (pixel >> 5) & 0x3F;
-            uint16_t blue = pixel & 0x1F;
-            if (red <= 1 && green <= 2 && blue <= 1) {
-                data[offset] = 0;
-                data[offset + 1] = 0;
-            }
-        }
-    }
-}
-
-typedef struct {
-    uint8_t *data;
-    size_t capacity;
-    size_t length;
-    bool overflow;
-} image_body_t;
 
 static esp_err_t http_event_handler(esp_http_client_event_t *event)
 {
@@ -114,79 +79,6 @@ static esp_err_t http_event_handler(esp_http_client_event_t *event)
         response->body[response->length] = '\0';
     }
     return ESP_OK;
-}
-
-static esp_err_t image_http_event_handler(esp_http_client_event_t *event)
-{
-    image_body_t *response = (image_body_t *)event->user_data;
-    if (event->event_id == HTTP_EVENT_ON_DATA && response != NULL && event->data_len > 0) {
-        size_t available = response->capacity - response->length;
-        size_t count = (size_t)event->data_len;
-        if (count > available) {
-            count = available;
-            response->overflow = true;
-        }
-        if (count > 0) {
-            memcpy(response->data + response->length, event->data, count);
-            response->length += count;
-        }
-    }
-    return ESP_OK;
-}
-
-static bool fetch_custom_image(uint32_t revision)
-{
-    const device_config_values_t *device_config = device_config_get();
-    for (size_t index = 0; index < 2; index++) {
-        if (s_custom_image_buffers[index] != NULL && s_custom_image_revisions[index] == revision) {
-            s_custom_image_active = (int)index;
-            return true;
-        }
-    }
-    char url[256];
-    strlcpy(url, device_config->bridge_url, sizeof(url));
-    char *last_slash = strrchr(url, '/');
-    if (last_slash == NULL) return false;
-    strlcpy(last_slash + 1, "custom-screen.rgb565", sizeof(url) - (size_t)(last_slash + 1 - url));
-
-    int slot = s_custom_image_active == 0 ? 1 : 0;
-    if (s_custom_image_buffers[slot] == NULL) {
-        s_custom_image_buffers[slot] = heap_caps_malloc(CUSTOM_IMAGE_BYTES, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        if (s_custom_image_buffers[slot] == NULL) {
-            ESP_LOGE(TAG, "Unable to allocate custom image buffer");
-            return false;
-        }
-    }
-    image_body_t response = {
-        .data = s_custom_image_buffers[slot],
-        .capacity = CUSTOM_IMAGE_BYTES,
-    };
-    esp_http_client_config_t config = {
-        .url = url,
-        .event_handler = image_http_event_handler,
-        .user_data = &response,
-        .timeout_ms = 15000,
-        .buffer_size = 4096,
-        .crt_bundle_attach = esp_crt_bundle_attach,
-    };
-    esp_http_client_handle_t client = esp_http_client_init(&config);
-    if (client == NULL) return false;
-    if (strlen(device_config->bridge_token) > 0) {
-        esp_http_client_set_header(client, "X-Bridge-Token", device_config->bridge_token);
-    }
-    esp_err_t error = esp_http_client_perform(client);
-    int status = esp_http_client_get_status_code(client);
-    esp_http_client_cleanup(client);
-    if (error != ESP_OK || status != 200 || response.overflow || response.length != CUSTOM_IMAGE_BYTES) {
-        ESP_LOGW(TAG, "Custom image request failed: %s, HTTP %d, bytes %u",
-                 esp_err_to_name(error), status, (unsigned)response.length);
-        return false;
-    }
-    blacken_custom_frame_near_black_edge(s_custom_image_buffers[slot]);
-    s_custom_image_revisions[slot] = revision;
-    s_custom_image_active = slot;
-    ESP_LOGI(TAG, "Custom image received: revision %lu", (unsigned long)revision);
-    return true;
 }
 
 static bool fetch_snapshot(codex_snapshot_t *management)
@@ -231,21 +123,11 @@ static bool fetch_snapshot(codex_snapshot_t *management)
     }
     bool parsed = management_snapshot_parse(response.body, management);
     heap_caps_free(response.body);
-    if (parsed && management->custom_image_available &&
-        !fetch_custom_image(management->custom_image_revision)) {
-        management->custom_image_available = false;
-    }
+    /* The standalone custom page is gone, so its 434 KB framebuffer is no
+       longer downloaded or kept resident: the Xiaozhi TLS session and the
+       I2S DMA descriptors need that memory far more than a hidden page. */
+    management->custom_image_available = false;
     return parsed;
-}
-
-const uint8_t *connectivity_custom_image_data(uint32_t revision)
-{
-    for (size_t index = 0; index < 2; index++) {
-        if (s_custom_image_buffers[index] != NULL && s_custom_image_revisions[index] == revision) {
-            return s_custom_image_buffers[index];
-        }
-    }
-    return NULL;
 }
 
 static void publish_current_state(void)
@@ -328,8 +210,8 @@ void connectivity_apply_codex_bridge_message(
 static void bridge_task(void *argument)
 {
     (void)argument;
-    const bool direct_requested =
-        strlen(device_config_get()->codex_bridge_token) >= 16;
+    const bool management_requested =
+        strlen(device_config_get()->bridge_url) > 0;
     publish_current_state();
     while (true) {
         EventBits_t bits = xEventGroupWaitBits(
@@ -339,14 +221,11 @@ static void bridge_task(void *argument)
             pdFALSE,
             pdMS_TO_TICKS(CONFIG_STATE_DISPLAY_POLL_SECONDS * 1000));
 
-        /* The direct CodexBridge session is authoritative. The legacy HTTP
-           management snapshot is only a fallback for installations that still
-           use the old bridge URL, so an online direct session must not keep
-           polling a stale address every few seconds. */
-        bool direct_online = codex_bridge_client_is_online();
-        /* Only fall back to the retired management snapshot when this device
-           has no direct CodexBridge token at all. */
-        if (!direct_requested && !direct_online &&
+        /* The management snapshot carries Xiaozhi and display settings even
+           when Codex data arrives over the direct session. Polling it used to
+           stop as soon as a CodexBridge token existed, so later management
+           changes never reached the device. */
+        if (management_requested &&
             ((bits & WIFI_CONNECTED_BIT) || s_wifi_connected)) {
             if (fetch_snapshot(&s_management_snapshot)) {
                 if (s_state_lock != NULL) xSemaphoreTake(s_state_lock, portMAX_DELAY);

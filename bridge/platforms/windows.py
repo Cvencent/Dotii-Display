@@ -21,7 +21,47 @@ STARTUP_REGISTRY_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 STARTUP_REGISTRY_VALUE = "DotiiManagementCenter"
 
 
-def parse_serial_ports(payload: str) -> list[dict[str, object]]:
+def _normalize_serial(value: object) -> str:
+    return "".join(ch for ch in str(value or "").upper() if ch.isalnum())
+
+
+def _known_dotii_serials() -> set[str]:
+    """USB serial numbers of the Dotii boards CodexBridge has already seen.
+
+    Every ESP32-S3 exposes the same ``303A:1001`` USB identity, so the VID/PID
+    alone cannot tell a Dotii apart from another ESP32-S3 board on the same
+    desk. The registry of paired devices names each board by its MAC, which is
+    exactly the serial number the USB composite device advertises.
+    """
+    serials: set[str] = set()
+    local_app_data = os.environ.get("LOCALAPPDATA")
+    if not local_app_data:
+        return serials
+    try:
+        payload = json.loads(
+            (Path(local_app_data) / "CodexBridge" / "devices.json").read_text(
+                encoding="utf-8"
+            )
+        )
+    except (OSError, ValueError):
+        return serials
+    devices = payload.get("devices") if isinstance(payload, dict) else None
+    for device in devices.values() if isinstance(devices, dict) else []:
+        if not isinstance(device, dict):
+            continue
+        device_id = str(device.get("device_id") or "")
+        if device_id.lower().startswith("dotii-"):
+            serial = _normalize_serial(device_id.split("-", 1)[1])
+            if serial:
+                serials.add(serial)
+    return serials
+
+
+def parse_serial_ports(
+    payload: str,
+    *,
+    dotii_serials: set[str] | None = None,
+) -> list[dict[str, object]]:
     """Normalize a Win32_SerialPort JSON result without exposing CIM upstream."""
     try:
         raw = json.loads(payload or "[]")
@@ -37,11 +77,20 @@ def parse_serial_ports(payload: str) -> list[dict[str, object]]:
         pnp = str(item.get("PNPDeviceID") or "").upper()
         if not PORT_PATTERN.fullmatch(port):
             continue
+        serial = _normalize_serial(item.get("Serial"))
+        matches_family = (
+            f"VID_{DOTII_USB_VID}" in pnp and f"PID_{DOTII_USB_PID}" in pnp
+        )
+        known = {_normalize_serial(value) for value in (dotii_serials or ())}
+        # Only fall back to the shared VID/PID when nothing identifies the
+        # board: no paired Dotii is known yet, or Windows did not surface a
+        # serial number for this port.
+        is_dotii = matches_family and (not known or not serial or serial in known)
         output.append({
             "port": port,
             "name": str(item.get("Name") or port)[:120],
             "pnp_id": pnp[:180],
-            "dotii": f"VID_{DOTII_USB_VID}" in pnp and f"PID_{DOTII_USB_PID}" in pnp,
+            "dotii": is_dotii,
         })
     output.sort(key=lambda item: (not bool(item["dotii"]), int(str(item["port"])[3:])))
     return output
@@ -148,7 +197,13 @@ class WindowsPlatformAdapter:
     def scan_serial_ports(self, run: RunCommand) -> list[dict[str, object]]:
         command = (
             "Get-CimInstance Win32_SerialPort | "
-            "Select-Object DeviceID,Name,PNPDeviceID | ConvertTo-Json -Compress"
+            "ForEach-Object { "
+            "$parent = (Get-PnpDeviceProperty -InstanceId $_.PNPDeviceID "
+            "-KeyName 'DEVPKEY_Device_Parent' -ErrorAction SilentlyContinue).Data; "
+            "[PSCustomObject]@{ DeviceID = $_.DeviceID; Name = $_.Name; "
+            "PNPDeviceID = $_.PNPDeviceID; "
+            "Serial = if ($parent) { ($parent -split '\\\\')[-1] } else { '' } } "
+            "} | ConvertTo-Json -Compress"
         )
         try:
             powershell = shutil.which("powershell.exe") or shutil.which("pwsh.exe") or "powershell.exe"
@@ -164,7 +219,11 @@ class WindowsPlatformAdapter:
                 creationflags=self.hidden_creation_flags(),
                 check=False,
             )
-            return parse_serial_ports(result.stdout) if result.returncode == 0 else []
+            if result.returncode != 0:
+                return []
+            return parse_serial_ports(
+                result.stdout, dotii_serials=_known_dotii_serials()
+            )
         except (OSError, subprocess.SubprocessError):
             return []
 

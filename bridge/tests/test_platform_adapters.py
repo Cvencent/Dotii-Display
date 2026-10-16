@@ -61,6 +61,38 @@ class WindowsPlatformAdapterTests(unittest.TestCase):
         self.assertEqual([item["port"] for item in ports], ["COM17", "COM8"])
         self.assertTrue(ports[0]["dotii"])
 
+    def test_only_the_paired_board_is_marked_as_dotii(self) -> None:
+        payload = json.dumps([
+            {
+                "DeviceID": "COM4",
+                "Name": "USB 串行设备 (COM4)",
+                "PNPDeviceID": "USB\\VID_303A&PID_1001&MI_00\\9&6B46F6C&0&0000",
+                "Serial": "98:C3:77:F5:52:70",
+            },
+            {
+                "DeviceID": "COM3",
+                "Name": "USB 串行设备 (COM3)",
+                "PNPDeviceID": "USB\\VID_303A&PID_1001&MI_00\\7&3261F339&0&0000",
+                "Serial": "44:BD:8D:60:7F:8C",
+            },
+        ])
+        ports = parse_serial_ports(payload, dotii_serials={"44bd8d607f8c"})
+        self.assertEqual([item["port"] for item in ports], ["COM3", "COM4"])
+        self.assertTrue(ports[0]["dotii"])
+        self.assertFalse(ports[1]["dotii"])
+
+    def test_unknown_boards_keep_the_vid_pid_fallback(self) -> None:
+        payload = json.dumps([
+            {
+                "DeviceID": "COM3",
+                "Name": "USB 串行设备 (COM3)",
+                "PNPDeviceID": "USB\\VID_303A&PID_1001&MI_00\\7&3261F339&0&0000",
+                "Serial": "",
+            },
+        ])
+        ports = parse_serial_ports(payload, dotii_serials=set())
+        self.assertTrue(ports[0]["dotii"])
+
 
 @unittest.skipUnless(os.name == "nt", "Windows tray host only")
 class TrayHostTests(unittest.TestCase):

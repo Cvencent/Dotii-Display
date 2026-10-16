@@ -644,6 +644,13 @@ esp_err_t bsp_audio_init(const i2s_std_config_t *i2s_config)
     /* Setup I2S peripheral */
     i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(CONFIG_BSP_I2S_NUM, I2S_ROLE_MASTER);
     chan_cfg.auto_clear = true; // Auto clear the legacy data in the DMA buffer
+    /* The duplex pair has to share the board's internal DMA pool with Wi-Fi,
+       BLE and the AMOLED panel. The driver default (6 descriptors of 240
+       frames each) no longer fits once the Xiaozhi client and its websocket
+       are running, which made every audio init fail. Four descriptors still
+       give the pair about 40 ms of slack at 24 kHz. */
+    chan_cfg.dma_desc_num = 4;
+    chan_cfg.dma_frame_num = 240;
     BSP_ERROR_CHECK_RETURN_ERR(i2s_new_channel(&chan_cfg, &i2s_tx_chan, &i2s_rx_chan));
 
     /* Setup I2S channels */
@@ -653,13 +660,17 @@ esp_err_t bsp_audio_init(const i2s_std_config_t *i2s_config)
         p_i2s_cfg = i2s_config;
     }
 
+    bool tx_enabled = false;
+    bool rx_enabled = false;
     if (i2s_tx_chan != NULL) {
         ESP_GOTO_ON_ERROR(i2s_channel_init_std_mode(i2s_tx_chan, p_i2s_cfg), err, TAG, "I2S channel initialization failed");
         ESP_GOTO_ON_ERROR(i2s_channel_enable(i2s_tx_chan), err, TAG, "I2S enabling failed");
+        tx_enabled = true;
     }
     if (i2s_rx_chan != NULL) {
         ESP_GOTO_ON_ERROR(i2s_channel_init_std_mode(i2s_rx_chan, p_i2s_cfg), err, TAG, "I2S channel initialization failed");
         ESP_GOTO_ON_ERROR(i2s_channel_enable(i2s_rx_chan), err, TAG, "I2S enabling failed");
+        rx_enabled = true;
     }
 
     audio_codec_i2s_cfg_t i2s_cfg = {
@@ -673,15 +684,25 @@ esp_err_t bsp_audio_init(const i2s_std_config_t *i2s_config)
     return ESP_OK;
 
 err:
-    /* Drop the handles as well: bsp_audio_init() is retried after a failed
-       allocation and must not report ESP_OK for channels it freed. */
+    /* An enabled channel must be disabled before it can be destroyed. Without
+       this the delete fails, the handle was dropped anyway and the I2S
+       controller stayed occupied, so every later retry died with
+       "no available channel found". */
     if (i2s_tx_chan) {
-        i2s_del_channel(i2s_tx_chan);
-        i2s_tx_chan = NULL;
+        if (tx_enabled && i2s_channel_disable(i2s_tx_chan) != ESP_OK) {
+            ESP_LOGW(TAG, "failed to disable the I2S tx channel during cleanup");
+        }
+        if (i2s_del_channel(i2s_tx_chan) == ESP_OK) {
+            i2s_tx_chan = NULL;
+        }
     }
     if (i2s_rx_chan) {
-        i2s_del_channel(i2s_rx_chan);
-        i2s_rx_chan = NULL;
+        if (rx_enabled && i2s_channel_disable(i2s_rx_chan) != ESP_OK) {
+            ESP_LOGW(TAG, "failed to disable the I2S rx channel during cleanup");
+        }
+        if (i2s_del_channel(i2s_rx_chan) == ESP_OK) {
+            i2s_rx_chan = NULL;
+        }
     }
 
     return ret;

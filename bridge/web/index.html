@@ -34,16 +34,6 @@
         <span>小智</span>
         <span class="module-meta" id="xiaozhi-nav-state">读取中</span>
       </button>
-      <button class="module-tab" type="button" data-panel="dotii" aria-selected="false">
-        <img src="/assets/dotii.svg" alt="">
-        <span>小智表情</span>
-        <span class="module-meta" id="dotii-nav-state">读取中</span>
-      </button>
-      <button class="module-tab" type="button" data-panel="custom" aria-selected="false">
-        <span class="nav-icon custom-icon" aria-hidden="true"></span>
-        <span>自定义</span>
-        <span class="module-meta" id="custom-nav-state">读取中</span>
-      </button>
       <button class="module-tab system-tab" type="button" data-panel="system" aria-selected="false">
         <span class="nav-icon settings-icon" aria-hidden="true"></span>
         <span>设置</span>
@@ -99,230 +89,11 @@
             <h3>工作原理</h3>
             <div class="runtime-row"><span>对话</span><strong>设备麦克风采集，小智服务端识别</strong></div>
             <div class="runtime-row"><span>表情</span><strong>固件原生渲染，随对话与触摸切换</strong></div>
-            <div class="runtime-row"><span>形象</span><strong>到“小智表情”页切换</strong></div>
+            <div class="runtime-row"><span>形象</span><strong>固件内置，无需单独配置页面</strong></div>
             <div class="runtime-row"><span>Codex 数据</span><strong>由 CodexBridge 独立下发</strong></div>
           </article>
         </div>
       </section>
-
-      <section class="panel" id="panel-custom" aria-labelledby="custom-heading" hidden>
-        <div class="section-heading">
-          <div>
-            <h2 id="custom-heading">自定义界面</h2>
-            <p>设计属于你的 Dotii 屏幕画面。</p>
-          </div>
-        </div>
-
-        <div class="custom-settings" id="custom-settings">
-        <div class="custom-editor">
-          <form class="custom-form" id="custom-form">
-            <section class="custom-control-section" aria-labelledby="custom-text-heading">
-              <div class="control-section-heading">
-                <div><h3 id="custom-text-heading">文字内容</h3><p>每项都能独立编辑、换色或隐藏。</p></div>
-              </div>
-              <div class="text-setting-list">
-                <article class="text-setting" data-text-setting="title">
-                  <div class="text-setting-heading">
-                    <label for="custom-title">页面标题</label>
-                    <label class="visibility-toggle"><input id="custom-title-visible" type="checkbox" checked><span>显示</span></label>
-                  </div>
-                  <div class="text-setting-body">
-                    <div class="text-setting-controls">
-                      <input id="custom-title" name="title" type="text" maxlength="16" autocomplete="off" placeholder="可以留空">
-                      <label class="compact-color"><span>颜色</span><input id="custom-title-color" type="color" value="#8E9B97" aria-label="页面标题颜色"></label>
-                    </div>
-                    <small>建议不超过 8 个汉字</small>
-                  </div>
-                </article>
-                <article class="text-setting" data-text-setting="value">
-                  <div class="text-setting-heading">
-                    <label for="custom-value">主内容</label>
-                    <label class="visibility-toggle"><input id="custom-value-visible" type="checkbox" checked><span>显示</span></label>
-                  </div>
-                  <div class="text-setting-body">
-                    <div class="text-setting-controls">
-                      <input id="custom-value" name="value" type="text" maxlength="32" autocomplete="off" placeholder="可以留空">
-                      <label class="compact-color"><span>颜色</span><input id="custom-value-color" type="color" value="#F2C66D" aria-label="主内容颜色"></label>
-                    </div>
-                    <small>画面中最醒目的文字</small>
-                  </div>
-                </article>
-                <article class="text-setting" data-text-setting="body">
-                  <div class="text-setting-heading">
-                    <label for="custom-body">说明文字</label>
-                    <label class="visibility-toggle"><input id="custom-body-visible" type="checkbox" checked><span>显示</span></label>
-                  </div>
-                  <div class="text-setting-body">
-                    <div class="text-setting-controls text-setting-controls-wide">
-                      <textarea id="custom-body" name="body" rows="3" maxlength="85" placeholder="可以留空"></textarea>
-                      <label class="compact-color"><span>颜色</span><input id="custom-body-color" type="color" value="#D6DFDC" aria-label="说明文字颜色"></label>
-                    </div>
-                    <small>内容较长时会自动换行</small>
-                  </div>
-                </article>
-                <article class="text-setting" data-text-setting="footer">
-                  <div class="text-setting-heading">
-                    <label for="custom-footer">页脚</label>
-                    <label class="visibility-toggle"><input id="custom-footer-visible" type="checkbox" checked><span>显示</span></label>
-                  </div>
-                  <div class="text-setting-body">
-                    <div class="text-setting-controls">
-                      <input id="custom-footer" name="footer" type="text" maxlength="32" autocomplete="off" placeholder="可以留空">
-                      <label class="compact-color"><span>颜色</span><input id="custom-footer-color" type="color" value="#8E9B97" aria-label="页脚颜色"></label>
-                    </div>
-                    <small>适合放日期、状态或一句短语</small>
-                  </div>
-                </article>
-              </div>
-            </section>
-
-            <section class="custom-control-section ring-section" aria-labelledby="custom-ring-heading">
-              <div class="control-section-heading ring-heading-row">
-                <div><h3 id="custom-ring-heading">外侧圆环</h3><p>为最终画面增加一圈渐变强调色。</p></div>
-                <label class="visibility-toggle"><input id="custom-ring-enabled" type="checkbox" checked><span>显示</span></label>
-              </div>
-              <div class="ring-colors" id="custom-ring-colors">
-                <label class="color-control" for="custom-ring-start"><span>起始色</span><input id="custom-ring-start" type="color" value="#F2C66D"></label>
-                <label class="color-control" for="custom-ring-end"><span>结束色</span><input id="custom-ring-end" type="color" value="#5DA9FF"></label>
-              </div>
-            </section>
-
-            <section class="custom-control-section" aria-labelledby="custom-image-heading">
-              <div class="control-section-heading">
-                <div><h3 id="custom-image-heading">画面素材</h3><p>选择内置表情，或上传图片后先裁切再应用。</p></div>
-              </div>
-              <div class="expression-grid" aria-label="内置可爱表情">
-                <button class="expression-option" type="button" data-expression="/assets/expressions/happy.png" data-expression-name="暖暖笑"><img src="/assets/expressions/happy.png" alt="暖暖笑表情"><span>暖暖笑</span></button>
-                <button class="expression-option" type="button" data-expression="/assets/expressions/curious.png" data-expression-name="好奇心"><img src="/assets/expressions/curious.png" alt="好奇心表情"><span>好奇心</span></button>
-                <button class="expression-option" type="button" data-expression="/assets/expressions/sleepy.png" data-expression-name="困困眼"><img src="/assets/expressions/sleepy.png" alt="困困眼表情"><span>困困眼</span></button>
-                <button class="expression-option" type="button" data-expression="/assets/expressions/excited.png" data-expression-name="闪闪亮"><img src="/assets/expressions/excited.png" alt="闪闪亮表情"><span>闪闪亮</span></button>
-              </div>
-              <div class="image-upload-field">
-                <div class="upload-heading"><label for="custom-image-file">上传自己的图片</label><span>支持 PNG / JPEG</span></div>
-                <input id="custom-image-file" type="file" accept="image/png,image/jpeg">
-                <small id="custom-image-state">选择图片后可调整位置和大小。</small>
-                <div class="image-controls">
-                  <label class="check-row"><input id="custom-background-image" type="checkbox"><span>显示图片</span></label>
-                  <div class="image-fit-field">
-                    <span class="time-field-label" id="custom-image-fit-label">填充方式</span>
-                    <div class="ui-select" data-ui-select="custom-image-fit">
-                      <input id="custom-image-fit" type="hidden" value="cover">
-                      <button class="ui-select-trigger" type="button" aria-haspopup="listbox" aria-expanded="false" aria-labelledby="custom-image-fit-label custom-image-fit-value">
-                        <span id="custom-image-fit-value">铺满屏幕</span><span class="ui-select-chevron" aria-hidden="true"></span>
-                      </button>
-                      <div class="ui-select-menu" role="listbox" aria-labelledby="custom-image-fit-label" hidden>
-                        <button type="button" role="option" data-value="cover">铺满屏幕</button>
-                        <button type="button" role="option" data-value="contain">完整显示</button>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-                <div class="field-group opacity-field">
-                  <label for="custom-image-opacity">图片亮度 <output id="custom-image-opacity-output">70%</output></label>
-                  <input id="custom-image-opacity" type="range" min="0" max="100" value="70">
-                </div>
-              </div>
-            </section>
-
-            <div class="custom-actions">
-              <button class="primary-button" id="save-custom" type="submit">保存并同步</button>
-              <span class="save-state" id="custom-save-state" role="status" aria-live="polite">尚未修改</span>
-            </div>
-          </form>
-
-          <div class="device-preview-block" aria-label="Dotii 自定义页面预览">
-            <div class="preview-heading"><div><h3>实时预览</h3><p>Dotii 屏幕效果</p></div></div>
-            <canvas class="custom-device-preview" id="custom-device-preview" width="466" height="466" aria-label="Dotii 屏幕预览"></canvas>
-            <p class="preview-note">保存后，Dotii 会自动显示这张画面。</p>
-          </div>
-        </div>
-
-        </div>
-
-        <section class="module-preferences" aria-labelledby="custom-preferences-heading">
-          <div class="module-preferences-heading">
-            <div><h3 id="custom-preferences-heading">自定义界面设置</h3></div>
-            <label class="module-switch">
-              <span>启用功能</span>
-              <input id="custom-enabled" type="checkbox" checked>
-              <span class="switch-track" aria-hidden="true"></span>
-            </label>
-          </div>
-          <div class="notice-line">关闭后保留当前画面内容，下次启用时可继续编辑和同步。</div>
-        </section>
-      </section>
-
-      <section class="panel" id="panel-dotii" aria-labelledby="dotii-heading" hidden>
-        <div class="section-heading">
-          <div>
-            <h2 id="dotii-heading">小智表情</h2>
-            <p>选择形象与动画，让 Dotii 用表情回应对话、任务状态和你的触摸。</p>
-          </div>
-        </div>
-
-        <div class="dotii-content" id="dotii-content">
-          <article class="dotii-stage" aria-labelledby="dotii-stage-title">
-            <div class="dotii-stage-copy">
-              <span class="dotii-kicker">当前表情</span>
-              <h3 id="dotii-stage-title">待机呼吸</h3>
-              <p id="dotii-stage-reason">正在读取 Dotii 状态。</p>
-              <button class="quiet-button" id="dotii-follow-live" type="button">跟随当前状态</button>
-            </div>
-            <div class="dotii-device" aria-label="Dotii 表情动画预览">
-              <img id="dotii-current-expression" src="/assets/expressions/dotii-idle-breath.webp" alt="Dotii 待机呼吸动画">
-            </div>
-          </article>
-
-          <section class="dotii-config-panel dotii-character-panel" aria-labelledby="dotii-character-heading">
-            <div class="dotii-library-heading">
-              <div>
-                <h3 id="dotii-character-heading">设备形象</h3>
-                <p>形象包内置于固件，切换后立即生效，无需重新烧录。</p>
-              </div>
-              <span id="dotii-character-state" role="status" aria-live="polite">正在读取形象</span>
-            </div>
-            <div class="dotii-character-grid" id="dotii-character-grid" aria-label="可切换的设备形象"></div>
-            <div class="dotii-config-actions">
-              <p>Dotii 为自研形象，Nimbo、Twinkle、Blob 来自开源项目 aora-bot。</p>
-              <div>
-                <button class="primary-button" id="dotii-character-save" type="button" disabled>保存形象</button>
-              </div>
-            </div>
-          </section>
-
-          <section class="dotii-config-panel" aria-labelledby="dotii-config-heading">
-            <div class="dotii-library-heading">
-              <div>
-                <h3 id="dotii-config-heading">动画与状态</h3>
-                <p>选择设备形象，并把小智、Codex 等状态映射到不同的原生表情动画。</p>
-              </div>
-              <span id="dotii-library-state" role="status" aria-live="polite">正在加载动画</span>
-            </div>
-            <form id="dotii-config-form">
-              <div class="dotii-config-list" id="dotii-config-list" aria-label="Dotii 动画状态映射"></div>
-              <div class="dotii-config-actions">
-                <p>不分配动画时显示 Dotii 空闲状态；选择“保持”会持续显示到状态变化。</p>
-                <div>
-                  <span id="dotii-config-save-state" role="status" aria-live="polite">配置已同步</span>
-                  <button class="primary-button" id="dotii-config-save" type="submit" disabled>保存动画设置</button>
-                </div>
-              </div>
-            </form>
-          </section>
-        </div>
-
-        <section class="module-preferences dotii-preferences" aria-labelledby="dotii-preferences-heading">
-          <div class="module-preferences-heading">
-            <div><h3 id="dotii-preferences-heading">小智表情页面设置</h3></div>
-            <label class="module-switch">
-              <span>启用页面</span>
-              <input id="dotii-enabled" type="checkbox" checked>
-              <span class="switch-track" aria-hidden="true"></span>
-            </label>
-          </div>
-        </section>
-      </section>
-
 
       <section class="panel" id="panel-system" aria-labelledby="system-heading" hidden>
         <div class="section-heading">
@@ -443,8 +214,6 @@
                   </button>
                   <div class="ui-select-menu" role="listbox" aria-labelledby="screen-off-page-label" hidden>
                     <button type="button" role="option" data-value="none">保持黑屏</button>
-                    <button type="button" role="option" data-value="custom">自定义页面</button>
-                    <button type="button" role="option" data-value="dotii">Dotii 页面</button>
                   </div>
                 </div>
               </div>
@@ -538,23 +307,6 @@
       </section>
     </main>
   </div>
-
-  <dialog class="crop-dialog" id="custom-crop-dialog" aria-labelledby="crop-dialog-title">
-    <div class="crop-dialog-card">
-      <div class="crop-dialog-heading">
-        <div><h2 id="crop-dialog-title">裁切图片</h2><p>拖动图片调整位置，圆形区域就是 Dotii 屏幕中可见的范围。</p></div>
-        <button class="icon-close" id="cancel-crop-top" type="button" aria-label="关闭裁切">×</button>
-      </div>
-      <div class="crop-stage">
-        <canvas id="custom-crop-canvas" width="720" height="720" aria-label="圆形图片裁切预览"></canvas>
-      </div>
-      <label class="crop-zoom" for="custom-crop-zoom"><span>缩放</span><input id="custom-crop-zoom" type="range" min="100" max="300" value="100"><output id="custom-crop-zoom-output">100%</output></label>
-      <div class="crop-actions">
-        <button class="quiet-button" id="cancel-crop" type="button">取消</button>
-        <button class="primary-button" id="apply-crop" type="button">应用裁切</button>
-      </div>
-    </div>
-  </dialog>
 
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
   <div class="fatal-state" id="fatal-state" hidden>

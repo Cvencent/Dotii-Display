@@ -16,11 +16,7 @@ import codex_bridge  # noqa: E402
 from platforms.windows import WindowsPlatformAdapter  # noqa: E402
 
 from codex_bridge import (  # noqa: E402
-    CUSTOM_DEFAULTS,
-    DOTII_CHARACTER_IDS,
     default_dotii_config,
-    validate_custom_config,
-    validate_dotii_config,
     validate_module_config,
     validate_snapshot,
     validate_xiaozhi_config,
@@ -100,10 +96,10 @@ class ModuleOnDemandTests(unittest.TestCase):
 
         self.assertIn("BrokenPipeError, ConnectionAbortedError, ConnectionResetError", backend)
 
-    def test_first_run_defaults_enable_xiaozhi_and_dotii(self):
+    def test_first_run_defaults_only_enable_xiaozhi(self):
         self.assertEqual(
             validate_module_config(None),
-            {"xiaozhi": True, "dotii": True},
+            {"xiaozhi": True},
         )
 
     def test_xiaozhi_config_defaults_and_requires_websocket_url(self):
@@ -119,13 +115,24 @@ class ModuleOnDemandTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate_snapshot({"schema_version": 1, "bambu": {"configured": True}})
 
-    def test_dotii_config_supports_switchable_characters(self):
-        defaults = default_dotii_config()
-        self.assertEqual(defaults["character"], "dotii")
-        for character in DOTII_CHARACTER_IDS:
-            self.assertEqual(validate_dotii_config({**defaults, "character": character})["character"], character)
-        with self.assertRaises(ValueError):
-            validate_dotii_config({**defaults, "character": "unknown"})
+    def test_dotii_expression_mapping_is_static_device_contract(self):
+        config = default_dotii_config()
+
+        self.assertEqual(config["character"], "dotii")
+        self.assertEqual(set(config["animations"]), set(codex_bridge.DOTII_EXPRESSION_IDS))
+        self.assertEqual(
+            config["animations"]["working"]["states"], ["codex_working"]
+        )
+        self.assertEqual(
+            config["animations"]["complete"]["states"], ["codex_completed"]
+        )
+        self.assertEqual(
+            [item["id"] for item in config["fixed_states"]],
+            ["idle", "blink", "long_idle", "touch", "connecting"],
+        )
+        # The deleted management page must not leak its editing metadata again.
+        self.assertNotIn("available_states", config)
+        self.assertNotIn("duration_options", config)
 
     def test_xiaozhi_config_preserves_websocket_settings(self):
         saved = validate_xiaozhi_config({
@@ -141,10 +148,20 @@ class ModuleOnDemandTests(unittest.TestCase):
         self.assertEqual(saved["voice"], "sweet")
         self.assertFalse(saved["mcp_enabled"])
 
-    def test_first_run_defaults_enable_custom_and_dotii_pages(self):
-        self.assertTrue(CUSTOM_DEFAULTS["enabled"])
-        self.assertTrue(validate_custom_config(None)["enabled"])
-        self.assertTrue(validate_custom_config({})["enabled"])
+    def test_removed_pages_are_deleted_from_the_backend(self):
+        backend = (BRIDGE / "codex_bridge.py").read_text(encoding="utf-8")
+
+        for removed in (
+            "CustomConfigStore",
+            "CustomAssetStore",
+            "DotiiConfigStore",
+            "validate_custom_config",
+            "validate_dotii_config",
+            "/api/v1/admin/custom",
+            "/api/v1/admin/dotii",
+            "/api/v1/custom-screen.rgb565",
+        ):
+            self.assertNotIn(removed, backend)
 
     def test_frontend_overview_references_only_existing_status_elements(self):
         html = (BRIDGE / "web" / "index.html").read_text(encoding="utf-8")
@@ -160,34 +177,36 @@ class ModuleOnDemandTests(unittest.TestCase):
             refs.update(re.findall(pattern, script))
         self.assertEqual(refs - ids, set())
 
-    def test_dotii_disabled_content_is_hidden_even_with_grid_layout(self):
+    def test_frontend_only_keeps_the_xiaozhi_page(self):
+        html = (BRIDGE / "web" / "index.html").read_text(encoding="utf-8")
+        script = (BRIDGE / "web" / "app.js").read_text(encoding="utf-8")
         styles = (BRIDGE / "web" / "styles.css").read_text(encoding="utf-8")
-        script = (BRIDGE / "web" / "app.js").read_text(encoding="utf-8")
 
-        self.assertIn(".dotii-content[hidden]", styles)
-        self.assertIn('byId("dotii-content").hidden = !enabled;', script)
-
-    def test_frontend_dotii_timed_state_returns_to_idle_without_poll_reset(self):
-        script = (BRIDGE / "web" / "app.js").read_text(encoding="utf-8")
-
-        self.assertIn("state.dotiiLiveSignature !== signature", script)
-        self.assertIn("state.dotiiLiveStartedAtMs = nowMs", script)
-        self.assertIn('applyDotiiLiveDisplay("idle_breath"', script)
-        self.assertIn("durationMs - elapsedMs", script)
-
-    def test_dotii_animation_manifest_points_to_packaged_assets(self):
-        manifest_path = BRIDGE / "web" / "assets" / "expressions" / "animations.json"
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        animations = manifest["animations"]
-        self.assertEqual(len(animations), 9)
-        for animation in animations:
-            asset = BRIDGE / "web" / animation["src"].lstrip("/")
-            self.assertTrue(asset.is_file(), animation["id"])
+        for removed in (
+            'id="panel-custom"',
+            'id="panel-dotii"',
+            'id="custom-crop-dialog"',
+            'id="custom-form"',
+            'id="dotii-config-form"',
+        ):
+            self.assertNotIn(removed, html)
+        for removed in (
+            "customFormValue",
+            "renderCustomPreview",
+            "renderDotiiConfigEditor",
+            "showDotiiExpression",
+        ):
+            self.assertNotIn(removed, script)
+        for removed in (".custom-", ".dotii-", ".crop-"):
+            self.assertNotIn(removed, styles)
+        self.assertFalse((BRIDGE / "web" / "assets" / "expressions").exists())
+        self.assertFalse((BRIDGE / "web" / "assets" / "custom.svg").exists())
 
     def test_frontend_has_xiaozhi_navigation_without_bambu(self):
         html = (BRIDGE / "web" / "index.html").read_text(encoding="utf-8")
         self.assertIn('data-panel="xiaozhi"', html)
-        self.assertIn("小智表情", html)
+        self.assertNotIn('data-panel="custom"', html)
+        self.assertNotIn('data-panel="dotii"', html)
         self.assertNotIn("Bambu", html)
 
     def test_frontend_snapshot_does_not_expose_bambu_status(self):
@@ -195,15 +214,16 @@ class ModuleOnDemandTests(unittest.TestCase):
         self.assertNotIn("renderBambu", script)
         self.assertNotIn("bambu-nav-state", script)
 
-    def test_frontend_exposes_character_switch_and_xiaozhi_form(self):
+    def test_frontend_exposes_xiaozhi_form_without_character_navigation(self):
         html = (BRIDGE / "web" / "index.html").read_text(encoding="utf-8")
         script = (BRIDGE / "web" / "app.js").read_text(encoding="utf-8")
-        self.assertIn('id="dotii-character-grid"', html)
         self.assertIn('id="xiaozhi-form"', html)
         self.assertIn('id="xiaozhi-server-url"', html)
-        self.assertIn("saveDotiiCharacter", script)
         self.assertIn("saveXiaozhi", script)
         self.assertIn("/api/v1/admin/xiaozhi", script)
+        self.assertNotIn('data-panel="dotii"', html)
+        self.assertNotIn('data-value="custom"', html)
+        self.assertNotIn('data-value="dotii"', html)
 
     def test_frontend_exposes_xiaozhi_activation_pairing_flow(self):
         html = (BRIDGE / "web" / "index.html").read_text(encoding="utf-8")

@@ -708,7 +708,13 @@ static void provisioning_reset_anim_done(lv_anim_t *animation)
         lv_obj_set_style_bg_color(s_settings_reset_button, color(0x4A2422), LV_STATE_PRESSED);
         return;
     }
-    (void)ble_bridge_clear_bonds();
+    esp_err_t bonds_error = ble_bridge_clear_bonds();
+    if (bonds_error != ESP_OK) {
+        lv_label_set_text(s_settings_reset_detail, "重置失败，请重试");
+        lv_obj_set_style_bg_color(s_settings_reset_button, color(0x321A1A), 0);
+        lv_obj_set_style_bg_color(s_settings_reset_button, color(0x4A2422), LV_STATE_PRESSED);
+        return;
+    }
     lv_label_set_text(s_settings_reset_detail, "已清除，正在重新启动");
     esp_restart();
 }

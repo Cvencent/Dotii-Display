@@ -9,13 +9,11 @@ from the local computer.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import ipaddress
 import json
 import logging
 import mimetypes
 import os
-import re
 import secrets
 import shutil
 import socket
@@ -23,7 +21,6 @@ import sys
 import tempfile
 import threading
 import time
-import zlib
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -47,42 +44,7 @@ from runtime_paths import (
 
 SCHEMA_VERSION = 1
 MAX_BODY = 32 * 1024
-CUSTOM_FRAME_WIDTH = 466
-CUSTOM_FRAME_HEIGHT = 466
-CUSTOM_FRAME_SIZE = CUSTOM_FRAME_WIDTH * CUSTOM_FRAME_HEIGHT * 2
-MAX_CUSTOM_SOURCE_SIZE = 4 * 1024 * 1024
-CUSTOM_DEFAULTS = {
-    "enabled": True,
-    "revision": 0,
-    "title": "我的页面",
-    "value": "你好，Dotii",
-    "body": "在电脑端编辑内容，保存后会自动同步到设备。",
-    "footer": "自定义内容",
-    "accent": "#F2C66D",
-    "title_visible": True,
-    "title_color": "#8E9B97",
-    "value_visible": True,
-    "value_color": "#F2C66D",
-    "body_visible": True,
-    "body_color": "#D6DFDC",
-    "footer_visible": True,
-    "footer_color": "#8E9B97",
-    "background_image": False,
-    "image_fit": "cover",
-    "image_opacity": 70,
-    "ring_enabled": True,
-    "ring_start": "#F2C66D",
-    "ring_end": "#5DA9FF",
-}
-MODULE_DEFAULTS = {"xiaozhi": True, "dotii": True}
-
-DOTII_CHARACTERS = (
-    {"id": "dotii", "label": "Dotii", "source": "dotii", "description": "Dotii 自研形象"},
-    {"id": "nimbo", "label": "Nimbo", "source": "aora-bot", "description": "aora-bot 圆润形象"},
-    {"id": "twinkle", "label": "Twinkle", "source": "aora-bot", "description": "aora-bot 明亮形象"},
-    {"id": "blob", "label": "Blob", "source": "aora-bot", "description": "aora-bot 软团形象"},
-)
-DOTII_CHARACTER_IDS = tuple(character["id"] for character in DOTII_CHARACTERS)
+MODULE_DEFAULTS = {"xiaozhi": True}
 
 XIAOZHI_DEFAULTS = {
     "enabled": True,
@@ -135,20 +97,12 @@ def validate_xiaozhi_config(payload: Any) -> dict[str, Any]:
     }
 
 
+# The standalone Dotii page is gone. The firmware owns the live expression and
+# only consumes this static mapping, so the identifiers below are the whole
+# device contract.
 DOTII_EXPRESSION_IDS = (
     "idle_breath", "blink", "curious", "sleepy_yawn",
     "touch_response", "connecting", "working", "complete", "failure",
-)
-DOTII_EXPRESSIONS = set(DOTII_EXPRESSION_IDS)
-DOTII_LEGACY_EXPRESSIONS = {"happy"}
-DOTII_FIXED_EXPRESSION_IDS = (
-    "idle_breath", "blink", "sleepy_yawn", "touch_response", "connecting",
-)
-DOTII_BUSINESS_EXPRESSION_IDS = (
-    "curious", "working", "complete", "failure",
-)
-DOTII_STATE_GROUPS = (
-    {"id": "codex", "label": "Codex 状态"},
 )
 DOTII_FIXED_STATE_DEFINITIONS = (
     {"id": "idle", "label": "空闲", "expression": "idle_breath"},
@@ -157,50 +111,15 @@ DOTII_FIXED_STATE_DEFINITIONS = (
     {"id": "touch", "label": "触摸屏幕", "expression": "touch_response"},
     {"id": "connecting", "label": "连接中", "expression": "connecting"},
 )
-DOTII_BUSINESS_STATE_DEFINITIONS = (
-    {"id": "codex_waiting_user", "label": "等待操作", "group": "codex"},
-    {"id": "codex_working", "label": "工作中", "group": "codex"},
-    {"id": "codex_completed", "label": "任务完成", "group": "codex"},
-    {"id": "codex_failure", "label": "失败或异常", "group": "codex"},
-)
-DOTII_FIXED_STATE_EXPRESSIONS = {
-    definition["id"]: definition["expression"]
-    for definition in DOTII_FIXED_STATE_DEFINITIONS
-}
-DOTII_BUSINESS_STATE_LABELS = {
-    definition["id"]: definition["label"]
-    for definition in DOTII_BUSINESS_STATE_DEFINITIONS
-}
-DOTII_LEGACY_STATE_EXPANSIONS = {
-    "waiting_user": ("codex_waiting_user",),
-    "working": ("codex_working",),
-    "completed": ("codex_completed",),
-    "failure": ("codex_failure",),
-}
 DOTII_DEFAULT_BUSINESS_ASSIGNMENTS = {
     "curious": ("codex_waiting_user",),
     "working": ("codex_working",),
     "complete": ("codex_completed",),
     "failure": ("codex_failure",),
 }
-DOTII_DEFAULT_BUSINESS_EXPRESSION = {
-    state_id: expression_id
-    for expression_id, state_ids in DOTII_DEFAULT_BUSINESS_ASSIGNMENTS.items()
-    for state_id in state_ids
-}
 DOTII_LOOP_DURATIONS_MS = {
     expression_id: 1200 if expression_id == "touch_response" else 800
     for expression_id in DOTII_EXPRESSION_IDS
-}
-DOTII_STATE_DURATION_OPTIONS = (
-    {"value": 1000, "label": "1 秒"},
-    {"value": 3000, "label": "3 秒"},
-    {"value": 5000, "label": "5 秒"},
-    {"value": 30000, "label": "30 秒"},
-    {"value": 0, "label": "保持"},
-)
-DOTII_STATE_DURATION_VALUES = {
-    option["value"] for option in DOTII_STATE_DURATION_OPTIONS
 }
 DISPLAY_DEFAULTS = {
     "revision": 0,
@@ -216,8 +135,8 @@ DISPLAY_DEFAULTS = {
 }
 DISPLAY_TIMEOUT_OPTIONS = {0, 10, 30, 60, 180, 300, 600, 1800}
 CODEX_UI_OPTIONS = {"classic", "dual_limit"}
-SCREEN_OFF_PAGE_OPTIONS = {"none", "custom", "dotii"}
-CUSTOM_COLOR_PATTERN = re.compile(r"^#[0-9A-Fa-f]{6}$")
+SCREEN_OFF_PAGE_OPTIONS = {"none"}
+LEGACY_SCREEN_OFF_PAGE_OPTIONS = {"custom", "dotii"}
 WEB_ROOT = resource_path("web")
 MANAGEMENT_CENTER_EXECUTABLE = (
     "DotiiManagementCenter.exe" if os.name == "nt" else "DotiiManagementCenter"
@@ -339,94 +258,6 @@ def _non_negative_int(value: Any, field: str) -> int:
     return result
 
 
-def _custom_text(payload: dict[str, Any], field: str, maximum: int, *, required: bool = False) -> str:
-    value = payload.get(field, CUSTOM_DEFAULTS[field])
-    if not isinstance(value, str):
-        raise ValueError(f"custom.{field} must be text")
-    value = value.strip()
-    if required and not value:
-        raise ValueError(f"custom.{field} is required")
-    if len(value.encode("utf-8")) > maximum:
-        raise ValueError(f"custom.{field} exceeds {maximum} UTF-8 bytes")
-    return value
-
-
-def _custom_bool(payload: dict[str, Any], field: str) -> bool:
-    value = payload.get(field, CUSTOM_DEFAULTS[field])
-    if not isinstance(value, bool):
-        raise ValueError(f"custom.{field} must be a boolean")
-    return value
-
-
-def _custom_color(payload: dict[str, Any], field: str, fallback: str | None = None) -> str:
-    value = payload.get(field, fallback if fallback is not None else CUSTOM_DEFAULTS[field])
-    if not isinstance(value, str) or CUSTOM_COLOR_PATTERN.fullmatch(value) is None:
-        raise ValueError(f"custom.{field} must be a #RRGGBB color")
-    return value.upper()
-
-
-def validate_custom_config(payload: Any) -> dict[str, Any]:
-    if payload is None:
-        return dict(CUSTOM_DEFAULTS)
-    if not isinstance(payload, dict):
-        raise ValueError("custom must be an object")
-    enabled = payload.get("enabled", CUSTOM_DEFAULTS["enabled"])
-    if not isinstance(enabled, bool):
-        raise ValueError("custom.enabled must be a boolean")
-    accent = payload.get("accent", CUSTOM_DEFAULTS["accent"])
-    if not isinstance(accent, str) or CUSTOM_COLOR_PATTERN.fullmatch(accent) is None:
-        raise ValueError("custom.accent must be a #RRGGBB color")
-    title_visible = _custom_bool(payload, "title_visible")
-    value_visible = _custom_bool(payload, "value_visible")
-    body_visible = _custom_bool(payload, "body_visible")
-    footer_visible = _custom_bool(payload, "footer_visible")
-    title_color = _custom_color(payload, "title_color")
-    value_color = _custom_color(payload, "value_color", accent)
-    body_color = _custom_color(payload, "body_color")
-    footer_color = _custom_color(payload, "footer_color")
-    background_image = payload.get("background_image", False)
-    ring_enabled = payload.get("ring_enabled", True)
-    if not isinstance(background_image, bool):
-        raise ValueError("custom.background_image must be a boolean")
-    if not isinstance(ring_enabled, bool):
-        raise ValueError("custom.ring_enabled must be a boolean")
-    image_fit = payload.get("image_fit", "cover")
-    if image_fit not in {"cover", "contain"}:
-        raise ValueError("custom.image_fit must be cover or contain")
-    image_opacity = _non_negative_int(payload.get("image_opacity", 70), "custom.image_opacity")
-    if image_opacity > 100:
-        raise ValueError("custom.image_opacity must be between 0 and 100")
-    ring_start = payload.get("ring_start", accent)
-    ring_end = payload.get("ring_end", ring_start)
-    if not isinstance(ring_start, str) or CUSTOM_COLOR_PATTERN.fullmatch(ring_start) is None:
-        raise ValueError("custom.ring_start must be a #RRGGBB color")
-    if not isinstance(ring_end, str) or CUSTOM_COLOR_PATTERN.fullmatch(ring_end) is None:
-        raise ValueError("custom.ring_end must be a #RRGGBB color")
-    return {
-        "enabled": enabled,
-        "revision": _non_negative_int(payload.get("revision", 0), "custom.revision"),
-        "title": _custom_text(payload, "title", 48),
-        "value": _custom_text(payload, "value", 96),
-        "body": _custom_text(payload, "body", 256),
-        "footer": _custom_text(payload, "footer", 96),
-        "accent": accent.upper(),
-        "title_visible": title_visible,
-        "title_color": title_color,
-        "value_visible": value_visible,
-        "value_color": value_color,
-        "body_visible": body_visible,
-        "body_color": body_color,
-        "footer_visible": footer_visible,
-        "footer_color": footer_color,
-        "background_image": background_image,
-        "image_fit": image_fit,
-        "image_opacity": image_opacity,
-        "ring_enabled": ring_enabled,
-        "ring_start": ring_start.upper(),
-        "ring_end": ring_end.upper(),
-    }
-
-
 def validate_module_config(payload: Any) -> dict[str, bool]:
     if payload is None:
         return dict(MODULE_DEFAULTS)
@@ -442,6 +273,12 @@ def validate_module_config(payload: Any) -> dict[str, bool]:
 
 
 def default_dotii_config() -> dict[str, Any]:
+    """Static expression mapping published to the device.
+
+    The management center no longer edits this. The firmware resolves the live
+    expression from CodexBridge state, the xiaozhi session and touch input, and
+    only needs the mapping itself.
+    """
     return {
         "revision": 0,
         "character": "dotii",
@@ -452,10 +289,6 @@ def default_dotii_config() -> dict[str, Any]:
             }
             for expression_id in DOTII_EXPRESSION_IDS
         },
-        "available_states": [
-            dict(definition) for definition in DOTII_BUSINESS_STATE_DEFINITIONS
-        ],
-        "state_groups": [dict(group) for group in DOTII_STATE_GROUPS],
         "fixed_states": [
             {
                 **definition,
@@ -463,97 +296,6 @@ def default_dotii_config() -> dict[str, Any]:
             }
             for definition in DOTII_FIXED_STATE_DEFINITIONS
         ],
-        "duration_options": [dict(option) for option in DOTII_STATE_DURATION_OPTIONS],
-    }
-
-
-def validate_dotii_config(payload: Any) -> dict[str, Any]:
-    defaults = default_dotii_config()
-    if payload is None:
-        return defaults
-    if not isinstance(payload, dict):
-        raise ValueError("dotii config must be an object")
-    animations = payload.get("animations")
-    if not isinstance(animations, dict):
-        raise ValueError("dotii.animations must be an object")
-
-    character = payload.get("character", defaults["character"])
-    if not isinstance(character, str) or character not in DOTII_CHARACTER_IDS:
-        raise ValueError(f"dotii.character must be one of {', '.join(DOTII_CHARACTER_IDS)}")
-
-    unknown_animations = set(animations) - DOTII_EXPRESSIONS - DOTII_LEGACY_EXPRESSIONS
-    if unknown_animations:
-        raise ValueError(f"unsupported Dotii animations: {', '.join(sorted(unknown_animations))}")
-
-    candidates: dict[str, dict[str, Any]] = {}
-    assigned_states: dict[str, str] = {}
-    for expression_id in (*DOTII_EXPRESSION_IDS, *sorted(DOTII_LEGACY_EXPRESSIONS)):
-        candidate = animations.get(expression_id)
-        if expression_id in DOTII_LEGACY_EXPRESSIONS and candidate is None:
-            continue
-        if not isinstance(candidate, dict):
-            raise ValueError(f"dotii.animations.{expression_id} must be an object")
-        states = candidate.get("states")
-        if not isinstance(states, list):
-            raise ValueError(f"dotii.animations.{expression_id}.states must be a list")
-        candidates[expression_id] = candidate
-        for legacy_state_id in states:
-            if not isinstance(legacy_state_id, str):
-                raise ValueError(f"unsupported Dotii state in {expression_id}")
-            expanded_states = DOTII_LEGACY_STATE_EXPANSIONS.get(
-                legacy_state_id, (legacy_state_id,)
-            )
-            for state_id in expanded_states:
-                if state_id in DOTII_FIXED_STATE_EXPRESSIONS:
-                    continue
-                if state_id not in DOTII_BUSINESS_STATE_LABELS:
-                    raise ValueError(f"unsupported Dotii state in {expression_id}")
-                if state_id in assigned_states:
-                    raise ValueError(
-                        f"Dotii state {state_id} is assigned to both "
-                        f"{assigned_states[state_id]} and {expression_id}"
-                    )
-                assigned_states[state_id] = expression_id
-
-    validated_animations: dict[str, Any] = {
-        expression_id: {"states": [], "state_duration_ms": 0}
-        for expression_id in DOTII_EXPRESSION_IDS
-    }
-    for state_id, source_expression in assigned_states.items():
-        expression_id = source_expression if source_expression in DOTII_BUSINESS_EXPRESSION_IDS else (
-            DOTII_DEFAULT_BUSINESS_EXPRESSION[state_id]
-        )
-        validated_animations[expression_id]["states"].append(state_id)
-
-    for expression_id in DOTII_BUSINESS_EXPRESSION_IDS:
-        candidate = candidates[expression_id]
-        state_duration_ms = candidate.get("state_duration_ms")
-        if state_duration_ms is None and "duration_ms" in candidate:
-            state_duration_ms = 0
-        if state_duration_ms is None:
-            state_duration_ms = 0
-        if isinstance(state_duration_ms, bool) or not isinstance(state_duration_ms, int):
-            raise ValueError(
-                f"dotii.animations.{expression_id}.state_duration_ms must be an integer"
-            )
-        if state_duration_ms not in DOTII_STATE_DURATION_VALUES:
-            raise ValueError(
-                f"dotii.animations.{expression_id}.state_duration_ms must be "
-                "0, 1000, 3000, 5000 or 30000"
-            )
-        validated_animations[expression_id] = {
-            "states": validated_animations[expression_id]["states"],
-            "state_duration_ms": state_duration_ms,
-        }
-
-    return {
-        "revision": _non_negative_int(payload.get("revision", 0), "dotii.revision"),
-        "character": character,
-        "animations": validated_animations,
-        "available_states": defaults["available_states"],
-        "state_groups": defaults["state_groups"],
-        "fixed_states": defaults["fixed_states"],
-        "duration_options": defaults["duration_options"],
     }
 
 
@@ -607,8 +349,13 @@ def validate_display_config(payload: Any) -> dict[str, Any]:
     if angle == 840:
         angle = DISPLAY_DEFAULTS["docked_rotation_tenths"]
     screen_off_page = payload.get("screen_off_page", DISPLAY_DEFAULTS["screen_off_page"])
+    if screen_off_page in LEGACY_SCREEN_OFF_PAGE_OPTIONS:
+        # The standalone custom and Dotii pages were removed from the firmware.
+        # Migrate old profiles to a normal black screen instead of refusing to
+        # load the entire display configuration.
+        screen_off_page = "none"
     if screen_off_page not in SCREEN_OFF_PAGE_OPTIONS:
-        raise ValueError("display.screen_off_page must be none, custom or dotii")
+        raise ValueError("display.screen_off_page must be none")
     screen_off_timeout, sleep_timeout = _validate_timeout_pair(
         payload, "screen_off_timeout_seconds", "sleep_timeout_seconds",
         DISPLAY_DEFAULTS["screen_off_timeout_seconds"], DISPLAY_DEFAULTS["sleep_timeout_seconds"],
@@ -633,8 +380,8 @@ def validate_snapshot(payload: Any) -> dict[str, Any]:
     """Validate the device-facing management envelope.
 
     Codex data is owned by CodexBridge and travels over the device protocol,
-    so this snapshot intentionally carries only custom page, display
-    and Dotii configuration.
+    so this snapshot intentionally carries only display, xiaozhi and the static
+    Dotii expression mapping.
     """
     if not isinstance(payload, dict) or payload.get("schema_version") != SCHEMA_VERSION:
         raise ValueError("schema_version must be 1")
@@ -673,130 +420,6 @@ class StateStore:
                     os.unlink(temporary_name)
 
 
-class CustomConfigStore:
-    def __init__(self, path: Path) -> None:
-        self.path = path
-        self.lock = threading.RLock()
-
-    def read(self) -> dict[str, Any]:
-        with self.lock:
-            if not self.path.is_file():
-                return dict(CUSTOM_DEFAULTS)
-            return validate_custom_config(json.loads(self.path.read_text(encoding="utf-8")))
-
-    def write(self, config: dict[str, Any]) -> dict[str, Any]:
-        validated = validate_custom_config(config)
-        with self.lock:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            handle, temporary_name = tempfile.mkstemp(prefix="custom-", suffix=".json", dir=self.path.parent)
-            try:
-                with os.fdopen(handle, "w", encoding="utf-8") as stream:
-                    json.dump(validated, stream, ensure_ascii=False, indent=2)
-                    stream.write("\n")
-                os.replace(temporary_name, self.path)
-            finally:
-                if os.path.exists(temporary_name):
-                    os.unlink(temporary_name)
-        return validated
-
-
-class CustomAssetStore:
-    def __init__(self, folder: Path) -> None:
-        self.folder = folder
-        self.render_path = folder / "custom-screen.rgb565"
-        self.pending_path = folder / "custom-screen.pending"
-        self.source_path = folder / "custom-source.bin"
-        self.source_meta_path = folder / "custom-source.json"
-        self.lock = threading.RLock()
-
-    @staticmethod
-    def _atomic_bytes(path: Path, body: bytes) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        handle, temporary_name = tempfile.mkstemp(prefix=path.stem + "-", suffix=".tmp", dir=path.parent)
-        try:
-            with os.fdopen(handle, "wb") as stream:
-                stream.write(body)
-            os.replace(temporary_name, path)
-        finally:
-            if os.path.exists(temporary_name):
-                os.unlink(temporary_name)
-
-    def write_source(self, body: bytes, content_type: str) -> dict[str, Any]:
-        if content_type == "image/png":
-            if not body.startswith(b"\x89PNG\r\n\x1a\n"):
-                raise ValueError("PNG 文件签名无效")
-        elif content_type == "image/jpeg":
-            if len(body) < 4 or not body.startswith(b"\xff\xd8") or not body.endswith(b"\xff\xd9"):
-                raise ValueError("JPEG 文件签名无效")
-        else:
-            raise ValueError("仅支持 PNG 或 JPEG 图片")
-        with self.lock:
-            self._atomic_bytes(self.source_path, body)
-            self._atomic_bytes(
-                self.source_meta_path,
-                json.dumps({
-                    "content_type": content_type,
-                    "revision": zlib.crc32(body) & 0xFFFFFFFF,
-                }, ensure_ascii=False).encode("utf-8"),
-            )
-            return self.source_info()
-
-    def source_info(self) -> dict[str, Any]:
-        with self.lock:
-            if not self.source_path.is_file() or not self.source_meta_path.is_file():
-                return {"source_available": False, "source_revision": 0, "source_mime": ""}
-            meta = json.loads(self.source_meta_path.read_text(encoding="utf-8"))
-            return {
-                "source_available": True,
-                "source_revision": int(meta.get("revision", 0)),
-                "source_mime": meta.get("content_type", "application/octet-stream"),
-            }
-
-    def read_source(self) -> tuple[bytes, str]:
-        info = self.source_info()
-        if not info["source_available"]:
-            raise FileNotFoundError("custom source image not found")
-        return self.source_path.read_bytes(), info["source_mime"]
-
-    def stage_render(self, body: bytes) -> str:
-        if len(body) != CUSTOM_FRAME_SIZE:
-            raise ValueError(f"自定义画面必须为 {CUSTOM_FRAME_SIZE} 字节 RGB565")
-        token = hashlib.sha256(body).hexdigest()
-        with self.lock:
-            self._atomic_bytes(self.pending_path, body)
-        return token
-
-    def commit_render(self, token: str) -> dict[str, Any]:
-        if not isinstance(token, str) or len(token) != 64:
-            raise ValueError("render_token 无效")
-        with self.lock:
-            if not self.pending_path.is_file():
-                raise ValueError("待保存画面不存在，请重新生成")
-            body = self.pending_path.read_bytes()
-            if not secrets.compare_digest(hashlib.sha256(body).hexdigest(), token):
-                raise ValueError("待保存画面校验失败")
-            os.replace(self.pending_path, self.render_path)
-            return self.render_info()
-
-    def render_info(self) -> dict[str, Any]:
-        with self.lock:
-            if not self.render_path.is_file() or self.render_path.stat().st_size != CUSTOM_FRAME_SIZE:
-                return {"image_available": False, "image_revision": 0, "image_size": 0}
-            body = self.render_path.read_bytes()
-            return {
-                "image_available": True,
-                "image_revision": zlib.crc32(body) & 0xFFFFFFFF,
-                "image_size": len(body),
-            }
-
-    def read_render(self) -> bytes:
-        with self.lock:
-            body = self.render_path.read_bytes()
-            if len(body) != CUSTOM_FRAME_SIZE:
-                raise ValueError("stored custom frame has invalid size")
-            return body
-
-
 class ModuleConfigStore:
     def __init__(self, path: Path) -> None:
         self.path = path
@@ -813,33 +436,6 @@ class ModuleConfigStore:
         with self.lock:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             handle, temporary_name = tempfile.mkstemp(prefix="modules-", suffix=".json", dir=self.path.parent)
-            try:
-                with os.fdopen(handle, "w", encoding="utf-8") as stream:
-                    json.dump(validated, stream, ensure_ascii=False, indent=2)
-                    stream.write("\n")
-                os.replace(temporary_name, self.path)
-            finally:
-                if os.path.exists(temporary_name):
-                    os.unlink(temporary_name)
-        return validated
-
-
-class DotiiConfigStore:
-    def __init__(self, path: Path) -> None:
-        self.path = path
-        self.lock = threading.RLock()
-
-    def read(self) -> dict[str, Any]:
-        with self.lock:
-            if not self.path.is_file():
-                return default_dotii_config()
-            return validate_dotii_config(json.loads(self.path.read_text(encoding="utf-8")))
-
-    def write(self, config: dict[str, Any]) -> dict[str, Any]:
-        validated = validate_dotii_config(config)
-        with self.lock:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            handle, temporary_name = tempfile.mkstemp(prefix="dotii-", suffix=".json", dir=self.path.parent)
             try:
                 with os.fdopen(handle, "w", encoding="utf-8") as stream:
                     json.dump(validated, stream, ensure_ascii=False, indent=2)
@@ -1016,15 +612,12 @@ class BridgeHandler(BaseHTTPRequestHandler):
                 **runtime,
             },
             "snapshot": snapshot,
-            "dotii_config": self.bridge.dotii.read(),
             "display_config": self.bridge.display.read(),
             "xiaozhi_config": self.bridge.xiaozhi.read(),
             "bluetooth": self.bridge.bluetooth.snapshot(),
             "firmware": self.bridge.firmware.snapshot(),
             "modules": [
                 {"id": "xiaozhi", "name": "小智", "enabled": snapshot["modules"]["xiaozhi"], "available": True, "locked": False},
-                {"id": "custom", "name": "自定义", "enabled": snapshot["custom"]["enabled"], "available": True, "locked": False},
-                {"id": "dotii", "name": "Dotii", "enabled": snapshot["modules"]["dotii"], "available": True, "locked": False},
             ],
         }
 
@@ -1051,24 +644,6 @@ class BridgeHandler(BaseHTTPRequestHandler):
                 self._send_json(HTTPStatus.OK, self._overview())
             except (OSError, ValueError, json.JSONDecodeError) as error:
                 self._send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": str(error)})
-        elif path == "/api/v1/admin/custom/source":
-            if self._deny_nonlocal():
-                return
-            try:
-                body, content_type = self.bridge.assets.read_source()
-                self._send_bytes(HTTPStatus.OK, body, content_type)
-            except FileNotFoundError:
-                self._send_json(HTTPStatus.NOT_FOUND, {"error": "尚未上传背景图片"})
-            except (OSError, ValueError, json.JSONDecodeError) as error:
-                self._send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": str(error)})
-        elif path == "/api/v1/custom-screen.rgb565":
-            if not self._authorized():
-                self._send_json(HTTPStatus.UNAUTHORIZED, {"error": "invalid bridge token"})
-                return
-            try:
-                self._send_bytes(HTTPStatus.OK, self.bridge.assets.read_render(), "application/octet-stream")
-            except (OSError, ValueError) as error:
-                self._send_json(HTTPStatus.NOT_FOUND, {"error": str(error)})
         else:
             self._serve_static(path)
 
@@ -1146,53 +721,6 @@ class BridgeHandler(BaseHTTPRequestHandler):
             except (OSError, ValueError, UnicodeDecodeError, json.JSONDecodeError) as error:
                 self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
             return
-        if path == "/api/v1/admin/custom/source":
-            if self._deny_nonlocal():
-                return
-            try:
-                content_type = self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
-                info = self.bridge.assets.write_source(
-                    self._read_bytes(MAX_CUSTOM_SOURCE_SIZE), content_type
-                )
-                self._send_json(HTTPStatus.OK, {"ok": True, **info})
-            except (OSError, ValueError) as error:
-                self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
-            return
-        if path == "/api/v1/admin/custom/render":
-            if self._deny_nonlocal():
-                return
-            try:
-                content_type = self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
-                if content_type != "application/octet-stream":
-                    raise ValueError("自定义画面必须使用 application/octet-stream")
-                token = self.bridge.assets.stage_render(
-                    self._read_bytes(CUSTOM_FRAME_SIZE, exact=CUSTOM_FRAME_SIZE)
-                )
-                self._send_json(HTTPStatus.OK, {"ok": True, "render_token": token})
-            except (OSError, ValueError) as error:
-                self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
-            return
-        if path == "/api/v1/admin/custom":
-            if self._deny_nonlocal():
-                return
-            try:
-                payload = self._read_admin_action()
-                current = self.bridge.custom.read()
-                modules = self.bridge.modules.read()
-                if payload.get("enabled") is False and not any(modules.values()):
-                    raise ValueError("至少保留一个启用页面")
-                payload["revision"] = current["revision"] + 1
-                render_token = payload.pop("render_token", None)
-                validated = validate_custom_config(payload)
-                if render_token is not None:
-                    self.bridge.assets.commit_render(render_token)
-                custom = self.bridge.custom.write(validated)
-                custom.update(self.bridge.assets.source_info())
-                custom.update(self.bridge.assets.render_info())
-                self._send_json(HTTPStatus.OK, {"ok": True, "custom": custom})
-            except (OSError, ValueError, UnicodeDecodeError, json.JSONDecodeError) as error:
-                self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
-            return
         if path == "/api/v1/admin/modules":
             if self._deny_nonlocal():
                 return
@@ -1201,30 +729,14 @@ class BridgeHandler(BaseHTTPRequestHandler):
                 module_id = payload.get("id")
                 enabled = payload.get("enabled")
                 if module_id not in MODULE_DEFAULTS or not isinstance(enabled, bool):
-                    raise ValueError("id must be xiaozhi or dotii and enabled must be boolean")
+                    raise ValueError("id must be xiaozhi and enabled must be boolean")
                 modules = self.bridge.modules.read()
                 candidate = {**modules, module_id: enabled}
-                if not any(candidate.values()) and not self.bridge.custom.read()["enabled"]:
-                    raise ValueError("至少保留一个启用页面")
                 saved = self.bridge.modules.write(candidate)
                 if module_id == "xiaozhi":
                     xiaozhi = self.bridge.xiaozhi.read()
                     self.bridge.xiaozhi.write({**xiaozhi, "enabled": enabled})
                 self._send_json(HTTPStatus.OK, {"ok": True, "modules": saved})
-            except (OSError, ValueError, UnicodeDecodeError, json.JSONDecodeError) as error:
-                self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
-            return
-        if path == "/api/v1/admin/dotii":
-            if self._deny_nonlocal():
-                return
-            try:
-                payload = self._read_admin_action()
-                current = self.bridge.dotii.read()
-                # Merge like the display and xiaozhi endpoints: a partial
-                # payload must not drop the animations it did not mention.
-                candidate = {**current, **payload, "revision": current["revision"] + 1}
-                config = self.bridge.dotii.write(candidate)
-                self._send_json(HTTPStatus.OK, {"ok": True, "dotii_config": config})
             except (OSError, ValueError, UnicodeDecodeError, json.JSONDecodeError) as error:
                 self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
             return
@@ -1279,11 +791,8 @@ class BridgeServer(ThreadingHTTPServer):
         store: StateStore,
         token: str,
         runtime: RuntimeStatus,
-        custom: CustomConfigStore,
         modules: ModuleConfigStore,
-        dotii: DotiiConfigStore,
         display: DisplayConfigStore,
-        assets: CustomAssetStore,
         xiaozhi: XiaozhiConfigStore,
         bluetooth: BluetoothBridge,
         firmware: FirmwareFlasher,
@@ -1294,11 +803,8 @@ class BridgeServer(ThreadingHTTPServer):
         self.store = store
         self.token = token
         self.runtime = runtime
-        self.custom = custom
         self.modules = modules
-        self.dotii = dotii
         self.display = display
-        self.assets = assets
         self.xiaozhi = xiaozhi
         self.bluetooth = bluetooth
         self.firmware = firmware
@@ -1307,15 +813,10 @@ class BridgeServer(ThreadingHTTPServer):
 
     def snapshot(self) -> dict[str, Any]:
         snapshot = self.store.read()
-        custom = self.custom.read()
-        custom.update(self.assets.source_info())
-        custom.update(self.assets.render_info())
-        snapshot["custom"] = custom
-        modules = self.modules.read()
-        snapshot["modules"] = {**modules, "custom": custom["enabled"]}
-        dotii_config = self.dotii.read()
+        snapshot["modules"] = self.modules.read()
+        dotii_config = default_dotii_config()
         snapshot["dotii"] = dotii_config
-        snapshot["character"] = dotii_config.get("character", "dotii")
+        snapshot["character"] = dotii_config["character"]
         snapshot["display"] = self.display.read()
         snapshot["xiaozhi"] = self.xiaozhi.read()
         return snapshot
@@ -1345,11 +846,8 @@ def main() -> None:
         StateStore(state_path),
         token,
         RuntimeStatus(),
-        CustomConfigStore(writable_root / "custom.json"),
         modules,
-        DotiiConfigStore(writable_root / "dotii.json"),
         DisplayConfigStore(writable_root / "display.json"),
-        CustomAssetStore(writable_root),
         XiaozhiConfigStore(writable_root / "xiaozhi.json"),
         bluetooth,
         firmware,

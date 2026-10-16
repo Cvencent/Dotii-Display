@@ -1,6 +1,6 @@
 # Dotii 桌面交互屏
 
-Dotii 是一套由 ESP32-S3 圆形 AMOLED 桌面屏、CodexBridge 与小智 AI 组成的开源桌面对话终端。设备固件原生运行小智语音助手，内置可切换形象与表情状态机，既能随对话与触摸切换表情，也能显示 Codex 状态。CodexBridge 是常驻托盘、以通用设备协议提供 Codex 额度、近 7 日 Token、任务状态与多设备已读同步的桥接器；Dotii 管理中心是可安装到本机的独立后台程序，只管小智连接、小智表情、自定义页面、显示设置、BLE 配网与烧录。
+Dotii 是一套由 ESP32-S3 圆形 AMOLED 桌面屏、CodexBridge 与小智 AI 组成的开源桌面对话终端。设备固件原生运行小智语音助手，只有一个与小智会话直连的表情页面，能随对话、音乐播放和触摸切换表情，也能显示 Codex 状态。CodexBridge 是常驻托盘、以通用设备协议提供 Codex 额度、近 7 日 Token、任务状态与多设备已读同步的桥接器；Dotii 管理中心是可安装到本机的独立后台程序，只管小智连接、显示设置、BLE 配网与烧录。
 
 ![Dotii 桌面交互屏产品渲染图](assets/dotii-product-render.png)
 
@@ -38,7 +38,7 @@ macOS 预览版目前不支持 Intel Mac。由于尚未经过苹果公证，首�
 
 ### 更新 Windows 管理中心
 
-先从系统托盘彻底退出旧版 CodexBridge，安装新版；再单独更新 `DotiiManagementCenter.exe`。CodexBridge 的设备配对、能力与语音设置保存在 `%LOCALAPPDATA%\CodexBridge`；Dotii 的小智连接、小智表情、自定义页、显示、配网与烧录配置继续保存在 `%LOCALAPPDATA%\StateDisplay`。若新版本包含 Dotii 固件更新，请在管理中心重新执行“一键烧录”。
+先从系统托盘彻底退出旧版 CodexBridge，安装新版；再单独更新 `DotiiManagementCenter.exe`。CodexBridge 的设备配对、能力与语音设置保存在 `%LOCALAPPDATA%\CodexBridge`；Dotii 的小智连接、显示、配网与烧录配置继续保存在 `%LOCALAPPDATA%\StateDisplay`。若新版本包含 Dotii 固件更新，请在管理中心重新执行“一键烧录”。
 
 ## macOS 快速上手
 
@@ -69,16 +69,15 @@ shasum -a 256 -c DotiiManagementCenter-macOS-arm64-1.1.3.dmg.sha256
 ## 主要功能
 
 - **小智 AI**：设备固件内原生运行小智语音助手，直接与配置的小智服务端建立 WebSocket 会话，不依赖电脑端中转。
-- **小智表情**：内置表情状态机，随对话、连接和触摸切换不同表情；支持在管理页切换 Dotii、Nimbo、Twinkle、Blob 四种形象。
+- **小智表情**：设备只保留一个与小智直连的全屏表情页面，随聆听、思考、回答、音乐播放和触摸自动切换表情。
 - **Codex 状态**：由 CodexBridge 通用协议采集并广播额度、近 7 日 Token、额度重置、任务状态、计划进度和用户可见消息；多台设备共享已读状态。
-- **自定义页面**：编辑文字、颜色、图片和圆环，保存后同步到 466 × 466 圆屏。
 - **设备管理**：提供蓝牙配网、重置配网、显示设置、休眠设置、登录自启动和受保护的一键烧录。
 
 小智默认启用，首次连接时会通过小智官方 OTA 服务获取设备配对码；请在 `xiaozhi.me` 输入设备码完成绑定。Codex 能力仍按设备能力开关启用，未启用前不会读取或下发 Codex 数据。
 
 ## 形象与表情来源
 
-Dotii 的原生表情引擎与可切换形象参考并移植自开源项目 [aora-bot](https://github.com/sam70361/aora-bot)（其 `mood-mates` 角色资料）。其中 Dotii 形象为本项目自研，Nimbo、Twinkle、Blob 三个形象与对应表情几何来自 aora-bot。
+Dotii 的原生表情引擎参考并移植自开源项目 [aora-bot](https://github.com/sam70361/aora-bot)（其 `mood-mates` 角色资料）；Dotii 形象为本项目自研。历史版本中的独立形象切换页面已经移除，小智对话、音乐与 Codex 状态共用同一个页面。
 
 本项目为个人开源固件项目，仅用于非商业用途。使用或二次分发时，请一并遵守 aora-bot 仓库的授权与署名要求；如 aora-bot 后续更新许可，请以原仓库为准。
 
@@ -86,7 +85,7 @@ Dotii 的原生表情引擎与可切换形象参考并移植自开源项目 [aor
 
 Dotii 固件内置一套通用设备协议客户端，任何实现同一协议的设备都可以接入 CodexBridge。CodexBridge 是独立的数据主机，负责采集 Codex 额度、近 7 日 Token、额度重置与任务状态，并按设备订阅的能力（如 `quota`）下发 `codex_status` 消息。
 
-- 小智对话、表情、自定义页面、显示与配网由 Dotii 管理中心负责，写入设备本地配置。
+- 小智对话、显示与配网由 Dotii 管理中心负责，写入设备本地配置；表情由固件本地状态机自动驱动。
 - Codex 数据不再由管理中心采集，也不会经过管理中心转发，而是由设备直接从 CodexBridge 读取。
 - 该协议保持通用，后续的 AI Passport 等设备同样可以按能力接入。
 - 传输层固定为 UDP `8764` 设备发现与 TCP `8765` 会话，消息为每行一条 UTF-8 JSON，由 CodexBridge 主动连接设备。
