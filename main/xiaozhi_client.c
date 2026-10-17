@@ -56,6 +56,7 @@
 static const char *TAG = "xiaozhi";
 
 static bool xiaozhi_start_music(xiaozhi_client_t *client);
+static bool send_listen_mode(xiaozhi_client_t *client, bool start, const char *mode);
 static bool audio_init(xiaozhi_client_t *client);
 static void wake_task(void *argument);
 
@@ -114,6 +115,27 @@ bool xiaozhi_client_take_wake_reply(xiaozhi_client_t *client)
 {
     return client != NULL &&
            atomic_exchange_explicit(&client->wake_reply_pending, false, memory_order_acq_rel);
+}
+
+bool xiaozhi_client_take_wake_resume(xiaozhi_client_t *client)
+{
+    if (client == NULL) return false;
+    const bool pending = client->wake_resume_pending;
+    client->wake_resume_pending = false;
+    return pending;
+}
+
+bool xiaozhi_client_wake_detection_allowed(const xiaozhi_client_t *client)
+{
+    if (client == NULL || !client->running || !client->wake_ready) return false;
+    if (client->connected && (client->state == XIAOZHI_STATE_DISABLED ||
+                             client->state == XIAOZHI_STATE_ACTIVATING)) return false;
+    if (!client->connected && client->state != XIAOZHI_STATE_CONNECTING &&
+        client->state != XIAOZHI_STATE_ERROR) return false;
+    return !client->listening && client->music_task == NULL &&
+           client->state != XIAOZHI_STATE_SPEAKING &&
+           client->state != XIAOZHI_STATE_THINKING &&
+           client->state != XIAOZHI_STATE_MUSIC;
 }
 
 static void persist_volume(const xiaozhi_client_t *client)
@@ -864,6 +886,13 @@ static void ws_event_handler(void *handler_arg, esp_event_base_t base, int32_t e
                     client->state == XIAOZHI_STATE_MUSIC) {
                     xiaozhi_start_music(client);
                 }
+                bool resume_wake = xiaozhi_client_take_wake_resume(client);
+                if (resume_wake && client->connected &&
+                    send_listen_mode(client, true, "auto")) {
+                    ESP_LOGI(TAG, "offline wake resumed after reconnect");
+                } else if (resume_wake) {
+                    client->wake_resume_pending = true;
+                }
                 s_rx_length = 0;
             }
         } else if (data->op_code == 0x02 && data->data_len > 0 && s_audio_queue != NULL) {
@@ -1608,11 +1637,7 @@ static void microphone_task(void *argument)
            concurrently corrupts the codec/resampler state when a wake word
            switches the session to listening. */
         if (!client->listening) {
-            if (client->connected && client->wake_ready &&
-                client->music_task == NULL &&
-                client->state != XIAOZHI_STATE_SPEAKING &&
-                client->state != XIAOZHI_STATE_THINKING &&
-                client->state != XIAOZHI_STATE_MUSIC) {
+            if (xiaozhi_client_wake_detection_allowed(client)) {
                 xiaozhi_detect_wake_word(client);
             } else {
                 vTaskDelay(pdMS_TO_TICKS(10));
@@ -1712,13 +1737,7 @@ bool xiaozhi_client_send_abort(xiaozhi_client_t *client)
 
 static void xiaozhi_detect_wake_word(xiaozhi_client_t *client)
 {
-    if (client == NULL || !client->wake_ready || !client->running ||
-        !client->connected || client->listening || client->music_task != NULL ||
-        client->state == XIAOZHI_STATE_SPEAKING ||
-        client->state == XIAOZHI_STATE_THINKING ||
-        client->state == XIAOZHI_STATE_MUSIC) {
-        return;
-    }
+    if (!xiaozhi_client_wake_detection_allowed(client)) return;
     if (!audio_init(client)) return;
 
     const esp_wn_iface_t *iface = (const esp_wn_iface_t *)client->wake_iface;
@@ -1759,9 +1778,13 @@ static void xiaozhi_detect_wake_word(xiaozhi_client_t *client)
             const wakenet_state_t detected = iface->detect(data, chunk);
             if (detected > 0) {
                 ESP_LOGI(TAG, "wake word detected: 你好小智");
-                if (send_listen_mode(client, true, "auto")) {
-                    xiaozhi_client_notify_wake_word(client);
+                xiaozhi_client_notify_wake_word(client);
+                if (client->connected && client->session_id[0] != '\0' &&
+                    send_listen_mode(client, true, "auto")) {
                     ESP_LOGI(TAG, "auto listening started");
+                } else {
+                    client->wake_resume_pending = true;
+                    ESP_LOGI(TAG, "wake queued until reconnect");
                 }
             }
         }
@@ -1877,6 +1900,7 @@ void xiaozhi_client_stop(xiaozhi_client_t *client)
     if (client == NULL) return;
     client->running = false;
     client->listening = false;
+    client->wake_resume_pending = false;
     client->music_stop_requested = true;
     atomic_store_explicit(&client->wake_reply_pending, false, memory_order_release);
     atomic_store_explicit(&client->wake_reply_playing, false, memory_order_release);

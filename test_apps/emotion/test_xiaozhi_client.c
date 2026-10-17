@@ -232,6 +232,39 @@ static void test_wake_reply_is_consumed_once(void)
     assert(xiaozhi_client_take_wake_reply(&client));
     assert(!xiaozhi_client_take_wake_reply(&client));
 }
+
+static void test_wake_detection_continues_during_reconnect(void)
+{
+    xiaozhi_client_t client;
+    xiaozhi_client_init(&client);
+
+    assert(!xiaozhi_client_wake_detection_allowed(&client));
+    client.running = true;
+    client.wake_ready = true;
+    client.connected = false;
+    client.state = XIAOZHI_STATE_CONNECTING;
+    assert(xiaozhi_client_wake_detection_allowed(&client));
+
+    client.listening = true;
+    assert(!xiaozhi_client_wake_detection_allowed(&client));
+    client.listening = false;
+
+    client.music_task = (void *)1;
+    assert(!xiaozhi_client_wake_detection_allowed(&client));
+    client.music_task = NULL;
+
+    client.state = XIAOZHI_STATE_THINKING;
+    assert(!xiaozhi_client_wake_detection_allowed(&client));
+
+    client.state = XIAOZHI_STATE_CONNECTING;
+    client.running = true;
+    client.wake_ready = true;
+    client.connected = false;
+    client.wake_resume_pending = true;
+    assert(xiaozhi_client_take_wake_resume(&client));
+    assert(!xiaozhi_client_take_wake_resume(&client));
+}
+
 int main(void)
 {
     test_emotion_event();
@@ -250,6 +283,7 @@ int main(void)
     test_pcm_stereo_downmix_keeps_in_phase_speech();
     test_wake_event_is_consumed_once();
     test_wake_reply_is_consumed_once();
+    test_wake_detection_continues_during_reconnect();
     printf("xiaozhi_client tests passed\n");
     return 0;
 }

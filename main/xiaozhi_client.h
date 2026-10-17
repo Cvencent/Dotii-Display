@@ -74,6 +74,7 @@ typedef struct {
     int server_sample_rate;
     int server_frame_duration;
     volatile bool listening;
+    volatile bool wake_resume_pending;
     volatile bool music_stop_requested;
     bool wake_ready;
     xiaozhi_config_t config;
@@ -132,6 +133,12 @@ uint8_t xiaozhi_client_set_volume(xiaozhi_client_t *client, int volume, bool per
 void xiaozhi_client_notify_wake_word(xiaozhi_client_t *client);
 bool xiaozhi_client_take_wake_event(xiaozhi_client_t *client);
 bool xiaozhi_client_take_wake_reply(xiaozhi_client_t *client);
+
+/* Wake-word detection remains available while the websocket is reconnecting.
+   In that window the event is acknowledged and replayed locally. This take
+   fires when the next hello arrives so the transport can start listening. */
+bool xiaozhi_client_wake_detection_allowed(const xiaozhi_client_t *client);
+bool xiaozhi_client_take_wake_resume(xiaozhi_client_t *client);
 
 /* Apply a fixed linear gain in place. Full-scale samples are clipped to the
    signed 16-bit range so the same block can feed wake word and uplink Opus. */
