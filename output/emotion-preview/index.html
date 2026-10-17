@@ -1,0 +1,365 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Dotii 表情动画实验室</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <a class="skip-link" href="#gallery">跳到表情列表</a>
+
+  <header class="topbar">
+    <div class="brand-lockup">
+      <span class="brand-mark" aria-hidden="true">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+          <circle cx="12" cy="12" r="8.5"></circle>
+          <path d="M8.5 13.4c1.2 1.4 5.8 1.4 7 0"></path>
+          <path d="M9 9.5h.01M15 9.5h.01"></path>
+        </svg>
+      </span>
+      <span class="brand-copy">
+        <strong>Dotii 表情动画实验室</strong>
+        <span>Expression motion lab</span>
+      </span>
+    </div>
+    <div class="top-status"><span class="status-dot"></span><span>原始设计 · 48 个状态</span></div>
+  </header>
+
+  <main class="app-shell" id="main">
+    <section class="hero-lab" aria-labelledby="stageTitle">
+      <div class="stage-column">
+        <div class="stage-heading">
+          <div>
+            <p class="section-kicker">Live device preview</p>
+            <h1 id="stageTitle">完整表情动画，逐个看真动作</h1>
+          </div>
+          <p>眉、眼、嘴、腮红、头部姿态和反馈特效同时工作。点下面的任意状态，主舞台会立即切换并持续播放。</p>
+        </div>
+
+        <div class="device-frame" id="deviceFrame">
+          <canvas id="mainFace" role="img" aria-label="当前表情动画预览"></canvas>
+          <div class="device-badge" aria-live="polite">
+            <span class="code" id="stageCode">01</span>
+            <strong id="stageName">待机</strong>
+            <span class="badge-state" id="stageGroup">基础状态</span>
+          </div>
+        </div>
+
+        <div class="stage-controls" role="group" aria-label="动画播放控制">
+          <button class="icon-button" id="playToggle" type="button" aria-label="暂停动画" aria-pressed="false" title="暂停 / 继续">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path id="playPath" d="M7 5h4v14H7zM13 5h4v14h-4z"></path></svg>
+          </button>
+          <button class="icon-button" id="prevButton" type="button" aria-label="上一个表情" title="上一个">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6"></path></svg>
+          </button>
+          <button class="icon-button" id="nextButton" type="button" aria-label="下一个表情" title="下一个">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 18l6-6-6-6"></path></svg>
+          </button>
+          <button class="text-button" id="randomButton" type="button" aria-pressed="false">
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 3h5v5"></path><path d="M4 20L21 3"></path><path d="M21 16v5h-5"></path><path d="M15 15l6 6"></path><path d="M4 4l5 5"></path></svg>
+            随机播放
+          </button>
+          <div class="speed-control">
+            <label for="speedRange">速度</label>
+            <input id="speedRange" type="range" min="25" max="200" step="5" value="100" aria-valuetext="1 倍速">
+            <output id="speedOutput" for="speedRange">1.00x</output>
+          </div>
+        </div>
+      </div>
+
+      <aside class="inspector" aria-labelledby="inspectorTitle">
+        <div class="inspector-title">
+          <div>
+            <p class="section-kicker">Motion DNA</p>
+            <h2 id="inspectorTitle">待机</h2>
+            <div class="en" id="inspectorEn">IDLE</div>
+          </div>
+          <span class="count-badge" id="stateCount">48</span>
+        </div>
+        <p class="state-summary" id="stateSummary"></p>
+        <div class="tag-row" aria-label="动作标签">
+          <span class="tag accent" id="stateGroupTag">基础状态</span>
+          <span class="tag" id="stateDurationTag">4.6s</span>
+          <span class="tag" id="stateEffectTag">无额外特效</span>
+        </div>
+        <div class="detail-group">
+          <h3>表情组成</h3>
+          <dl class="dna-list" id="dnaList"></dl>
+        </div>
+        <div class="detail-group">
+          <h3>动作顺序</h3>
+          <ol class="sequence" id="sequenceList"></ol>
+        </div>
+      </aside>
+    </section>
+
+    <section class="gallery-section" id="gallery" aria-labelledby="galleryTitle">
+      <div class="gallery-heading">
+        <div>
+          <p class="section-kicker">Complete vocabulary</p>
+          <h2 id="galleryTitle">整套动画库</h2>
+          <p>四组状态，覆盖日常陪伴、完整情绪、对话行为和系统反馈。每张卡片都在实时播放。</p>
+        </div>
+        <span class="count-badge" id="galleryCount">48 个状态</span>
+      </div>
+
+      <div class="filter-row" role="group" aria-label="按功能筛选">
+        <button class="filter-button" type="button" data-group="all" aria-pressed="true">全部</button>
+        <button class="filter-button" type="button" data-group="basic" aria-pressed="false">基础</button>
+        <button class="filter-button" type="button" data-group="emotion" aria-pressed="false">情绪</button>
+        <button class="filter-button" type="button" data-group="dialog" aria-pressed="false">对话</button>
+        <button class="filter-button" type="button" data-group="system" aria-pressed="false">系统</button>
+      </div>
+
+      <div id="groupContainer"></div>
+
+      <p class="note">这是独立设计稿，不依赖旧的表情表。动画在浏览器中实时绘制，后续可把同一套动作参数移植到固件。</p>
+    </section>
+  </main>
+
+  <script src="expressions.js"></script>
+  <script src="face-renderer.js"></script>
+  <script>
+    (() => {
+      const library = window.DOTII_EXPRESSION_LIBRARY;
+      const expressions = library.expressions;
+      const groupContainer = document.getElementById('groupContainer');
+      const mainFace = new window.DotiiFace.FaceRenderer(document.getElementById('mainFace'));
+      const cardFaces = [];
+      const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+      let selectedIndex = 0;
+      let speed = 1;
+      let playing = !reduceMotion.matches;
+      let randomPlay = false;
+      let filter = 'all';
+      let baseTime = 0;
+      let lastFrame = performance.now();
+      let randomTimer = 0;
+
+      const ui = {
+        stageCode: document.getElementById('stageCode'),
+        stageName: document.getElementById('stageName'),
+        stageGroup: document.getElementById('stageGroup'),
+        inspectorTitle: document.getElementById('inspectorTitle'),
+        inspectorEn: document.getElementById('inspectorEn'),
+        stateSummary: document.getElementById('stateSummary'),
+        stateGroupTag: document.getElementById('stateGroupTag'),
+        stateDurationTag: document.getElementById('stateDurationTag'),
+        stateEffectTag: document.getElementById('stateEffectTag'),
+        dnaList: document.getElementById('dnaList'),
+        sequenceList: document.getElementById('sequenceList'),
+        playToggle: document.getElementById('playToggle'),
+        playPath: document.getElementById('playPath'),
+        prevButton: document.getElementById('prevButton'),
+        nextButton: document.getElementById('nextButton'),
+        randomButton: document.getElementById('randomButton'),
+        speedRange: document.getElementById('speedRange'),
+        speedOutput: document.getElementById('speedOutput'),
+        stateCount: document.getElementById('stateCount'),
+        galleryCount: document.getElementById('galleryCount'),
+      };
+
+      function durationText(ms) {
+        return ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${ms}ms`;
+      }
+
+      function effectName(effect) {
+        const names = {
+          sparkle: '闪光', zzz: '睡眠符号', rings: '声波环', orbit: '轨道点',
+          bars: '音量柱', check: '对勾', cross: '错误叉', question: '问号',
+          stars: '星星', hearts: '爱心', tear: '泪滴', anger: '怒气线',
+          ellipsis: '等待省略号', slash: '中断斜线', note: '音符',
+          notification: '通知线', loading: '加载环', progress: '进度环',
+          target: '瞄准框', exclamation: '感叹号', warning: '警告符号',
+          battery_low: '低电量', charging: '充电闪电', mute: '静音符号',
+          lock: '锁定图标', moon: '月亮', plus: '加号', update: '更新标记',
+        };
+        return names[effect] || effect;
+      }
+
+      function createCard(expression, index) {
+        const card = document.createElement('button');
+        card.className = 'expression-card';
+        card.type = 'button';
+        card.dataset.index = String(index);
+        card.setAttribute('aria-current', index === selectedIndex ? 'true' : 'false');
+        card.setAttribute('aria-label', `${expression.label}，${expression.description}`);
+        const canvas = document.createElement('canvas');
+        canvas.dataset.mode = 'card';
+        canvas.setAttribute('aria-hidden', 'true');
+        const copy = document.createElement('span');
+        copy.className = 'card-copy';
+        const title = document.createElement('strong');
+        title.textContent = expression.label;
+        const code = document.createElement('span');
+        code.textContent = `${String(index + 1).padStart(2, '0')} · ${expression.name}`;
+        copy.append(title, code);
+        card.append(canvas, copy);
+        card.addEventListener('click', () => select(index, true));
+        cardFaces.push(new window.DotiiFace.FaceRenderer(canvas));
+        cardFaces[cardFaces.length - 1].setExpression(expression);
+        return card;
+      }
+
+      Object.entries(library.groups).forEach(([groupKey, group]) => {
+        const block = document.createElement('section');
+        block.className = 'group-block';
+        block.dataset.group = groupKey;
+        block.setAttribute('aria-labelledby', `group-${groupKey}`);
+        const head = document.createElement('div');
+        head.className = 'group-head';
+        const title = document.createElement('h3');
+        title.id = `group-${groupKey}`;
+        const dot = document.createElement('span');
+        dot.className = 'dot';
+        dot.setAttribute('aria-hidden', 'true');
+        const label = document.createElement('span');
+        label.textContent = `${group.label} · ${group.note}`;
+        title.append(dot, label);
+        const count = document.createElement('span');
+        const countValue = expressions.filter((expression) => expression.group === groupKey).length;
+        count.textContent = `${countValue} STATES`;
+        head.append(title, count);
+        const grid = document.createElement('div');
+        grid.className = 'expression-grid';
+        expressions.forEach((expression, index) => {
+          if (expression.group === groupKey) grid.append(createCard(expression, index));
+        });
+        block.append(head, grid);
+        groupContainer.append(block);
+      });
+
+      function updateInspector(expression) {
+        const group = library.groups[expression.group];
+        ui.stageCode.textContent = String(selectedIndex + 1).padStart(2, '0');
+        ui.stageName.textContent = expression.label;
+        ui.stageGroup.textContent = group.label;
+        ui.inspectorTitle.textContent = expression.label;
+        ui.inspectorEn.textContent = expression.name;
+        ui.stateSummary.textContent = expression.description;
+        ui.stateGroupTag.textContent = group.label;
+        ui.stateDurationTag.textContent = durationText(expression.duration);
+        const effects = expression.base.effects || [];
+        ui.stateEffectTag.textContent = effects.length ? effects.map(effectName).join(' + ') : '无额外特效';
+        ui.dnaList.replaceChildren();
+        expression.dna.forEach((item) => {
+          const [key, value] = item.split('：');
+          const row = document.createElement('div');
+          row.className = 'dna-row';
+          const dt = document.createElement('dt');
+          dt.textContent = key;
+          const dd = document.createElement('dd');
+          dd.textContent = value;
+          row.append(dt, dd);
+          ui.dnaList.append(row);
+        });
+        ui.sequenceList.replaceChildren();
+        expression.sequence.forEach((item) => {
+          const li = document.createElement('li');
+          li.textContent = item;
+          ui.sequenceList.append(li);
+        });
+      }
+
+      function select(index, fromCard) {
+        selectedIndex = (index + expressions.length) % expressions.length;
+        const expression = expressions[selectedIndex];
+        mainFace.setExpression(expression);
+        updateInspector(expression);
+        document.querySelectorAll('.expression-card').forEach((card) => {
+          card.setAttribute('aria-current', Number(card.dataset.index) === selectedIndex ? 'true' : 'false');
+        });
+        if (fromCard) baseTime = 0;
+        if (fromCard && document.activeElement !== ui.prevButton && document.activeElement !== ui.nextButton) {
+          document.getElementById('mainFace').setAttribute('aria-label', `${expression.label} 表情动画预览`);
+        }
+      }
+
+      function setPlaying(next) {
+        playing = next;
+        ui.playToggle.setAttribute('aria-pressed', String(!playing));
+        ui.playToggle.setAttribute('aria-label', playing ? '暂停动画' : '继续动画');
+        ui.playPath.setAttribute('d', playing ? 'M7 5h4v14H7zM13 5h4v14h-4z' : 'M8 5v14l11-7z');
+      }
+
+      function setRandom(next) {
+        randomPlay = next;
+        ui.randomButton.setAttribute('aria-pressed', String(randomPlay));
+        window.clearTimeout(randomTimer);
+        if (randomPlay) scheduleRandom();
+      }
+
+      function scheduleRandom() {
+        window.clearTimeout(randomTimer);
+        randomTimer = window.setTimeout(() => {
+          if (!randomPlay) return;
+          if (!playing) setPlaying(true);
+          select(Math.floor(Math.random() * expressions.length), true);
+          scheduleRandom();
+        }, 3200);
+      }
+
+      function setFilter(next) {
+        filter = next;
+        document.querySelectorAll('.filter-button').forEach((button) => {
+          button.setAttribute('aria-pressed', String(button.dataset.group === filter));
+        });
+        document.querySelectorAll('.group-block').forEach((block) => {
+          block.hidden = filter !== 'all' && block.dataset.group !== filter;
+        });
+      }
+
+      ui.playToggle.addEventListener('click', () => setPlaying(!playing));
+      ui.prevButton.addEventListener('click', () => {
+        setRandom(false);
+        baseTime = 0;
+        select(selectedIndex - 1, false);
+      });
+      ui.nextButton.addEventListener('click', () => {
+        setRandom(false);
+        baseTime = 0;
+        select(selectedIndex + 1, false);
+      });
+      ui.randomButton.addEventListener('click', () => setRandom(!randomPlay));
+      ui.speedRange.addEventListener('input', () => {
+        speed = Number(ui.speedRange.value) / 100;
+        ui.speedOutput.textContent = `${speed.toFixed(2)}x`;
+        ui.speedRange.setAttribute('aria-valuetext', `${speed.toFixed(2)} 倍速`);
+      });
+      document.querySelectorAll('.filter-button').forEach((button) => {
+        button.addEventListener('click', () => setFilter(button.dataset.group));
+      });
+      document.addEventListener('keydown', (event) => {
+        if (event.target.matches('input, button, a')) return;
+        if (event.key === 'ArrowRight') { setRandom(false); baseTime = 0; select(selectedIndex + 1, false); }
+        if (event.key === 'ArrowLeft') { setRandom(false); baseTime = 0; select(selectedIndex - 1, false); }
+        if (event.key === ' ') { event.preventDefault(); setPlaying(!playing); }
+      });
+      reduceMotion.addEventListener('change', (event) => {
+        setPlaying(!event.matches);
+      });
+
+      setFilter('all');
+      setPlaying(playing);
+      select(0, true);
+      cardFaces.forEach((face, index) => face.render(index * 137));
+      ui.stateCount.textContent = String(expressions.length);
+      ui.galleryCount.textContent = `${expressions.length} 个状态`;
+
+      function loop(now) {
+        const delta = Math.min(80, now - lastFrame);
+        lastFrame = now;
+        if (playing) baseTime += delta * speed;
+        mainFace.render(baseTime);
+        cardFaces.forEach((face, index) => {
+          if (!reduceMotion.matches) face.render(baseTime + index * 137);
+        });
+        requestAnimationFrame(loop);
+      }
+      requestAnimationFrame(loop);
+    })();
+  </script>
+</body>
+</html>
