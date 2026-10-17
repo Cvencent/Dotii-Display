@@ -44,6 +44,11 @@ typedef struct {
     char activation_message[160];
     char last_emotion[24];
     uint32_t emotion_until_ms;
+    uint32_t server_emotion_revision;
+    char last_user_text[192];
+    uint32_t user_text_revision;
+    char last_assistant_text[192];
+    uint32_t assistant_text_revision;
     char last_text[192];
     char pending_audio_url[256];
     char session_id[64];

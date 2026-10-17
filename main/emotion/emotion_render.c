@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "emotion_face.h"
 #include "emotion_geometry.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
@@ -122,6 +123,45 @@ static inline void blend_px(eb_surface_t *s, int x, int y, uint16_t color, uint3
         (uint16_t)((r << 11) | (g << 5) | b);
 }
 
+static void eb_rotate_point(float center_x, float center_y, float tilt_deg,
+                            float *x, float *y)
+{
+    const float radians = tilt_deg * EB_PI / 180.0f;
+    const float cosine = cosf(radians);
+    const float sine = sinf(radians);
+    const float dx = *x - center_x;
+    const float dy = *y - center_y;
+    *x = center_x + dx * cosine - dy * sine;
+    *y = center_y + dx * sine + dy * cosine;
+}
+
+static void eb_include_rotated_box(float center_x, float center_y,
+                                   float tilt_deg,
+                                   float x0, float y0, float x1, float y1,
+                                   float *min_x, float *min_y,
+                                   float *max_x, float *max_y)
+{
+    const float xs[4] = {x0, x1, x1, x0};
+    const float ys[4] = {y0, y0, y1, y1};
+    for (int i = 0; i < 4; ++i) {
+        float x = xs[i];
+        float y = ys[i];
+        eb_rotate_point(center_x, center_y, tilt_deg, &x, &y);
+        if (x < *min_x) *min_x = x;
+        if (y < *min_y) *min_y = y;
+        if (x > *max_x) *max_x = x;
+        if (y > *max_y) *max_y = y;
+    }
+}
+
+static void fill_polygon(eb_surface_t *surf, const float *xs, const float *ys, int n, uint16_t color);
+static void eb_stroke_curve(eb_surface_t *surf,
+                            float x0, float y0,
+                            float cx, float cy,
+                            float x1, float y1,
+                            float thickness, uint16_t color);
+static void eb_draw_blush(eb_surface_t *surf, float cx, float cy,
+                          float rx, float ry, uint16_t color);
 /* -- animation primitives (ported from engine.js ANIM_TYPES) ---------------- */
 
 typedef enum {
@@ -260,6 +300,49 @@ static void eb_pose_from_look(const eb_look_t *look, float t_ms, float openness,
     }
 }
 
+static void fill_polygon(eb_surface_t *surf, const float *xs, const float *ys, int n, uint16_t color);
+static void eb_stroke_curve(eb_surface_t *surf,
+                            float x0, float y0,
+                            float cx, float cy,
+                            float x1, float y1,
+                            float thickness, uint16_t color)
+{
+    enum { SEGMENTS = 18 };
+    for (int segment = 0; segment < SEGMENTS; ++segment) {
+        const float t0 = (float)segment / (float)SEGMENTS;
+        const float t1 = (float)(segment + 1) / (float)SEGMENTS;
+        const float inv0 = 1.0f - t0;
+        const float inv1 = 1.0f - t1;
+        const float ax = inv0 * inv0 * x0 + 2.0f * inv0 * t0 * cx + t0 * t0 * x1;
+        const float ay = inv0 * inv0 * y0 + 2.0f * inv0 * t0 * cy + t0 * t0 * y1;
+        const float bx = inv1 * inv1 * x0 + 2.0f * inv1 * t1 * cx + t1 * t1 * x1;
+        const float by = inv1 * inv1 * y0 + 2.0f * inv1 * t1 * cy + t1 * t1 * y1;
+        const float dx = bx - ax;
+        const float dy = by - ay;
+        const float length = sqrtf(dx * dx + dy * dy);
+        if (length < 0.01f) continue;
+        const float nx = -dy / length;
+        const float ny = dx / length;
+        const float half = fmaxf(0.75f, thickness * 0.5f);
+        float qx[4] = {ax + nx * half, ax - nx * half, bx - nx * half, bx + nx * half};
+        float qy[4] = {ay + ny * half, ay - ny * half, by - ny * half, by + ny * half};
+        fill_polygon(surf, qx, qy, 4, color);
+    }
+}
+
+static void eb_draw_blush(eb_surface_t *surf, float cx, float cy,
+                          float rx, float ry, uint16_t color)
+{
+    enum { POINTS = 20 };
+    float xs[POINTS];
+    float ys[POINTS];
+    for (int i = 0; i < POINTS; ++i) {
+        const float a = EB_TAU * (float)i / (float)POINTS;
+        xs[i] = cx + cosf(a) * rx;
+        ys[i] = cy + sinf(a) * ry;
+    }
+    fill_polygon(surf, xs, ys, POINTS, color);
+}
 /* Subsampled scanline polygon fill. Four sub-scanlines per output row give
    real vertical coverage instead of the previous hard floor/ceil edge, which
    is what produced the stair-stepped "毛刺" on curved eye rings. */
@@ -367,7 +450,8 @@ static void eb_centroid(const int16_t *ring, float *cx, float *cy)
    space, independent of the removed body silhouette. */
 static void eb_eye_points(const eb_pose_t *pose, const eb_shape_t *shape,
                           const int16_t *ring, int slot, float size,
-                          float eye_scale, float *sx_out, float *sy_out)
+                          float eye_scale, float head_tilt_deg,
+                          float *sx_out, float *sy_out)
 {
     const uint16_t n = emotion_geometry_ring_points();
     float base_x, base_y;
@@ -410,7 +494,7 @@ static void eb_eye_points(const eb_pose_t *pose, const eb_shape_t *shape,
 
     /* The panel colour does not move, but a little of the body rotation is
        kept as a face tilt so the expressions still have personality. */
-    const float body_rot = pose->body_rotate * EB_PI / 180.0f * 0.30f;
+    const float body_rot = head_tilt_deg * EB_PI / 180.0f;
     if (fabsf(body_rot) > 0.0001f) {
         const float dx = ex - size * 0.5f;
         const float dy = ey - size * 0.5f;
@@ -675,9 +759,17 @@ void emotion_render_update(emotion_render_t *render,
            a dark-eyed character on a black face). Keep the eyes readable. */
         eye_rgb = luma8(body_rgb) > 128 ? 0x101418u : 0xF1F8F5u;
     }
+    const emotion_face_t *face = def != NULL ? emotion_face_lookup(def->id) : NULL;
+    if (face == NULL) face = emotion_face_fallback();
     const uint16_t eye_color = rgb565(c8(eye_rgb, 16),
                                       c8(eye_rgb, 8),
                                       c8(eye_rgb, 0));
+    const uint16_t feature_color = eye_color;
+    const float mouth_y = size * 0.705f + pose.body_y * 0.70f;
+    const float mouth_width = size * 0.22f * clampf(face->mouth_width, 0.65f, 1.25f);
+    const float blink_open = clampf(pose.openness / 1.0f, 0.04f, 1.4f);
+    const float mouth_open = clampf(face->mouth_open + (1.0f - blink_open) * 0.20f, 0.0f, 1.0f);
+    const float head_tilt = face->head_tilt_deg + pose.body_rotate * 0.28f;
     const uint16_t ring_points = emotion_geometry_ring_points();
     const float eye_scale = size * 0.0043f;
     float point_x[2][EB_MAX_POINTS];
@@ -687,6 +779,7 @@ void emotion_render_update(emotion_render_t *render,
         const int16_t *ring = emotion_geometry_ring(expression, (uint8_t)eye);
         const int slot = eye == 0 ? 1 : 2;
         eb_eye_points(&pose, shape, ring, slot, size, eye_scale,
+                      head_tilt,
                       point_x[eye], point_y[eye]);
         for (uint16_t i = 0; i < ring_points; ++i) {
             if (point_x[eye][i] < min_x) min_x = point_x[eye][i];
@@ -698,10 +791,33 @@ void emotion_render_update(emotion_render_t *render,
     if (max_x < min_x || max_y < min_y) {
         return;
     }
-    const int32_t new_x1 = clampi((int32_t)floorf(min_x) - 2, 0, render->size - 1);
-    const int32_t new_y1 = clampi((int32_t)floorf(min_y) - 2, 0, render->size - 1);
-    const int32_t new_x2 = clampi((int32_t)ceilf(max_x) + 2, 0, render->size - 1);
-    const int32_t new_y2 = clampi((int32_t)ceilf(max_y) + 2, 0, render->size - 1);
+    /* Facial features extend below the eye bounding box. Keep the dirty
+       rectangle large enough for the mouth, brows and blush so the next
+       frame erases old strokes instead of leaving trails. */
+    min_x = fminf(min_x, size * 0.5f - mouth_width - size * 0.02f);
+    max_x = fmaxf(max_x, size * 0.5f + mouth_width + size * 0.02f);
+    min_y = fminf(min_y, mouth_y - size * (face->mouth == EMOTION_MOUTH_OPEN ? 0.16f : 0.09f));
+    max_y = fmaxf(max_y, mouth_y + size * (face->mouth == EMOTION_MOUTH_OPEN ? 0.18f : 0.10f));
+    eb_include_rotated_box(size * 0.5f, size * 0.5f, head_tilt,
+                           size * 0.5f - mouth_width - size * 0.02f,
+                           mouth_y - size * 0.20f,
+                           size * 0.5f + mouth_width + size * 0.02f,
+                           mouth_y + size * 0.20f,
+                           &min_x, &min_y, &max_x, &max_y);
+    if (face->blush > 0.05f) {
+        eb_include_rotated_box(size * 0.5f, size * 0.5f, head_tilt,
+                               size * 0.20f, mouth_y - size * 0.09f,
+                               size * 0.34f, mouth_y - size * 0.02f,
+                               &min_x, &min_y, &max_x, &max_y);
+        eb_include_rotated_box(size * 0.5f, size * 0.5f, head_tilt,
+                               size * 0.66f, mouth_y - size * 0.09f,
+                               size * 0.80f, mouth_y - size * 0.02f,
+                               &min_x, &min_y, &max_x, &max_y);
+    }
+    const int32_t new_x1 = clampi((int32_t)floorf(min_x) - 3, 0, render->size - 1);
+    const int32_t new_y1 = clampi((int32_t)floorf(min_y) - 3, 0, render->size - 1);
+    const int32_t new_x2 = clampi((int32_t)ceilf(max_x) + 3, 0, render->size - 1);
+    const int32_t new_y2 = clampi((int32_t)ceilf(max_y) + 3, 0, render->size - 1);
 
     int32_t paint_x1 = 0, paint_y1 = 0;
     int32_t paint_x2 = render->size - 1, paint_y2 = render->size - 1;
@@ -718,7 +834,106 @@ void emotion_render_update(emotion_render_t *render,
     for (int eye = 0; eye < 2; ++eye) {
         fill_polygon(&surface, point_x[eye], point_y[eye], ring_points, eye_color);
     }
+    /* Mouth. Rounded smiles/frowns are quadratic curves; open mouths are
+       filled lenses so surprised and speaking states read immediately. */
+    if (face->mouth == EMOTION_MOUTH_OPEN) {
+        const float open_h = size * (0.035f + 0.105f * mouth_open);
+        float mx[20], my[20];
+        for (int i = 0; i < 20; ++i) {
+            const float a = EB_TAU * (float)i / 20.0f;
+            mx[i] = size * 0.5f + cosf(a) * mouth_width * 0.72f;
+            my[i] = mouth_y + sinf(a) * open_h;
+            eb_rotate_point(size * 0.5f, size * 0.5f, head_tilt, &mx[i], &my[i]);
+        }
+        fill_polygon(&surface, mx, my, 20, feature_color);
+    } else if (face->mouth == EMOTION_MOUTH_SMILE) {
+        float x0 = size * 0.5f - mouth_width, y0 = mouth_y - mouth_width * 0.10f;
+        float cx = size * 0.5f, cy = mouth_y + mouth_width * 0.48f;
+        float x1 = size * 0.5f + mouth_width, y1 = mouth_y - mouth_width * 0.10f;
+        eb_rotate_point(size * 0.5f, size * 0.5f, head_tilt, &x0, &y0);
+        eb_rotate_point(size * 0.5f, size * 0.5f, head_tilt, &cx, &cy);
+        eb_rotate_point(size * 0.5f, size * 0.5f, head_tilt, &x1, &y1);
+        eb_stroke_curve(&surface,
+                        x0, y0,
+                        cx, cy,
+                        x1, y1,
+                        size * 0.018f, feature_color);
+    } else if (face->mouth == EMOTION_MOUTH_FROWN) {
+        float x0 = size * 0.5f - mouth_width, y0 = mouth_y + mouth_width * 0.18f;
+        float cx = size * 0.5f, cy = mouth_y - mouth_width * 0.48f;
+        float x1 = size * 0.5f + mouth_width, y1 = mouth_y + mouth_width * 0.18f;
+        eb_rotate_point(size * 0.5f, size * 0.5f, head_tilt, &x0, &y0);
+        eb_rotate_point(size * 0.5f, size * 0.5f, head_tilt, &cx, &cy);
+        eb_rotate_point(size * 0.5f, size * 0.5f, head_tilt, &x1, &y1);
+        eb_stroke_curve(&surface,
+                        x0, y0,
+                        cx, cy,
+                        x1, y1,
+                        size * 0.018f, feature_color);
+    } else if (face->mouth == EMOTION_MOUTH_WAVY) {
+        float ax = size * 0.5f - mouth_width, ay = mouth_y;
+        float bx = size * 0.5f - mouth_width * 0.5f, by = mouth_y + mouth_width * 0.22f;
+        float cx = size * 0.5f - mouth_width * 0.1f, cy = mouth_y;
+        float dx = size * 0.5f + mouth_width * 0.35f, dy = mouth_y - mouth_width * 0.22f;
+        float ex = size * 0.5f + mouth_width, ey = mouth_y;
+        eb_rotate_point(size * 0.5f, size * 0.5f, head_tilt, &ax, &ay);
+        eb_rotate_point(size * 0.5f, size * 0.5f, head_tilt, &bx, &by);
+        eb_rotate_point(size * 0.5f, size * 0.5f, head_tilt, &cx, &cy);
+        eb_rotate_point(size * 0.5f, size * 0.5f, head_tilt, &dx, &dy);
+        eb_rotate_point(size * 0.5f, size * 0.5f, head_tilt, &ex, &ey);
+        eb_stroke_curve(&surface, ax, ay, bx, by, cx, cy, size * 0.014f, feature_color);
+        eb_stroke_curve(&surface, cx, cy, dx, dy, ex, ey, size * 0.014f, feature_color);
+    } else {
+        const float scale = face->mouth == EMOTION_MOUTH_SMALL ? 0.62f : 1.0f;
+        float x0 = size * 0.5f - mouth_width * scale, y0 = mouth_y;
+        float cx = size * 0.5f, cy = mouth_y + (face->mouth_curve * mouth_width * 0.28f);
+        float x1 = size * 0.5f + mouth_width * scale, y1 = mouth_y;
+        eb_rotate_point(size * 0.5f, size * 0.5f, head_tilt, &x0, &y0);
+        eb_rotate_point(size * 0.5f, size * 0.5f, head_tilt, &cx, &cy);
+        eb_rotate_point(size * 0.5f, size * 0.5f, head_tilt, &x1, &y1);
+        eb_stroke_curve(&surface,
+                        x0, y0,
+                        cx, cy,
+                        x1, y1,
+                        size * (face->mouth == EMOTION_MOUTH_SMALL ? 0.012f : 0.016f),
+                        feature_color);
+    }
 
+    /* Brows. Each brow is a short curved stroke above the matching eye;
+       inner-down is the angry shape, inner-up is worry/sadness. */
+    for (int brow = 0; brow < 2; ++brow) {
+        const float side = brow == 0 ? -1.0f : 1.0f;
+        const float ex = size * (brow == 0 ? 0.315f : 0.685f);
+        const float ey = size * 0.44f - size * 0.095f + face->brow_height;
+        float inner = 0.0f;
+        if (face->brow == EMOTION_BROW_INNER_DOWN) inner = size * 0.022f;
+        if (face->brow == EMOTION_BROW_INNER_UP) inner = -size * 0.022f;
+        const float outer = -inner;
+        float x0 = ex - side * size * 0.045f, y0 = ey + outer;
+        float cx = ex, cy = ey + (face->brow == EMOTION_BROW_RAISED ? -size * 0.020f : 0.0f);
+        float x1 = ex + side * size * 0.045f, y1 = ey + inner;
+        eb_rotate_point(size * 0.5f, size * 0.5f, head_tilt, &x0, &y0);
+        eb_rotate_point(size * 0.5f, size * 0.5f, head_tilt, &cx, &cy);
+        eb_rotate_point(size * 0.5f, size * 0.5f, head_tilt, &x1, &y1);
+        eb_stroke_curve(&surface,
+                        x0, y0,
+                        cx, cy,
+                        x1, y1,
+                        size * 0.010f, feature_color);
+    }
+
+    if (face->blush > 0.05f) {
+        float left_x = size * 0.27f, left_y = mouth_y - size * 0.055f;
+        float right_x = size * 0.73f, right_y = mouth_y - size * 0.055f;
+        eb_rotate_point(size * 0.5f, size * 0.5f, head_tilt, &left_x, &left_y);
+        eb_rotate_point(size * 0.5f, size * 0.5f, head_tilt, &right_x, &right_y);
+        eb_draw_blush(&surface, left_x, left_y,
+                      size * 0.07f, size * 0.035f,
+                      rgb565((uint8_t)(0xF0u), (uint8_t)(0x70u), (uint8_t)(0x70u)));
+        eb_draw_blush(&surface, right_x, right_y,
+                      size * 0.07f, size * 0.035f,
+                      rgb565((uint8_t)(0xF0u), (uint8_t)(0x70u), (uint8_t)(0x70u)));
+    }
     /* The canvas is 1:1 with the round panel and is anchored at (0,0), so
        the dirty rectangle is already in display coordinates. */
     lv_area_t area = {

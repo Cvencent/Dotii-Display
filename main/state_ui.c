@@ -14,6 +14,8 @@
 #include "emotion/character_pack.h"
 #include "emotion/emotion_catalog.h"
 #include "emotion/emotion_engine.h"
+#include "emotion/emotion_mood.h"
+#include "emotion/emotion_mood_store.h"
 #include "emotion/emotion_render.h"
 #include "emotion/emotion_router.h"
 #include "xiaozhi_client.h"
@@ -127,6 +129,10 @@ static emotion_engine_t s_xiaozhi_engine;
 static emotion_router_t s_xiaozhi_router;
 static emotion_render_t s_xiaozhi_render;
 static bool s_xiaozhi_engine_ready;
+static emotion_mood_t s_xiaozhi_mood;
+static uint32_t s_xiaozhi_mood_user_revision;
+static uint32_t s_xiaozhi_mood_assistant_revision;
+static uint32_t s_xiaozhi_mood_server_revision;
 static char s_xiaozhi_character[16] = "auto";
 static size_t s_xiaozhi_character_index;
 static uint32_t s_xiaozhi_character_changed_ms;
@@ -1602,6 +1608,11 @@ static void xiaozhi_engine_ensure(void)
     }
     emotion_engine_init(&s_xiaozhi_engine, lv_tick_get());
     emotion_router_init(&s_xiaozhi_router, &s_xiaozhi_engine);
+    emotion_mood_init(&s_xiaozhi_mood, lv_tick_get());
+    (void)emotion_mood_store_load(&s_xiaozhi_mood);
+    s_xiaozhi_mood_user_revision = s_xiaozhi.user_text_revision;
+    s_xiaozhi_mood_assistant_revision = s_xiaozhi.assistant_text_revision;
+    s_xiaozhi_mood_server_revision = s_xiaozhi.server_emotion_revision;
     s_xiaozhi_engine_ready = true;
 }
 
@@ -1691,10 +1702,53 @@ static void render_xiaozhi_expression(void)
     }
 
     if (s_snapshot.xiaozhi_enabled) {
-        const char *xiaozhi_emotion = xiaozhi_client_emotion_policy(
+        /* Feed only newly arrived turn text into the local affect model.
+           Reading a buffer repeatedly must not turn one compliment into
+           permanently higher trust. */
+        static float s_saved_positive_bias;
+        static float s_saved_correction_bias;
+        if (s_xiaozhi.last_user_text[0] != '\0' &&
+            s_xiaozhi.user_text_revision != s_xiaozhi_mood_user_revision) {
+            emotion_mood_ingest_user(&s_xiaozhi_mood, s_xiaozhi.last_user_text, now);
+            s_xiaozhi_mood_user_revision = s_xiaozhi.user_text_revision;
+            const float positive_bias = emotion_mood_positive_bias(&s_xiaozhi_mood);
+            const float correction_bias = emotion_mood_correction_bias(&s_xiaozhi_mood);
+            if (positive_bias != s_saved_positive_bias ||
+                correction_bias != s_saved_correction_bias) {
+                if (emotion_mood_store_save(&s_xiaozhi_mood)) {
+                    s_saved_positive_bias = positive_bias;
+                    s_saved_correction_bias = correction_bias;
+                }
+            }
+        }
+        if (s_xiaozhi.last_assistant_text[0] != '\0' &&
+            s_xiaozhi.assistant_text_revision != s_xiaozhi_mood_assistant_revision) {
+            emotion_mood_ingest_assistant(&s_xiaozhi_mood, s_xiaozhi.last_assistant_text, now);
+            s_xiaozhi_mood_assistant_revision = s_xiaozhi.assistant_text_revision;
+        }
+        const char *server_emotion = xiaozhi_client_last_emotion(&s_xiaozhi);
+        if (server_emotion != NULL &&
+            s_xiaozhi.server_emotion_revision != s_xiaozhi_mood_server_revision) {
+            emotion_mood_ingest_server_emotion(&s_xiaozhi_mood, server_emotion, now);
+            s_xiaozhi_mood_server_revision = s_xiaozhi.server_emotion_revision;
+        }
+        emotion_mood_tick(&s_xiaozhi_mood, now);
+
+        const char *state_emotion = xiaozhi_client_emotion_policy(
             xiaozhi_client_state(&s_xiaozhi),
             xiaozhi_client_last_emotion(&s_xiaozhi),
             s_xiaozhi.last_text);
+        const char *mood_emotion = emotion_mood_current_id(&s_xiaozhi_mood);
+        const char *xiaozhi_emotion = mood_emotion;
+        /* A live user/assistant emotion is the face of this turn. While it
+           is active, transport states only win when they carry information
+           the face would otherwise lose (music or an error). */
+        const bool mood_event = emotion_mood_has_active_event(&s_xiaozhi_mood);
+        if (state_emotion != NULL &&
+            (!mood_event || strcmp(state_emotion, "34") == 0 ||
+             strcmp(state_emotion, "42") == 0)) {
+            xiaozhi_emotion = state_emotion;
+        }
         if (xiaozhi_emotion != NULL) {
             emotion_router_set_source(&s_xiaozhi_router, EMOTION_SRC_XIAOZHI, xiaozhi_emotion, 0, now);
         } else {
@@ -1703,7 +1757,6 @@ static void render_xiaozhi_expression(void)
     } else {
         emotion_router_clear_source(&s_xiaozhi_router, EMOTION_SRC_XIAOZHI, now);
     }
-
     emotion_router_tick(&s_xiaozhi_router, now);
 
     const emotion_engine_state_t *state = emotion_engine_state(&s_xiaozhi_engine);

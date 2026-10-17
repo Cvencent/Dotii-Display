@@ -30,7 +30,9 @@ $tests = @(
     @{ name = 'animation';       src = 'test_apps\emotion\test_animation.c';       libs = @('main\emotion\animation.c') },
     @{ name = 'emotion_engine';  src = 'test_apps\emotion\test_emotion_engine.c';  libs = @('main\emotion\emotion_engine.c', 'main\emotion\emotion_catalog.c') },
     @{ name = 'character_pack';  src = 'test_apps\emotion\test_character_pack.c';  libs = @('main\emotion\character_pack.c') },
-    @{ name = 'emotion_router';  src = 'test_apps\emotion\test_emotion_router.c';  libs = @('main\emotion\emotion_router.c', 'main\emotion\emotion_engine.c', 'main\emotion\emotion_catalog.c') }
+    @{ name = 'emotion_router';  src = 'test_apps\emotion\test_emotion_router.c';  libs = @('main\emotion\emotion_router.c', 'main\emotion\emotion_engine.c', 'main\emotion\emotion_catalog.c') },
+    @{ name = 'emotion_face';    src = 'test_apps\emotion\test_emotion_face.c';    libs = @('main\emotion\emotion_face.c', 'main\emotion\emotion_catalog.c') }
+    @{ name = 'emotion_mood';    src = 'test_apps\emotion\test_emotion_mood.c';    libs = @('main\emotion\emotion_mood.c') }
     @{ name = 'emotion_pose';    src = 'test_apps\emotion\test_emotion_pose.c';    libs = @('main\emotion\emotion_pose.c', 'main\emotion\emotion_geometry.c', 'main\emotion\emotion_engine.c', 'main\emotion\emotion_catalog.c', 'main\emotion\character_pack.c', 'main\emotion\animation.c') }
     @{ name = 'xiaozhi_client'; src = 'test_apps\emotion\test_xiaozhi_client.c';  libs = @('main\xiaozhi_client.c', 'main\emotion\emotion_catalog.c', $cjsonSrc, "$hostStubs\host_stubs.c"); inc = @($hostStubs, 'main', $cjsonInc) }
 )

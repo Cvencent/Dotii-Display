@@ -265,6 +265,40 @@ static void test_wake_detection_continues_during_reconnect(void)
     assert(!xiaozhi_client_take_wake_resume(&client));
 }
 
+static void test_stt_and_llm_text_are_kept_separate(void)
+{
+    xiaozhi_client_t client;
+    xiaozhi_client_init(&client);
+    assert(xiaozhi_client_handle_text(
+        &client, "{\"type\":\"stt\",\"text\":\"我今天有点难过\"}"));
+    assert(strcmp(client.last_user_text, "我今天有点难过") == 0);
+    assert(xiaozhi_client_handle_text(
+        &client, "{\"type\":\"llm\",\"emotion\":\"down\",\"text\":\"我懂你，会陪着你\"}"));
+    assert(strcmp(client.last_assistant_text, "我懂你，会陪着你") == 0);
+    assert(strcmp(client.last_user_text, "我今天有点难过") == 0);
+}
+
+static void test_repeated_turns_advance_revisions(void)
+{
+    xiaozhi_client_t client;
+    xiaozhi_client_init(&client);
+
+    assert(xiaozhi_client_handle_text(
+        &client, "{\"type\":\"stt\",\"text\":\"你好小智\"}"));
+    const uint32_t first_user = client.user_text_revision;
+    assert(xiaozhi_client_handle_text(
+        &client, "{\"type\":\"stt\",\"text\":\"你好小智\"}"));
+    assert(client.user_text_revision == first_user + 1u);
+
+    assert(xiaozhi_client_handle_text(
+        &client, "{\"type\":\"llm\",\"emotion\":\"happy\",\"text\":\"我在呢\"}"));
+    const uint32_t first_assistant = client.assistant_text_revision;
+    const uint32_t first_server = client.server_emotion_revision;
+    assert(xiaozhi_client_handle_text(
+        &client, "{\"type\":\"llm\",\"emotion\":\"happy\",\"text\":\"我在呢\"}"));
+    assert(client.assistant_text_revision == first_assistant + 1u);
+    assert(client.server_emotion_revision == first_server + 1u);
+}
 int main(void)
 {
     test_emotion_event();
@@ -284,6 +318,8 @@ int main(void)
     test_wake_event_is_consumed_once();
     test_wake_reply_is_consumed_once();
     test_wake_detection_continues_during_reconnect();
+    test_stt_and_llm_text_are_kept_separate();
+    test_repeated_turns_advance_revisions();
     printf("xiaozhi_client tests passed\n");
     return 0;
 }

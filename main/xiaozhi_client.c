@@ -559,6 +559,7 @@ static void set_emotion(xiaozhi_client_t *client, const char *name)
     if (normalized == NULL) return;
     copy_bounded(client->last_emotion, sizeof(client->last_emotion), normalized);
     client->emotion_until_ms = now_ms() + 5000;
+    client->server_emotion_revision++;
     ESP_LOGI(TAG, "emotion -> %s (raw %s)", normalized, name);
 }
 
@@ -624,12 +625,16 @@ bool xiaozhi_client_handle_text(xiaozhi_client_t *client, const char *json)
     } else if (type_value != NULL && strcmp(type_value, "stt") == 0) {
         const cJSON *text = cJSON_GetObjectItemCaseSensitive(root, "text");
         if (cJSON_IsString(text) && text->valuestring != NULL) {
+            copy_bounded(client->last_user_text, sizeof(client->last_user_text), text->valuestring);
+            client->user_text_revision++;
             copy_bounded(client->last_text, sizeof(client->last_text), text->valuestring);
             changed = true;
         }
     } else if (type_value != NULL && strcmp(type_value, "llm") == 0) {
         const cJSON *text = cJSON_GetObjectItemCaseSensitive(root, "text");
         if (cJSON_IsString(text) && text->valuestring != NULL) {
+            copy_bounded(client->last_assistant_text, sizeof(client->last_assistant_text), text->valuestring);
+            client->assistant_text_revision++;
             copy_bounded(client->last_text, sizeof(client->last_text), text->valuestring);
         }
         changed = true;
