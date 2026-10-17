@@ -101,9 +101,10 @@ const char *xiaozhi_client_pending_audio_url(const xiaozhi_client_t *client);
    wanted (e.g. disabled/idle). */
 const char *xiaozhi_client_state_emotion(xiaozhi_session_state_t state);
 
-/* Chooses the local expression for the current Xiaozhi turn. A valid server
-   emotion wins, then the session state, then simple text intent cues. The
-   result is always a catalog id. */
+/* Chooses the local expression for the current Xiaozhi turn. Transport and
+   playback states force their own catalogs; while speaking, a valid
+   server emotion wins over simple text intent cues. The result is always
+   a catalog id. */
 const char *xiaozhi_client_emotion_policy(xiaozhi_session_state_t state,
                                           const char *server_emotion,
                                           const char *text);
