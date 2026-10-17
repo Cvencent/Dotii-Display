@@ -35,6 +35,7 @@
 #include "esp_opus_dec.h"
 #include "esp_opus_enc.h"
 #include "esp_websocket_client.h"
+#include "wake_reply_audio.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
@@ -98,6 +99,7 @@ void xiaozhi_client_notify_wake_word(xiaozhi_client_t *client)
 {
     if (client != NULL) {
         atomic_store_explicit(&client->wake_event_pending, true, memory_order_release);
+        atomic_store_explicit(&client->wake_reply_pending, true, memory_order_release);
     }
 }
 
@@ -105,6 +107,12 @@ bool xiaozhi_client_take_wake_event(xiaozhi_client_t *client)
 {
     return client != NULL &&
            atomic_exchange_explicit(&client->wake_event_pending, false, memory_order_acq_rel);
+}
+
+bool xiaozhi_client_take_wake_reply(xiaozhi_client_t *client)
+{
+    return client != NULL &&
+           atomic_exchange_explicit(&client->wake_reply_pending, false, memory_order_acq_rel);
 }
 
 static void persist_volume(const xiaozhi_client_t *client)
@@ -286,6 +294,8 @@ void xiaozhi_client_init(xiaozhi_client_t *client)
     if (client == NULL) return;
     memset(client, 0, sizeof(*client));
     atomic_init(&client->wake_event_pending, false);
+    atomic_init(&client->wake_reply_pending, false);
+    atomic_init(&client->wake_reply_playing, false);
     client->state = XIAOZHI_STATE_DISABLED;
     client->server_sample_rate = 24000;
     client->server_frame_duration = XIAOZHI_FRAME_MS;
@@ -1341,12 +1351,48 @@ static bool ensure_decoder(xiaozhi_client_t *client, int sample_rate)
     return true;
 }
 
+static bool play_wake_reply(xiaozhi_client_t *client)
+{
+    if (client == NULL || client->speaker == NULL) return false;
+    atomic_store_explicit(&client->wake_reply_playing, true, memory_order_release);
+    ESP_LOGI(TAG, "wake reply: playing \"在\"");
+    bool ok = true;
+    size_t offset = 0;
+    const size_t chunk_samples = 960;
+    while (offset < k_wake_reply_pcm_samples && client->running) {
+        size_t count = k_wake_reply_pcm_samples - offset;
+        if (count > chunk_samples) count = chunk_samples;
+        const int written = esp_codec_dev_write(
+            (esp_codec_dev_handle_t)client->speaker,
+            (void *)&k_wake_reply_pcm[offset],
+            (int)(count * sizeof(int16_t)));
+        if (written != ESP_CODEC_DEV_OK) {
+            ESP_LOGW(TAG, "wake reply write failed: %d", written);
+            ok = false;
+            break;
+        }
+        offset += count;
+    }
+    atomic_store_explicit(&client->wake_reply_playing, false, memory_order_release);
+    if (ok && offset == k_wake_reply_pcm_samples) {
+        ESP_LOGI(TAG, "wake reply: done");
+    }
+    return ok;
+}
 static void playback_task(void *argument)
 {
     xiaozhi_client_t *client = (xiaozhi_client_t *)argument;
     while (client->running) {
+        const bool wake_reply_pending =
+            atomic_load_explicit(&client->wake_reply_pending, memory_order_acquire);
+        if (wake_reply_pending && audio_init(client) &&
+            xiaozhi_client_take_wake_reply(client)) {
+            (void)play_wake_reply(client);
+        }
+
         audio_packet_t packet = {0};
-        if (xQueueReceive(s_audio_queue, &packet, pdMS_TO_TICKS(500)) != pdTRUE) continue;
+        const TickType_t queue_wait = wake_reply_pending ? pdMS_TO_TICKS(20) : pdMS_TO_TICKS(500);
+        if (xQueueReceive(s_audio_queue, &packet, queue_wait) != pdTRUE) continue;
         if (packet.data == NULL) continue;
         if (audio_init(client) && ensure_decoder(client, client->server_sample_rate)) {
             int frame_samples = client->server_sample_rate * XIAOZHI_FRAME_MS / 1000;
@@ -1411,6 +1457,12 @@ static void microphone_task(void *argument)
     while (client->running) {
         if (!audio_init(client)) {
             vTaskDelay(pdMS_TO_TICKS(20));
+            continue;
+        }
+        /* Do not upload the device's own wake acknowledgement as speech. */
+        if (atomic_load_explicit(&client->wake_reply_pending, memory_order_acquire) ||
+            atomic_load_explicit(&client->wake_reply_playing, memory_order_acquire)) {
+            vTaskDelay(pdMS_TO_TICKS(5));
             continue;
         }
         /* ES7210, the input resampler and WakeNet form one continuous capture
@@ -1689,6 +1741,8 @@ void xiaozhi_client_stop(xiaozhi_client_t *client)
     client->running = false;
     client->listening = false;
     client->music_stop_requested = true;
+    atomic_store_explicit(&client->wake_reply_pending, false, memory_order_release);
+    atomic_store_explicit(&client->wake_reply_playing, false, memory_order_release);
     esp_http_client_handle_t music_http = (esp_http_client_handle_t)client->music_http;
     if (music_http != NULL) {
         esp_http_client_close(music_http);

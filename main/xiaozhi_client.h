@@ -67,6 +67,8 @@ typedef struct {
     void *microphone;
     uint8_t output_volume;
     atomic_bool wake_event_pending;
+    atomic_bool wake_reply_pending;
+    atomic_bool wake_reply_playing;
     bool codec_ready;
     int server_sample_rate;
     int server_frame_duration;
@@ -109,6 +111,7 @@ uint8_t xiaozhi_client_set_volume(xiaozhi_client_t *client, int volume, bool per
 /* Voice wake is produced by the audio task and consumed by the LVGL thread. */
 void xiaozhi_client_notify_wake_word(xiaozhi_client_t *client);
 bool xiaozhi_client_take_wake_event(xiaozhi_client_t *client);
+bool xiaozhi_client_take_wake_reply(xiaozhi_client_t *client);
 
 /* Apply a fixed linear gain in place. Full-scale samples are clipped to the
    signed 16-bit range so the same block can feed wake word and uplink Opus. */

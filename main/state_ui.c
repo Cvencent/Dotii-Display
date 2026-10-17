@@ -112,6 +112,7 @@ static lv_obj_t *s_xiaozhi_status_dot;
 static lv_obj_t *s_xiaozhi_status;
 static lv_obj_t *s_xiaozhi_emotion;
 static lv_obj_t *s_xiaozhi_server;
+static lv_obj_t *s_xiaozhi_listen_badge;
 static lv_obj_t *s_settings_list;
 static lv_obj_t *s_battery_label;
 static lv_obj_t *s_settings_wifi;
@@ -1389,6 +1390,15 @@ static void build_detail(void)
     register_page_scroll_target(s_detail, s_detail_chat);
 }
 
+static void xiaozhi_listen_badge_set_visible(bool visible)
+{
+    if (s_xiaozhi_listen_badge == NULL) return;
+    if (visible) {
+        lv_obj_remove_flag(s_xiaozhi_listen_badge, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_add_flag(s_xiaozhi_listen_badge, LV_OBJ_FLAG_HIDDEN);
+    }
+}
 static void build_xiaozhi(void)
 {
     s_xiaozhi_page = lv_obj_create(NULL);
@@ -1422,6 +1432,61 @@ static void build_xiaozhi(void)
        leaves only the animated eyes visible. */
     emotion_render_set_body_override(&s_xiaozhi_render, true, 0x000000);
 
+    /* Listening gets its own compact badge so the current microphone state is
+       readable without covering the face with the full session status pill. */
+    s_xiaozhi_listen_badge = lv_obj_create(content);
+    lv_obj_set_size(s_xiaozhi_listen_badge, 164, 44);
+    lv_obj_set_style_radius(s_xiaozhi_listen_badge, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_color(s_xiaozhi_listen_badge, color(0x071416), 0);
+    lv_obj_set_style_bg_opa(s_xiaozhi_listen_badge, LV_OPA_80, 0);
+    lv_obj_set_style_border_width(s_xiaozhi_listen_badge, 1, 0);
+    lv_obj_set_style_border_color(s_xiaozhi_listen_badge, color(COLOR_XIAOZHI), 0);
+    lv_obj_set_style_pad_column(s_xiaozhi_listen_badge, 9, 0);
+    lv_obj_set_layout(s_xiaozhi_listen_badge, LV_LAYOUT_FLEX);
+    lv_obj_set_flex_flow(s_xiaozhi_listen_badge, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(s_xiaozhi_listen_badge, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_remove_flag(s_xiaozhi_listen_badge, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_remove_flag(s_xiaozhi_listen_badge, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_align(s_xiaozhi_listen_badge, LV_ALIGN_BOTTOM_MID, 0, -46);
+    lv_obj_add_flag(s_xiaozhi_listen_badge, LV_OBJ_FLAG_HIDDEN);
+
+    lv_obj_t *ear = lv_obj_create(s_xiaozhi_listen_badge);
+    lv_obj_remove_style_all(ear);
+    lv_obj_set_size(ear, 28, 30);
+    lv_obj_remove_flag(ear, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_remove_flag(ear, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_t *ear_outer = lv_arc_create(ear);
+    lv_obj_set_size(ear_outer, 23, 27);
+    lv_obj_align(ear_outer, LV_ALIGN_LEFT_MID, 0, -1);
+    lv_arc_set_bg_angles(ear_outer, 35, 315);
+    lv_obj_set_style_arc_width(ear_outer, 2, LV_PART_MAIN);
+    lv_obj_set_style_arc_color(ear_outer, color(COLOR_XIAOZHI), LV_PART_MAIN);
+    lv_obj_set_style_arc_rounded(ear_outer, true, LV_PART_MAIN);
+    lv_obj_set_style_arc_opa(ear_outer, LV_OPA_TRANSP, LV_PART_INDICATOR);
+    lv_obj_remove_flag(ear_outer, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_t *ear_inner = lv_arc_create(ear);
+    lv_obj_set_size(ear_inner, 12, 15);
+    lv_obj_align(ear_inner, LV_ALIGN_LEFT_MID, 6, -2);
+    lv_arc_set_bg_angles(ear_inner, 55, 295);
+    lv_obj_set_style_arc_width(ear_inner, 2, LV_PART_MAIN);
+    lv_obj_set_style_arc_color(ear_inner, color(COLOR_XIAOZHI), LV_PART_MAIN);
+    lv_obj_set_style_arc_rounded(ear_inner, true, LV_PART_MAIN);
+    lv_obj_set_style_arc_opa(ear_inner, LV_OPA_TRANSP, LV_PART_INDICATOR);
+    lv_obj_remove_flag(ear_inner, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_t *ear_lobe = lv_obj_create(ear);
+    lv_obj_remove_style_all(ear_lobe);
+    lv_obj_set_size(ear_lobe, 4, 4);
+    lv_obj_set_style_radius(ear_lobe, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_color(ear_lobe, color(COLOR_XIAOZHI), 0);
+    lv_obj_set_style_bg_opa(ear_lobe, LV_OPA_COVER, 0);
+    lv_obj_align(ear_lobe, LV_ALIGN_BOTTOM_RIGHT, -2, -2);
+    lv_obj_remove_flag(ear_lobe, LV_OBJ_FLAG_CLICKABLE);
+
+    lv_obj_t *listen_text = make_label(s_xiaozhi_listen_badge, "聆听中",
+                                      &ui_font_cjk_20, COLOR_XIAOZHI);
+    lv_obj_set_width(listen_text, 82);
+    lv_obj_set_style_text_align(listen_text, LV_TEXT_ALIGN_CENTER, 0);
     s_xiaozhi_status_pill = lv_obj_create(content);
     lv_obj_set_size(s_xiaozhi_status_pill, 252, 56);
     lv_obj_set_style_radius(s_xiaozhi_status_pill, LV_RADIUS_CIRCLE, 0);
@@ -1555,7 +1620,10 @@ static void xiaozhi_sync_config(void)
 
     if (s_xiaozhi_request_lock == NULL) return;
     if (xSemaphoreTake(s_xiaozhi_request_lock, pdMS_TO_TICKS(50)) != pdTRUE) return;
-    s_xiaozhi_want_enabled = s_snapshot.xiaozhi_enabled;
+    /* A paired device must keep working when the management center is
+       temporarily unreachable. Only an explicit disabled module from a valid
+       snapshot should suppress the cached Xiaozhi session. */
+    s_xiaozhi_want_enabled = s_snapshot.valid ? s_snapshot.xiaozhi_enabled : true;
     s_xiaozhi_want_config = config;
     xSemaphoreGive(s_xiaozhi_request_lock);
 }
@@ -1583,7 +1651,7 @@ static void xiaozhi_supervisor_task(void *argument)
             xSemaphoreGive(s_xiaozhi_request_lock);
         }
 
-        const bool want_run = want_enabled && want_config.server_url[0] != '\0';
+        const bool want_run = want_enabled;
         if (want_run && !s_xiaozhi.running) {
             xiaozhi_client_configure(&s_xiaozhi, &want_config);
             xiaozhi_client_start(&s_xiaozhi);
@@ -1696,10 +1764,15 @@ static void xiaozhi_face_timer(lv_timer_t *timer)
         } else {
             ESP_LOGI(TAG, "voice wake: Xiaozhi face already active");
         }
+        xiaozhi_listen_badge_set_visible(true);
         render_xiaozhi_expression();
         return;
     }
-    if (s_current == s_xiaozhi_page && s_screen_on) render_xiaozhi_expression();
+    if (s_current == s_xiaozhi_page && s_screen_on) {
+        xiaozhi_listen_badge_set_visible(
+            xiaozhi_client_state(&s_xiaozhi) == XIAOZHI_STATE_LISTENING);
+        render_xiaozhi_expression();
+    }
 }
 
 
@@ -2114,6 +2187,7 @@ static void update_snapshot(const codex_snapshot_t *snapshot)
     } else {
         lv_obj_add_flag(s_xiaozhi_status_pill, LV_OBJ_FLAG_HIDDEN);
     }
+    xiaozhi_listen_badge_set_visible(xiaozhi_session == XIAOZHI_STATE_LISTENING);
     if (activation_code != NULL) {
         /* Pairing needs the widest single hint row we have. */
         lv_obj_add_flag(s_time_xiaozhi, LV_OBJ_FLAG_HIDDEN);

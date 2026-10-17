@@ -28,6 +28,7 @@ idf_component_register(
         "generated/ui_font_cjk_28.c"
         "generated/ui_font_digits_64.c"
         "generated/ui_icons.c"
+        "generated/wake_reply_audio.c"
     INCLUDE_DIRS "." "generated" "emotion"
     REQUIRES
         esp_event
