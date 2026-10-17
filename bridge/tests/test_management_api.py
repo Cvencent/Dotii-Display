@@ -130,7 +130,7 @@ class ManagementApiTests(unittest.TestCase):
         self.assertIn("modules", payload)
         self.assertIn("display", payload)
         self.assertIn("xiaozhi", payload)
-        self.assertEqual(payload["character"], "dotii")
+        self.assertEqual(payload["character"], "auto")
         self.assertTrue(payload["dotii"]["animations"])
         self.assertTrue(payload["dotii"]["fixed_states"])
         self.assertNotIn("custom", payload)

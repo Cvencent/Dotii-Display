@@ -37,6 +37,7 @@ const character_def_t *character_pack_fallback(void);
 size_t character_pack_count(void);
 const character_def_t *character_pack_at(size_t index);
 const char *character_pack_id_at(size_t index);
+size_t character_pack_next_index(size_t index);
 
 #ifdef __cplusplus
 }

@@ -93,3 +93,9 @@ const char *character_pack_id_at(size_t index)
     }
     return k_characters[index].id;
 }
+
+size_t character_pack_next_index(size_t index)
+{
+    const size_t count = character_pack_count();
+    return count == 0 ? 0 : (index + 1) % count;
+}

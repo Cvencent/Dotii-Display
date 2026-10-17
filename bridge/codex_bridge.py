@@ -281,7 +281,7 @@ def default_dotii_config() -> dict[str, Any]:
     """
     return {
         "revision": 0,
-        "character": "dotii",
+        "character": "auto",
         "animations": {
             expression_id: {
                 "states": list(DOTII_DEFAULT_BUSINESS_ASSIGNMENTS.get(expression_id, ())),

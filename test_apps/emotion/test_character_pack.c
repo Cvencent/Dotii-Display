@@ -45,10 +45,19 @@ static void test_ring_integrity(void)
     assert(character_pack_id_at(count) == NULL);
 }
 
+static void test_next_index_wraps(void)
+{
+    const size_t count = character_pack_count();
+    assert(count >= 4);
+    assert(character_pack_next_index(0) == 1);
+    assert(character_pack_next_index(count - 1) == 0);
+    assert(character_pack_next_index(count + 7) < count);
+}
 int main(void)
 {
     test_lookup();
     test_ring_integrity();
+    test_next_index_wraps();
     printf("character_pack tests passed\n");
     return 0;
 }

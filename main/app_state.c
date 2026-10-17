@@ -116,7 +116,7 @@ void app_state_make_preview(codex_snapshot_t *snapshot)
     snapshot->conversation_mode = CODEX_CONVERSATION_PROGRESS;
     snapshot->codex_enabled = true;
     snapshot->xiaozhi_enabled = true;
-    strlcpy(snapshot->character_id, "dotii", sizeof(snapshot->character_id));
+    strlcpy(snapshot->character_id, "auto", sizeof(snapshot->character_id));
     snapshot->custom_enabled = false;
     snapshot->dotii_enabled = false;
     snapshot->custom_ring_enabled = true;

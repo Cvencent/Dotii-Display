@@ -118,7 +118,7 @@ class ModuleOnDemandTests(unittest.TestCase):
     def test_dotii_expression_mapping_is_static_device_contract(self):
         config = default_dotii_config()
 
-        self.assertEqual(config["character"], "dotii")
+        self.assertEqual(config["character"], "auto")
         self.assertEqual(set(config["animations"]), set(codex_bridge.DOTII_EXPRESSION_IDS))
         self.assertEqual(
             config["animations"]["working"]["states"], ["codex_working"]

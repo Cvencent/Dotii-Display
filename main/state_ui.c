@@ -127,7 +127,9 @@ static emotion_engine_t s_xiaozhi_engine;
 static emotion_router_t s_xiaozhi_router;
 static emotion_render_t s_xiaozhi_render;
 static bool s_xiaozhi_engine_ready;
-static char s_xiaozhi_character[16] = "dotii";
+static char s_xiaozhi_character[16] = "auto";
+static size_t s_xiaozhi_character_index;
+static uint32_t s_xiaozhi_character_changed_ms;
 static xiaozhi_client_t s_xiaozhi;
 /* Websocket start/stop can block for a long time (TLS connect, close
    handshake). Those calls must never run inside an LVGL timer: a stalled close
@@ -1427,10 +1429,8 @@ static void build_xiaozhi(void)
     lv_obj_remove_flag(face, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_remove_flag(face, LV_OBJ_FLAG_CLICKABLE);
     emotion_render_attach(&s_xiaozhi_render, face, SCREEN_SIZE);
-    /* The Xiaozhi page is an always-on companion face. A pure black body on
-       the AMOLED keeps the panel visually quiet (black pixels are unlit) and
-       leaves only the animated eyes visible. */
-    emotion_render_set_body_override(&s_xiaozhi_render, true, 0x000000);
+    /* Keep the selected character palette visible. A previous pure-black body
+       override made every character look identical on the Xiaozhi page. */
 
     /* Listening gets its own compact badge so the current microphone state is
        readable without covering the face with the full session status pill. */
@@ -1709,10 +1709,29 @@ static void render_xiaozhi_expression(void)
     const emotion_engine_state_t *state = emotion_engine_state(&s_xiaozhi_engine);
     const emotion_def_t *def = emotion_catalog_by_id(emotion_router_active_id(&s_xiaozhi_router));
     if (def == NULL) def = emotion_catalog_fallback();
-    const char *character_id = s_snapshot.character_id[0] != '\0' ? s_snapshot.character_id : s_xiaozhi_character;
-    const character_def_t *pack = character_pack_lookup(character_id);
+    const char *configured = s_snapshot.character_id[0] != '\0' ? s_snapshot.character_id : s_xiaozhi_character;
+    /* Older management snapshots persisted dotii as the default even though
+       the character picker no longer exists. Treat that value as the legacy
+       default so those devices rotate too. */
+    const bool auto_rotate = strcmp(configured, "auto") == 0 ||
+                             strcmp(configured, "dotii") == 0 ||
+                             strcmp(configured, "") == 0;
+    const size_t character_count = character_pack_count();
+    if (auto_rotate && character_count > 1) {
+        if (s_xiaozhi_character_changed_ms == 0) {
+            s_xiaozhi_character_changed_ms = now;
+        } else if (now - s_xiaozhi_character_changed_ms >= 12000u) {
+            s_xiaozhi_character_index = character_pack_next_index(s_xiaozhi_character_index);
+            s_xiaozhi_character_changed_ms = now;
+            ESP_LOGI(TAG, "xiaozhi: character -> %s", character_pack_id_at(s_xiaozhi_character_index));
+        }
+    } else {
+        s_xiaozhi_character_changed_ms = now;
+    }
+    const character_def_t *pack = auto_rotate
+        ? character_pack_at(s_xiaozhi_character_index)
+        : character_pack_lookup(configured);
     if (pack == NULL) pack = character_pack_fallback();
-
     emotion_render_update(&s_xiaozhi_render, state, def, pack);
 }
 static void xiaozhi_listen_hold(void)
