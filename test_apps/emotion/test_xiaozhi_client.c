@@ -1,4 +1,5 @@
 #include <assert.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -61,12 +62,84 @@ static void test_hello_and_bad_input(void)
     assert(xiaozhi_client_state_emotion(XIAOZHI_STATE_DISABLED) == NULL);
 }
 
+static void test_output_volume_clamps_to_supported_range(void)
+{
+    xiaozhi_client_t client;
+    xiaozhi_client_init(&client);
+
+    assert(xiaozhi_client_get_volume(&client) == 80);
+    assert(xiaozhi_client_set_volume(&client, 125, false) == 100);
+    assert(xiaozhi_client_get_volume(&client) == 100);
+    assert(xiaozhi_client_set_volume(&client, -20, false) == 0);
+    assert(xiaozhi_client_get_volume(&client) == 0);
+    assert(xiaozhi_client_set_volume(&client, 42, false) == 42);
+    assert(xiaozhi_client_get_volume(&client) == 42);
+}
+
+static void test_pcm_amplifier_scales_and_saturates(void)
+{
+    int16_t samples[] = {
+        0,
+        100,
+        -100,
+        10000,
+        -10000,
+        INT16_MAX,
+        INT16_MIN,
+    };
+
+    xiaozhi_pcm_amplify(samples, sizeof(samples) / sizeof(samples[0]), 8);
+    assert(samples[0] == 0);
+    assert(samples[1] == 800);
+    assert(samples[2] == -800);
+    assert(samples[3] == INT16_MAX);
+    assert(samples[4] == -INT16_MAX);
+    assert(samples[5] == INT16_MAX);
+    assert(samples[6] == -INT16_MAX);
+}
+
+static void test_pcm_stereo_downmix_keeps_in_phase_speech(void)
+{
+    int16_t samples[] = {
+        100, -100,
+        300, 100,
+        INT16_MAX, INT16_MAX,
+        INT16_MIN, INT16_MIN,
+    };
+
+    xiaozhi_pcm_downmix_stereo(samples, 4);
+    assert(samples[0] == 0);
+    assert(samples[1] == 200);
+    assert(samples[2] == INT16_MAX);
+    assert(samples[3] == INT16_MIN);
+}
+
+static void test_wake_event_is_consumed_once(void)
+{
+    xiaozhi_client_t client;
+    xiaozhi_client_init(&client);
+
+    assert(!xiaozhi_client_take_wake_event(&client));
+    xiaozhi_client_notify_wake_word(&client);
+    assert(xiaozhi_client_take_wake_event(&client));
+    assert(!xiaozhi_client_take_wake_event(&client));
+
+    xiaozhi_client_notify_wake_word(&client);
+    xiaozhi_client_notify_wake_word(&client);
+    assert(xiaozhi_client_take_wake_event(&client));
+    assert(!xiaozhi_client_take_wake_event(&client));
+}
+
 int main(void)
 {
     test_emotion_event();
     test_notify_music();
     test_state_mapping();
     test_hello_and_bad_input();
+    test_output_volume_clamps_to_supported_range();
+    test_pcm_amplifier_scales_and_saturates();
+    test_pcm_stereo_downmix_keeps_in_phase_speech();
+    test_wake_event_is_consumed_once();
     printf("xiaozhi_client tests passed\n");
     return 0;
 }

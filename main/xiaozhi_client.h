@@ -1,7 +1,9 @@
 #pragma once
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
+#include <stdatomic.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -63,6 +65,8 @@ typedef struct {
     void *output_resampler;
     void *speaker;
     void *microphone;
+    uint8_t output_volume;
+    atomic_bool wake_event_pending;
     bool codec_ready;
     int server_sample_rate;
     int server_frame_duration;
@@ -97,6 +101,21 @@ const char *xiaozhi_client_state_emotion(xiaozhi_session_state_t state);
 /* Push-to-talk control used by the round-screen touch UI. */
 bool xiaozhi_client_send_listen(xiaozhi_client_t *client, bool start);
 bool xiaozhi_client_send_abort(xiaozhi_client_t *client);
+
+/* Speaker volume used by both the control center and the codec layer. */
+uint8_t xiaozhi_client_get_volume(const xiaozhi_client_t *client);
+uint8_t xiaozhi_client_set_volume(xiaozhi_client_t *client, int volume, bool persist);
+
+/* Voice wake is produced by the audio task and consumed by the LVGL thread. */
+void xiaozhi_client_notify_wake_word(xiaozhi_client_t *client);
+bool xiaozhi_client_take_wake_event(xiaozhi_client_t *client);
+
+/* Apply a fixed linear gain in place. Full-scale samples are clipped to the
+   signed 16-bit range so the same block can feed wake word and uplink Opus. */
+void xiaozhi_pcm_amplify(int16_t *samples, size_t sample_count, uint16_t multiplier);
+
+/* Average interleaved left/right microphone samples in place. */
+void xiaozhi_pcm_downmix_stereo(int16_t *samples, size_t frame_count);
 
 /* Parses a server text JSON frame. Returns true when the state changed. */
 bool xiaozhi_client_handle_text(xiaozhi_client_t *client, const char *json);

@@ -1,5 +1,6 @@
 #include "xiaozhi_client.h"
 
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -44,6 +45,11 @@
 #define XIAOZHI_FRAME_MS 60
 #define XIAOZHI_INPUT_RATE 16000
 #define XIAOZHI_CODEC_RATE 24000
+#define XIAOZHI_DEFAULT_VOLUME 80
+#define XIAOZHI_INPUT_GAIN 8
+#define XIAOZHI_MIC_GAIN_DB 37.0f
+#define XIAOZHI_MIC_TASK_STACK 24576
+#define XIAOZHI_PLAYBACK_TASK_STACK 24576
 
 static const char *TAG = "xiaozhi";
 
@@ -66,6 +72,49 @@ static void copy_bounded(char *dst, size_t size, const char *src)
 static bool starts_with(const char *value, const char *prefix)
 {
     return value != NULL && prefix != NULL && strncmp(value, prefix, strlen(prefix)) == 0;
+}
+
+void xiaozhi_pcm_amplify(int16_t *samples, size_t sample_count, uint16_t multiplier)
+{
+    if (samples == NULL || sample_count == 0) return;
+    for (size_t i = 0; i < sample_count; ++i) {
+        int32_t scaled = (int32_t)samples[i] * (int32_t)multiplier;
+        if (scaled > INT16_MAX) scaled = INT16_MAX;
+        if (scaled < -INT16_MAX) scaled = -INT16_MAX;
+        samples[i] = (int16_t)scaled;
+    }
+}
+
+void xiaozhi_pcm_downmix_stereo(int16_t *samples, size_t frame_count)
+{
+    if (samples == NULL || frame_count == 0) return;
+    for (size_t i = 0; i < frame_count; ++i) {
+        const int32_t mixed = (int32_t)samples[i * 2] + samples[i * 2 + 1];
+        samples[i] = (int16_t)(mixed / 2);
+    }
+}
+
+void xiaozhi_client_notify_wake_word(xiaozhi_client_t *client)
+{
+    if (client != NULL) {
+        atomic_store_explicit(&client->wake_event_pending, true, memory_order_release);
+    }
+}
+
+bool xiaozhi_client_take_wake_event(xiaozhi_client_t *client)
+{
+    return client != NULL &&
+           atomic_exchange_explicit(&client->wake_event_pending, false, memory_order_acq_rel);
+}
+
+static void persist_volume(const xiaozhi_client_t *client)
+{
+    if (client == NULL) return;
+    nvs_handle_t handle;
+    if (nvs_open(XIAOZHI_NAMESPACE, NVS_READWRITE, &handle) != ESP_OK) return;
+    (void)nvs_set_u8(handle, "volume", client->output_volume);
+    (void)nvs_commit(handle);
+    nvs_close(handle);
 }
 
 /* The management center stores whatever address the user paired against, and
@@ -207,6 +256,10 @@ static void load_persisted(xiaozhi_client_t *client)
     (void)nvs_get_str(handle, "activation_msg", client->activation_message, &length);
     uint8_t paired = 0;
     if (nvs_get_u8(handle, "paired", &paired) != ESP_OK) paired = 0;
+    uint8_t volume = XIAOZHI_DEFAULT_VOLUME;
+    if (nvs_get_u8(handle, "volume", &volume) == ESP_OK && volume <= 100) {
+        client->output_volume = volume;
+    }
     nvs_close(handle);
     /* A websocket address alone does not mean the device is paired: older
        firmware stored the endpoint before the user ever bound a code. Only an
@@ -232,9 +285,11 @@ void xiaozhi_client_init(xiaozhi_client_t *client)
 {
     if (client == NULL) return;
     memset(client, 0, sizeof(*client));
+    atomic_init(&client->wake_event_pending, false);
     client->state = XIAOZHI_STATE_DISABLED;
     client->server_sample_rate = 24000;
     client->server_frame_duration = XIAOZHI_FRAME_MS;
+    client->output_volume = XIAOZHI_DEFAULT_VOLUME;
     load_persisted(client);
 }
 
@@ -319,6 +374,27 @@ const char *xiaozhi_client_state_emotion(xiaozhi_session_state_t state)
     case XIAOZHI_STATE_ERROR: return "34";
     default: return NULL;
     }
+}
+
+uint8_t xiaozhi_client_get_volume(const xiaozhi_client_t *client)
+{
+    return client == NULL ? XIAOZHI_DEFAULT_VOLUME : client->output_volume;
+}
+
+uint8_t xiaozhi_client_set_volume(xiaozhi_client_t *client, int volume, bool persist)
+{
+    if (client == NULL) return XIAOZHI_DEFAULT_VOLUME;
+    if (volume < 0) volume = 0;
+    if (volume > 100) volume = 100;
+    client->output_volume = (uint8_t)volume;
+#if CONFIG_XIAOZHI_ENABLE
+    if (client->codec_ready && client->speaker != NULL) {
+        (void)esp_codec_dev_set_out_vol((esp_codec_dev_handle_t)client->speaker,
+                                        client->output_volume);
+    }
+#endif
+    if (persist) persist_volume(client);
+    return client->output_volume;
 }
 
 static void set_emotion(xiaozhi_client_t *client, const char *name)
@@ -726,7 +802,7 @@ static bool music_decoders_ensure(void)
 static bool music_write_pcm(xiaozhi_client_t *client,
                             esp_ae_rate_cvt_handle_t *resampler,
                             int *resampler_rate,
-                            const uint8_t *data, uint32_t size,
+                            uint8_t *data, uint32_t size,
                             const esp_audio_simple_dec_info_t *info)
 {
     if (client == NULL || data == NULL || info == NULL ||
@@ -739,7 +815,7 @@ static bool music_write_pcm(xiaozhi_client_t *client,
     const int frames = (int)(size / ((uint32_t)channels * sizeof(int16_t)));
     if (frames <= 0) return true;
 
-    const int16_t *source = (const int16_t *)data;
+    int16_t *source = (int16_t *)data;
     int16_t *mono = NULL;
     if (channels == 2) {
         mono = malloc((size_t)frames * sizeof(int16_t));
@@ -749,7 +825,7 @@ static bool music_write_pcm(xiaozhi_client_t *client,
             mono[index] = (int16_t)(mixed / 2);
         }
     }
-    const int16_t *pcm = mono != NULL ? mono : source;
+    int16_t *pcm = mono != NULL ? mono : source;
 
     bool ok = true;
     if (info->sample_rate == XIAOZHI_CODEC_RATE) {
@@ -987,13 +1063,21 @@ static bool wake_word_start(xiaozhi_client_t *client)
     const esp_wn_iface_t *iface = model_name != NULL ?
         esp_wn_handle_from_name(model_name) : NULL;
     model_iface_data_t *data = iface != NULL ?
-        iface->create(model_name, DET_MODE_95) : NULL;
+        iface->create(model_name, DET_MODE_90) : NULL;
     if (data == NULL || iface->get_samp_rate(data) != XIAOZHI_INPUT_RATE) {
         ESP_LOGW(TAG, "wake model initialization failed");
         if (data != NULL) iface->destroy(data);
         esp_srmodel_deinit(models);
         return false;
     }
+    ESP_LOGI(TAG, "wake model format: rate=%d chunk=%d channels=%d",
+             iface->get_samp_rate(data), iface->get_samp_chunksize(data),
+             iface->get_channel_num(data));
+    if (!iface->set_det_threshold(data, 0.50f, 1)) {
+        ESP_LOGW(TAG, "wake threshold override failed");
+    }
+    ESP_LOGI(TAG, "wake threshold=%.3f",
+             iface->get_det_threshold(data, 1));
     client->wake_models = models;
     client->wake_iface = (void *)iface;
     client->wake_data = data;
@@ -1019,6 +1103,7 @@ static void playback_task(void *argument);
 static void microphone_task(void *argument);
 static bool audio_init(xiaozhi_client_t *client);
 static void xiaozhi_start_wake_task(xiaozhi_client_t *client);
+static void xiaozhi_detect_wake_word(xiaozhi_client_t *client);
 
 /* Worker startup is serialized here on purpose: the playback and microphone
    tasks used to initialize the shared codec/Opus handles lazily from their
@@ -1030,7 +1115,7 @@ static bool xiaozhi_start_workers(xiaozhi_client_t *client)
     (void)audio_init(client);
     if (client->playback_task == NULL) {
         TaskHandle_t handle = NULL;
-        if (xTaskCreatePinnedToCoreWithCaps(playback_task, "xz_play", 4096, client, 4,
+        if (xTaskCreatePinnedToCoreWithCaps(playback_task, "xz_play", XIAOZHI_PLAYBACK_TASK_STACK, client, 4,
                                              &handle, tskNO_AFFINITY,
                                              MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) == pdPASS) {
             client->playback_task = handle;
@@ -1038,7 +1123,8 @@ static bool xiaozhi_start_workers(xiaozhi_client_t *client)
     }
     if (client->microphone_task == NULL) {
         TaskHandle_t handle = NULL;
-        if (xTaskCreatePinnedToCoreWithCaps(microphone_task, "xz_mic", 4096, client, 5,
+        if (xTaskCreatePinnedToCoreWithCaps(microphone_task, "xz_mic",
+                                             XIAOZHI_MIC_TASK_STACK, client, 5,
                                              &handle, tskNO_AFFINITY,
                                              MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) == pdPASS) {
             client->microphone_task = handle;
@@ -1151,15 +1237,21 @@ static bool audio_init(xiaozhi_client_t *client)
     if (client->microphone == NULL) client->microphone = bsp_audio_codec_microphone_init();
     if (client->microphone == NULL) return false;
 
-    esp_codec_dev_sample_info_t info = {
+    esp_codec_dev_sample_info_t speaker_info = {
         .sample_rate = XIAOZHI_CODEC_RATE,
         .channel = 1,
         .bits_per_sample = 16,
     };
-    if (esp_codec_dev_open((esp_codec_dev_handle_t)client->speaker, &info) != ESP_CODEC_DEV_OK) {
+    esp_codec_dev_sample_info_t microphone_info = {
+        .sample_rate = XIAOZHI_CODEC_RATE,
+        .channel = 2,
+        .bits_per_sample = 16,
+    };
+    if (esp_codec_dev_open((esp_codec_dev_handle_t)client->speaker, &speaker_info) != ESP_CODEC_DEV_OK) {
         return false;
     }
-    if (esp_codec_dev_open((esp_codec_dev_handle_t)client->microphone, &info) != ESP_CODEC_DEV_OK) {
+    if (esp_codec_dev_open((esp_codec_dev_handle_t)client->microphone,
+                           &microphone_info) != ESP_CODEC_DEV_OK) {
         return false;
     }
     if (client->input_resampler == NULL) {
@@ -1176,7 +1268,13 @@ static bool audio_init(xiaozhi_client_t *client)
             return false;
         }
     }
-    esp_codec_dev_set_out_vol((esp_codec_dev_handle_t)client->speaker, 80);
+    esp_codec_dev_set_out_vol((esp_codec_dev_handle_t)client->speaker,
+                              client->output_volume);
+    const int mic_gain_result = esp_codec_dev_set_in_gain(
+        (esp_codec_dev_handle_t)client->microphone, XIAOZHI_MIC_GAIN_DB);
+    if (mic_gain_result != ESP_CODEC_DEV_OK) {
+        ESP_LOGW(TAG, "microphone gain setup failed: %d", mic_gain_result);
+    }
     client->codec_ready = true;
     ESP_LOGI(TAG, "codec ready: dma free=%u largest=%u internal=%u",
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_DMA),
@@ -1302,7 +1400,7 @@ static void microphone_task(void *argument)
 {
     xiaozhi_client_t *client = (xiaozhi_client_t *)argument;
     const int source_samples = XIAOZHI_CODEC_RATE * XIAOZHI_FRAME_MS / 1000;
-    int16_t *source = malloc((size_t)source_samples * sizeof(int16_t));
+    int16_t *source = malloc((size_t)source_samples * 2 * sizeof(int16_t));
     int16_t *resampled = malloc((size_t)XIAOZHI_INPUT_RATE * sizeof(int16_t));
     uint8_t *encoded = malloc(2048);
     if (source == NULL || resampled == NULL || encoded == NULL) {
@@ -1311,16 +1409,39 @@ static void microphone_task(void *argument)
         return;
     }
     while (client->running) {
-        if (!client->listening || !client->connected || !audio_init(client) || !ensure_encoder(client)) {
+        if (!audio_init(client)) {
+            vTaskDelay(pdMS_TO_TICKS(20));
+            continue;
+        }
+        /* ES7210, the input resampler and WakeNet form one continuous capture
+           pipeline. The official audio service owns that pipeline from a
+           single input task; allowing the wake and upload paths to read it
+           concurrently corrupts the codec/resampler state when a wake word
+           switches the session to listening. */
+        if (!client->listening) {
+            if (client->connected && client->wake_ready &&
+                client->music_task == NULL &&
+                client->state != XIAOZHI_STATE_SPEAKING &&
+                client->state != XIAOZHI_STATE_THINKING &&
+                client->state != XIAOZHI_STATE_MUSIC) {
+                xiaozhi_detect_wake_word(client);
+            } else {
+                vTaskDelay(pdMS_TO_TICKS(10));
+            }
+            continue;
+        }
+        if (!client->connected || !ensure_encoder(client)) {
             vTaskDelay(pdMS_TO_TICKS(20));
             continue;
         }
         int read = esp_codec_dev_read((esp_codec_dev_handle_t)client->microphone, source,
-                                      source_samples * (int)sizeof(int16_t));
+                                      source_samples * 2 * (int)sizeof(int16_t));
         if (read != ESP_CODEC_DEV_OK) {
             vTaskDelay(pdMS_TO_TICKS(20));
             continue;
         }
+        xiaozhi_pcm_downmix_stereo(source, (size_t)source_samples);
+        xiaozhi_pcm_amplify(source, (size_t)source_samples, XIAOZHI_INPUT_GAIN);
         if (client->input_resampler == NULL) {
             vTaskDelay(pdMS_TO_TICKS(20));
             continue;
@@ -1427,7 +1548,7 @@ static void xiaozhi_detect_wake_word(xiaozhi_client_t *client)
         return;
     }
     int16_t *chunk = malloc((size_t)max_output_samples * sizeof(int16_t));
-    int16_t *source = malloc((size_t)source_samples * sizeof(int16_t));
+    int16_t *source = malloc((size_t)source_samples * 2 * sizeof(int16_t));
     if (chunk == NULL || source == NULL) {
         free(chunk);
         free(source);
@@ -1435,8 +1556,11 @@ static void xiaozhi_detect_wake_word(xiaozhi_client_t *client)
     }
 
     const int read = esp_codec_dev_read((esp_codec_dev_handle_t)client->microphone,
-                                        source, source_samples * (int)sizeof(int16_t));
+                                        source,
+                                        source_samples * 2 * (int)sizeof(int16_t));
     if (read == ESP_CODEC_DEV_OK) {
+        xiaozhi_pcm_downmix_stereo(source, (size_t)source_samples);
+        xiaozhi_pcm_amplify(source, (size_t)source_samples, XIAOZHI_INPUT_GAIN);
         uint32_t output_samples = max_output_samples;
         if (esp_ae_rate_cvt_process(client->input_resampler,
                                     (esp_ae_sample_t)source, (uint32_t)source_samples,
@@ -1447,6 +1571,7 @@ static void xiaozhi_detect_wake_word(xiaozhi_client_t *client)
             if (detected > 0) {
                 ESP_LOGI(TAG, "wake word detected: 你好小智");
                 if (send_listen_mode(client, true, "auto")) {
+                    xiaozhi_client_notify_wake_word(client);
                     ESP_LOGI(TAG, "auto listening started");
                 }
             }
@@ -1486,7 +1611,6 @@ static void wake_task(void *argument)
        until the next reboot. */
     uint32_t offline_since_ms = 0;
     while (client->running) {
-        xiaozhi_detect_wake_word(client);
         if (client->connected) {
             offline_since_ms = 0;
         } else if (offline_since_ms == 0) {

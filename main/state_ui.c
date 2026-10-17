@@ -120,6 +120,8 @@ static lv_obj_t *s_settings_bridge;
 static lv_obj_t *s_settings_reset_button;
 static lv_obj_t *s_settings_reset_detail;
 static lv_obj_t *s_brightness_slider;
+static lv_obj_t *s_volume_slider;
+static lv_obj_t *s_volume_label;
 static emotion_engine_t s_xiaozhi_engine;
 static emotion_router_t s_xiaozhi_router;
 static emotion_render_t s_xiaozhi_render;
@@ -162,6 +164,7 @@ static bool s_screen_on = true;
 static bool s_screen_saver_active;
 static bool s_wake_touch_in_progress;
 static bool s_xiaozhi_touch_listening;
+static bool s_voice_wake_transition_pending;
 static bool s_screen_load_pending;
 static lv_obj_t *s_pending_screen;
 typedef enum {
@@ -375,6 +378,10 @@ static void load_screen_commit(void *user_data)
         lv_obj_invalidate(screen);
         lv_refr_now(lv_obj_get_display(screen));
         s_screen_load_pending = false;
+        if (s_voice_wake_transition_pending && screen == s_xiaozhi_page) {
+            s_voice_wake_transition_pending = false;
+            ESP_LOGI(TAG, "voice wake: Xiaozhi face is active");
+        }
         return;
     }
 
@@ -522,6 +529,18 @@ static void brightness_changed(lv_event_t *event)
     if (lv_event_get_code(event) != LV_EVENT_VALUE_CHANGED) return;
     s_brightness = lv_slider_get_value(lv_event_get_target_obj(event));
     if (s_screen_on) bsp_display_brightness_set(s_brightness);
+}
+
+static void volume_changed(lv_event_t *event)
+{
+    const lv_event_code_t code = lv_event_get_code(event);
+    if (code != LV_EVENT_VALUE_CHANGED && code != LV_EVENT_RELEASED) return;
+    const int requested = lv_slider_get_value(lv_event_get_target_obj(event));
+    const uint8_t volume = xiaozhi_client_set_volume(
+        &s_xiaozhi, requested, code == LV_EVENT_RELEASED);
+    if (s_volume_label != NULL) {
+        lv_label_set_text_fmt(s_volume_label, "音量 %u%%", (unsigned)volume);
+    }
 }
 
 static void screen_off(void)
@@ -1663,6 +1682,23 @@ static void xiaozhi_touch_event(lv_event_t *event)
 static void xiaozhi_face_timer(lv_timer_t *timer)
 {
     (void)timer;
+    if (!s_screen_load_pending &&
+        xiaozhi_client_take_wake_event(&s_xiaozhi)) {
+        if (s_screen_saver_active) {
+            s_screen_saver_active = false;
+            s_before_screen_saver = NULL;
+        }
+        screen_wake();
+        s_last_activity = lv_tick_get();
+        if (s_current != s_xiaozhi_page) {
+            s_voice_wake_transition_pending = true;
+            load_screen(s_xiaozhi_page, true);
+        } else {
+            ESP_LOGI(TAG, "voice wake: Xiaozhi face already active");
+        }
+        render_xiaozhi_expression();
+        return;
+    }
     if (s_current == s_xiaozhi_page && s_screen_on) render_xiaozhi_expression();
 }
 
@@ -1726,10 +1762,26 @@ static void build_control(void)
     lv_obj_set_style_bg_color(s_brightness_slider, color(0xE9FFF7), LV_PART_KNOB);
     lv_obj_add_event_cb(s_brightness_slider, brightness_changed, LV_EVENT_VALUE_CHANGED, NULL);
 
+    s_volume_label = make_label(safe, "音量", &s_ui_font, COLOR_MUTED);
+    lv_obj_set_style_transform_scale(s_volume_label, 282, 0);
+    lv_obj_set_pos(s_volume_label, 12, 131);
+    lv_label_set_text_fmt(s_volume_label, "音量 %u%%",
+                          (unsigned)xiaozhi_client_get_volume(&s_xiaozhi));
+    s_volume_slider = lv_slider_create(safe);
+    lv_obj_set_size(s_volume_slider, 330, 22);
+    lv_obj_set_pos(s_volume_slider, 14, 168);
+    lv_slider_set_range(s_volume_slider, 0, 100);
+    lv_slider_set_value(s_volume_slider,
+                        xiaozhi_client_get_volume(&s_xiaozhi), LV_ANIM_OFF);
+    lv_obj_set_style_bg_color(s_volume_slider, color(0x272D2C), LV_PART_MAIN);
+    lv_obj_set_style_bg_color(s_volume_slider, color(COLOR_XIAOZHI), LV_PART_INDICATOR);
+    lv_obj_set_style_bg_color(s_volume_slider, color(0xE9FFF7), LV_PART_KNOB);
+    lv_obj_add_event_cb(s_volume_slider, volume_changed, LV_EVENT_ALL, NULL);
+
     lv_obj_t *row = lv_obj_create(safe);
     lv_obj_remove_style_all(row);
     lv_obj_set_size(row, 340, 82);
-    lv_obj_set_pos(row, 9, 156);
+    lv_obj_set_pos(row, 9, 210);
     lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_column(row, 9, 0);
