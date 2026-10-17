@@ -9,10 +9,14 @@
 #define EB_RING_POINTS 48u
 #define EB_EXPRESSION_COUNT 25u
 #define EB_SHAPE_COUNT 3u
-#define EB_LOOK_COUNT 32u
+#define EB_LOOK_COUNT 33u
 
 static const char *const k_ids[EB_LOOK_COUNT] = {
-    "00", "01", "02", "03", "04", "05", "06", "07", "10", "11", "12", "13", "14", "15", "16", "17", "18", "19", "20", "21", "30", "31", "32", "33", "34", "35", "36", "37", "38", "39", "40", "41",
+    "00", "01", "02", "03", "04", "05", "06", "07", "10", "11", "12", "13", "14", "15", "16", "17", "18", "19", "20", "21", "30", "31", "32", "33", "34", "35", "36", "37", "38", "39", "40", "41", "42",
+};
+
+static const char *const k_names[EB_LOOK_COUNT] = {
+    "sleeping", "waking", "idle", "curious", "spacing_out", "booting", "dormant", "shake_awake", "happy", "puzzled", "down", "surprised", "shy", "tired", "focused", "panicked", "resigned", "satisfied", "confused", "angry", "thinking", "receiving", "busy", "done", "error", "listening", "loading", "recalling", "refusing", "replying", "searching", "powering_off", "music",
 };
 
 static const int16_t k_expression_points[] = {
@@ -515,6 +519,9 @@ static const eb_look_t k_looks[EB_LOOK_COUNT] = {
     { { 13u, 22u, 0u, 0u, 0u, 0u }, 2u, 6000u, 9000u, 10u, 0u, 0u, 0u,
       { 0.0f, 3.0f, 0.0f, 1.0f }, { { 0.0f, 0.0f, 0.0f }, { 0.0f, 0.0f, 0.0f }, { 0.0f, 0.0f, 0.0f }, { 0.0f, 0.0f, 0.0f }, { 1.0f, 1.0f, 1.0f }, { 1.0f, 1.0f, 1.0f }, { 0.0f, 0.0f, 0.0f } },
       { { 0, 0, 0, 0.0f, 0.0f, 0.0f }, { 0, 0, 0, 0.0f, 0.0f, 0.0f }, { 0, 0, 0, 0.0f, 0.0f, 0.0f } } },
+    { { 2u, 11u, 17u, 19u, 0u, 0u }, 4u, 900u, 1600u, 2u, 1400u, 2600u, 3u,
+      { 0.0f, 0.0f, 0.0f, 1.0f }, { { 0.0f, 0.0f, 0.0f }, { 0.0f, 0.0f, 0.0f }, { 0.0f, 0.0f, 0.0f }, { 0.0f, 0.0f, 0.0f }, { 1.0f, 1.0f, 1.0f }, { 1.0f, 1.0f, 1.0f }, { 0.0f, 0.0f, 0.0f } },
+      { { 1, 3, 2, 5.0f, 500.0f, 0.0f }, { 0, 4, 2, 0.16f, 500.0f, 0.0f }, { 1, 6, 0, 3.0f, 1000.0f, 0.0f } } },
 };
 
 const float eb_head_c = 114.2705f;
@@ -566,6 +573,8 @@ const char *emotion_geometry_look_id(uint8_t index)
 int8_t emotion_geometry_look_index(const char *id)
 {
     if (id == NULL) return -1;
-    for (uint8_t i = 0; i < EB_LOOK_COUNT; ++i) { if (strcmp(id, k_ids[i]) == 0) return (int8_t)i; }
+    for (uint8_t i = 0; i < EB_LOOK_COUNT; ++i) {
+        if (strcmp(id, k_ids[i]) == 0 || strcmp(id, k_names[i]) == 0) return (int8_t)i;
+    }
     return -1;
 }

@@ -1,4 +1,5 @@
 #include "xiaozhi_client.h"
+#include "emotion_catalog.h"
 
 #include <limits.h>
 #include <stdio.h>
@@ -250,6 +251,128 @@ static const char *normalize_emotion(const char *name)
     return name;
 }
 
+static bool catalog_has_id(const char *id)
+{
+    return id != NULL && emotion_catalog_by_id(id) != NULL;
+}
+
+static bool contains_any(const char *text, const char *const *needles, size_t count)
+{
+    if (text == NULL) return false;
+    for (size_t i = 0; i < count; ++i) {
+        if (needles[i] != NULL && needles[i][0] != '\0' &&
+            strstr(text, needles[i]) != NULL) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static const char *emotion_from_text(const char *text)
+{
+    static const char *const error_words[] = {
+        "失败", "出错", "错误", "无法", "不能", "异常"
+    };
+    static const char *const refuse_words[] = {
+        "不能帮你", "无法帮", "拒绝", "不允许", "受限"
+    };
+    static const char *const done_words[] = {
+        "完成", "已完成", "好了", "成功", "搞定"
+    };
+    static const char *const search_words[] = {
+        "检索", "搜索", "查一下", "查找", "联网"
+    };
+    static const char *const happy_words[] = {
+        "开心", "高兴", "太好了", "哈哈", "喜欢", "棒", "谢谢"
+    };
+    static const char *const down_words[] = {
+        "难过", "伤心", "抱歉", "遗憾", "糟糕", "不开心"
+    };
+    static const char *const tired_words[] = {
+        "累", "疲劳", "困", "休息", "疲惫"
+    };
+    static const char *const confused_words[] = {
+        "不明白", "听不懂", "困惑", "不懂", "为什么", "疑惑"
+    };
+    static const char *const surprised_words[] = {
+        "惊讶", "吃惊", "真的吗", "居然", "没想到"
+    };
+    static const char *const angry_words[] = {
+        "生气", "愤怒", "讨厌", "烦人"
+    };
+
+    if (contains_any(text, error_words, sizeof(error_words) / sizeof(error_words[0]))) return "34";
+    if (contains_any(text, refuse_words, sizeof(refuse_words) / sizeof(refuse_words[0]))) return "38";
+    if (contains_any(text, done_words, sizeof(done_words) / sizeof(done_words[0]))) return "33";
+    if (contains_any(text, search_words, sizeof(search_words) / sizeof(search_words[0]))) return "40";
+    if (contains_any(text, happy_words, sizeof(happy_words) / sizeof(happy_words[0]))) return "10";
+    if (contains_any(text, down_words, sizeof(down_words) / sizeof(down_words[0]))) return "12";
+    if (contains_any(text, tired_words, sizeof(tired_words) / sizeof(tired_words[0]))) return "15";
+    if (contains_any(text, confused_words, sizeof(confused_words) / sizeof(confused_words[0]))) return "20";
+    if (contains_any(text, surprised_words, sizeof(surprised_words) / sizeof(surprised_words[0]))) return "13";
+    if (contains_any(text, angry_words, sizeof(angry_words) / sizeof(angry_words[0]))) return "21";
+    return NULL;
+}
+
+const char *xiaozhi_client_emotion_policy(xiaozhi_session_state_t state,
+                                          const char *server_emotion,
+                                          const char *text)
+{
+    switch (state) {
+    case XIAOZHI_STATE_ACTIVATING: return "36";
+    case XIAOZHI_STATE_CONNECTING: return "36";
+    case XIAOZHI_STATE_LISTENING: return "35";
+    case XIAOZHI_STATE_MUSIC: return "42";
+    case XIAOZHI_STATE_ERROR: return "34";
+    case XIAOZHI_STATE_THINKING: {
+        const char *searching = contains_any(text, (const char *const[]){ "检索", "搜索", "查一下", "查找", "联网" }, 5)
+            ? "40" : NULL;
+        return searching != NULL ? searching : "30";
+    }
+    case XIAOZHI_STATE_SPEAKING: {
+        const char *normalized = normalize_emotion(server_emotion);
+        if (catalog_has_id(normalized)) return normalized;
+        const char *emotion = emotion_from_text(text);
+        return emotion != NULL ? emotion : "39";
+    }
+    default: {
+        const char *normalized = normalize_emotion(server_emotion);
+        return catalog_has_id(normalized) ? normalized : "02";
+    }
+    }
+}
+xiaozhi_music_format_t xiaozhi_music_format_from_bytes(const uint8_t *data, size_t size)
+{
+    if (data == NULL || size < 4) return XIAOZHI_MUSIC_FORMAT_UNKNOWN;
+    if (size >= 12 && memcmp(data, "RIFF", 4) == 0 &&
+        memcmp(data + 8, "WAVE", 4) == 0) {
+        return XIAOZHI_MUSIC_FORMAT_WAV;
+    }
+    if (memcmp(data, "OggS", 4) == 0) return XIAOZHI_MUSIC_FORMAT_OGG;
+    if (size >= 8 && memcmp(data + 4, "ftyp", 4) == 0) return XIAOZHI_MUSIC_FORMAT_M4A;
+    if (memcmp(data, "ID3", 3) == 0) return XIAOZHI_MUSIC_FORMAT_MP3;
+    if (data[0] == 0xFFu && (data[1] & 0xE0u) == 0xE0u) return XIAOZHI_MUSIC_FORMAT_MP3;
+    return XIAOZHI_MUSIC_FORMAT_UNKNOWN;
+}
+
+xiaozhi_music_format_t xiaozhi_music_format_from_url(const char *url)
+{
+    if (url == NULL) return XIAOZHI_MUSIC_FORMAT_UNKNOWN;
+    const char *end = strchr(url, '?');
+    if (end == NULL) end = url + strlen(url);
+    const char *dot = NULL;
+    for (const char *cursor = url; cursor < end; ++cursor) {
+        if (*cursor == '.') dot = cursor;
+    }
+    if (dot == NULL) return XIAOZHI_MUSIC_FORMAT_UNKNOWN;
+    if (strncasecmp(dot, ".mp3", 4) == 0) return XIAOZHI_MUSIC_FORMAT_MP3;
+    if (strncasecmp(dot, ".wav", 4) == 0) return XIAOZHI_MUSIC_FORMAT_WAV;
+    if (strncasecmp(dot, ".m4a", 4) == 0) return XIAOZHI_MUSIC_FORMAT_M4A;
+    if (strncasecmp(dot, ".ogg", 4) == 0 || strncasecmp(dot, ".opus", 5) == 0) {
+        return XIAOZHI_MUSIC_FORMAT_OGG;
+    }
+    return XIAOZHI_MUSIC_FORMAT_UNKNOWN;
+}
 static void load_persisted(xiaozhi_client_t *client)
 {
     nvs_handle_t handle;
@@ -296,6 +419,7 @@ void xiaozhi_client_init(xiaozhi_client_t *client)
     atomic_init(&client->wake_event_pending, false);
     atomic_init(&client->wake_reply_pending, false);
     atomic_init(&client->wake_reply_playing, false);
+    atomic_init(&client->music_task_started, false);
     client->state = XIAOZHI_STATE_DISABLED;
     client->server_sample_rate = 24000;
     client->server_frame_duration = XIAOZHI_FRAME_MS;
@@ -767,6 +891,7 @@ static bool xiaozhi_start_music(xiaozhi_client_t *client)
         return false;
     }
     client->music_stop_requested = false;
+    atomic_store_explicit(&client->music_task_started, false, memory_order_release);
     TaskHandle_t handle = NULL;
     if (xTaskCreatePinnedToCoreWithCaps(music_task, "xz_music", 6144, client, 4,
                                          &handle, tskNO_AFFINITY,
@@ -777,27 +902,19 @@ static bool xiaozhi_start_music(xiaozhi_client_t *client)
         return false;
     }
     client->music_task = handle;
+    atomic_store_explicit(&client->music_task_started, true, memory_order_release);
     return true;
 }
 
-static esp_audio_simple_dec_type_t music_decoder_type(const char *url)
+static esp_audio_simple_dec_type_t music_decoder_type(xiaozhi_music_format_t format)
 {
-    const char *end = strchr(url, '?');
-    if (end == NULL) end = url + strlen(url);
-    const char *dot = NULL;
-    for (const char *cursor = url; cursor < end; ++cursor) {
-        if (*cursor == '.') dot = cursor;
+    switch (format) {
+    case XIAOZHI_MUSIC_FORMAT_MP3: return ESP_AUDIO_SIMPLE_DEC_TYPE_MP3;
+    case XIAOZHI_MUSIC_FORMAT_WAV: return ESP_AUDIO_SIMPLE_DEC_TYPE_WAV;
+    case XIAOZHI_MUSIC_FORMAT_M4A: return ESP_AUDIO_SIMPLE_DEC_TYPE_M4A;
+    case XIAOZHI_MUSIC_FORMAT_OGG:
+    default: return ESP_AUDIO_SIMPLE_DEC_TYPE_OGG;
     }
-    if (dot != NULL) {
-        if (strncasecmp(dot, ".mp3", 4) == 0) return ESP_AUDIO_SIMPLE_DEC_TYPE_MP3;
-        if (strncasecmp(dot, ".wav", 4) == 0) return ESP_AUDIO_SIMPLE_DEC_TYPE_WAV;
-        if (strncasecmp(dot, ".m4a", 4) == 0) return ESP_AUDIO_SIMPLE_DEC_TYPE_M4A;
-        if (strncasecmp(dot, ".ogg", 4) == 0 ||
-            strncasecmp(dot, ".opus", 5) == 0) {
-            return ESP_AUDIO_SIMPLE_DEC_TYPE_OGG;
-        }
-    }
-    return ESP_AUDIO_SIMPLE_DEC_TYPE_OGG;
 }
 
 static bool music_decoders_ensure(void)
@@ -891,6 +1008,9 @@ static bool music_write_pcm(xiaozhi_client_t *client,
 static void music_task(void *argument)
 {
     xiaozhi_client_t *client = (xiaozhi_client_t *)argument;
+    while (!atomic_load_explicit(&client->music_task_started, memory_order_acquire)) {
+        vTaskDelay(1);
+    }
     char url[sizeof(client->pending_audio_url)];
     copy_bounded(url, sizeof(url), client->pending_audio_url);
 
@@ -915,17 +1035,6 @@ static void music_task(void *argument)
     output = heap_caps_malloc(output_capacity, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (input == NULL || output == NULL) goto cleanup;
 
-    esp_audio_simple_dec_cfg_t decoder_config = {
-        .dec_type = music_decoder_type(url),
-        .dec_cfg = NULL,
-        .cfg_size = 0,
-        .use_frame_dec = false,
-    };
-    if (esp_audio_simple_dec_open(&decoder_config, &decoder) != ESP_AUDIO_ERR_OK) {
-        ESP_LOGE(TAG, "music decoder open failed");
-        goto cleanup;
-    }
-
     esp_http_client_config_t http_config = {
         .url = url,
         .timeout_ms = 5000,
@@ -945,6 +1054,33 @@ static void music_task(void *argument)
         esp_http_client_get_status_code(http) < 200 ||
         esp_http_client_get_status_code(http) >= 300) {
         ESP_LOGE(TAG, "music stream HTTP status failed");
+        goto cleanup;
+    }
+
+    while (input_length < 12 && !eos) {
+        int read = esp_http_client_read(http, (char *)input + input_length,
+                                        (int)(input_capacity - input_length));
+        if (read > 0) input_length += (size_t)read;
+        else if (read == 0) eos = true;
+        else {
+            ESP_LOGE(TAG, "music stream read failed");
+            goto cleanup;
+        }
+    }
+    xiaozhi_music_format_t format = xiaozhi_music_format_from_bytes(input, input_length);
+    if (format == XIAOZHI_MUSIC_FORMAT_UNKNOWN) format = xiaozhi_music_format_from_url(url);
+    if (format == XIAOZHI_MUSIC_FORMAT_UNKNOWN) {
+        ESP_LOGE(TAG, "music format unknown");
+        goto cleanup;
+    }
+    esp_audio_simple_dec_cfg_t decoder_config = {
+        .dec_type = music_decoder_type(format),
+        .dec_cfg = NULL,
+        .cfg_size = 0,
+        .use_frame_dec = false,
+    };
+    if (esp_audio_simple_dec_open(&decoder_config, &decoder) != ESP_AUDIO_ERR_OK) {
+        ESP_LOGE(TAG, "music decoder open failed");
         goto cleanup;
     }
 
@@ -1053,6 +1189,7 @@ cleanup:
     } else if (client->running && !client->music_stop_requested) {
         ESP_LOGW(TAG, "music playback stopped after an error");
     }
+    atomic_store_explicit(&client->music_task_started, false, memory_order_release);
     if (client->music_task == (void *)xTaskGetCurrentTaskHandle()) {
         client->music_task = NULL;
     }

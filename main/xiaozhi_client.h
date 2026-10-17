@@ -69,6 +69,7 @@ typedef struct {
     atomic_bool wake_event_pending;
     atomic_bool wake_reply_pending;
     atomic_bool wake_reply_playing;
+    atomic_bool music_task_started;
     bool codec_ready;
     int server_sample_rate;
     int server_frame_duration;
@@ -99,6 +100,24 @@ const char *xiaozhi_client_pending_audio_url(const xiaozhi_client_t *client);
 /* Maps a session state to a local emotion id, or NULL when no override is
    wanted (e.g. disabled/idle). */
 const char *xiaozhi_client_state_emotion(xiaozhi_session_state_t state);
+
+/* Chooses the local expression for the current Xiaozhi turn. A valid server
+   emotion wins, then the session state, then simple text intent cues. The
+   result is always a catalog id. */
+const char *xiaozhi_client_emotion_policy(xiaozhi_session_state_t state,
+                                          const char *server_emotion,
+                                          const char *text);
+
+typedef enum {
+    XIAOZHI_MUSIC_FORMAT_UNKNOWN = 0,
+    XIAOZHI_MUSIC_FORMAT_OGG,
+    XIAOZHI_MUSIC_FORMAT_MP3,
+    XIAOZHI_MUSIC_FORMAT_WAV,
+    XIAOZHI_MUSIC_FORMAT_M4A,
+} xiaozhi_music_format_t;
+
+xiaozhi_music_format_t xiaozhi_music_format_from_bytes(const uint8_t *data, size_t size);
+xiaozhi_music_format_t xiaozhi_music_format_from_url(const char *url);
 
 /* Push-to-talk control used by the round-screen touch UI. */
 bool xiaozhi_client_send_listen(xiaozhi_client_t *client, bool start);

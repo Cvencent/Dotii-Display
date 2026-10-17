@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "emotion_pose.h"
+#include "emotion_geometry.h"
 
 static void test_idle_pose_is_neutral(void)
 {
@@ -53,12 +54,28 @@ static void test_gaze_is_bounded(void)
     assert(pose.eye_look_y >= -1.0f && pose.eye_look_y <= 1.0f);
 }
 
+static void test_every_catalog_emotion_has_geometry(void)
+{
+    const size_t count = emotion_catalog_count();
+    assert(count > 0);
+    for (size_t i = 0; i < count; ++i) {
+        const emotion_def_t *def = emotion_catalog_at(i);
+        assert(def != NULL);
+        const int8_t by_id = emotion_geometry_look_index(def->id);
+        const int8_t by_name = emotion_geometry_look_index(def->name);
+        assert(by_id >= 0);
+        assert(by_name == by_id);
+        assert(emotion_geometry_look((uint8_t)by_id) != NULL);
+    }
+}
+
 int main(void)
 {
     test_idle_pose_is_neutral();
     test_sleep_closes_eyes();
     test_null_inputs_are_safe();
     test_gaze_is_bounded();
+    test_every_catalog_emotion_has_geometry();
     printf("emotion_pose tests passed\n");
     return 0;
 }

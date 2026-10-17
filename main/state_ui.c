@@ -1691,10 +1691,10 @@ static void render_xiaozhi_expression(void)
     }
 
     if (s_snapshot.xiaozhi_enabled) {
-        const char *xiaozhi_emotion = xiaozhi_client_last_emotion(&s_xiaozhi);
-        if (xiaozhi_emotion == NULL) {
-            xiaozhi_emotion = xiaozhi_client_state_emotion(xiaozhi_client_state(&s_xiaozhi));
-        }
+        const char *xiaozhi_emotion = xiaozhi_client_emotion_policy(
+            xiaozhi_client_state(&s_xiaozhi),
+            xiaozhi_client_last_emotion(&s_xiaozhi),
+            s_xiaozhi.last_text);
         if (xiaozhi_emotion != NULL) {
             emotion_router_set_source(&s_xiaozhi_router, EMOTION_SRC_XIAOZHI, xiaozhi_emotion, 0, now);
         } else {

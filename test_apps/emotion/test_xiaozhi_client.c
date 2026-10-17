@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "xiaozhi_client.h"
+#include "emotion_catalog.h"
 
 static void test_emotion_event(void)
 {
@@ -18,6 +19,97 @@ static void test_emotion_event(void)
     assert(strcmp(xiaozhi_client_last_emotion(&client), "33") == 0);
 }
 
+static void test_emotion_policy_prefers_server_then_state_then_text(void)
+{
+    assert(strcmp(xiaozhi_client_emotion_policy(
+        XIAOZHI_STATE_SPEAKING, "happy", "anything"), "10") == 0);
+    assert(strcmp(xiaozhi_client_emotion_policy(
+        XIAOZHI_STATE_LISTENING, NULL, NULL), "35") == 0);
+    assert(strcmp(xiaozhi_client_emotion_policy(
+        XIAOZHI_STATE_THINKING, NULL, "正在检索资料"), "40") == 0);
+    assert(strcmp(xiaozhi_client_emotion_policy(
+        XIAOZHI_STATE_SPEAKING, NULL, "任务完成了，太好了"), "33") == 0);
+    assert(strcmp(xiaozhi_client_emotion_policy(
+        XIAOZHI_STATE_SPEAKING, NULL, "这个操作失败了"), "34") == 0);
+    assert(strcmp(xiaozhi_client_emotion_policy(
+        XIAOZHI_STATE_MUSIC, NULL, NULL), "42") == 0);
+    assert(strcmp(xiaozhi_client_emotion_policy(
+        XIAOZHI_STATE_SPEAKING, NULL, "我好开心呀"), "10") == 0);
+    assert(strcmp(xiaozhi_client_emotion_policy(
+        XIAOZHI_STATE_SPEAKING, NULL, "我有点不明白"), "20") == 0);
+    assert(strcmp(xiaozhi_client_emotion_policy(
+        XIAOZHI_STATE_SPEAKING, NULL, "别生气"), "21") == 0);
+    assert(strcmp(xiaozhi_client_emotion_policy(
+        XIAOZHI_STATE_SPEAKING, NULL, "我有点累了"), "15") == 0);
+}
+
+static void test_emotion_policy_state_overrides_stale_text(void)
+{
+    assert(strcmp(xiaozhi_client_emotion_policy(
+        XIAOZHI_STATE_MUSIC, "happy", "任务完成了"), "42") == 0);
+    assert(strcmp(xiaozhi_client_emotion_policy(
+        XIAOZHI_STATE_LISTENING, "happy", "任务完成了"), "35") == 0);
+    assert(strcmp(xiaozhi_client_emotion_policy(
+        XIAOZHI_STATE_ERROR, "happy", "任务完成了"), "34") == 0);
+}
+
+static void test_emotion_policy_rejects_unknown_emotion_and_falls_back(void)
+{
+    assert(strcmp(xiaozhi_client_emotion_policy(
+        XIAOZHI_STATE_LISTENING, "definitely-not-an-emotion", NULL), "35") == 0);
+    assert(strcmp(xiaozhi_client_emotion_policy(
+        XIAOZHI_STATE_IDLE, NULL, NULL), "02") == 0);
+    assert(strcmp(xiaozhi_client_emotion_policy(
+        XIAOZHI_STATE_DISABLED, NULL, NULL), "02") == 0);
+}
+
+static void test_emotion_policy_covers_every_catalog_id(void)
+{
+    const size_t count = emotion_catalog_count();
+    assert(count > 0);
+    for (size_t i = 0; i < count; ++i) {
+        const emotion_def_t *def = emotion_catalog_at(i);
+        assert(def != NULL);
+        const char *mapped = xiaozhi_client_emotion_policy(
+            XIAOZHI_STATE_SPEAKING, def->name, NULL);
+        assert(mapped != NULL);
+        assert(emotion_catalog_by_id(mapped) != NULL);
+    }
+}
+
+static void test_music_format_sniffing(void)
+{
+    const uint8_t mp3[] = { 'I', 'D', '3', 4, 0, 0 };
+    const uint8_t wav[] = { 'R', 'I', 'F', 'F', 0, 0, 0, 0, 'W', 'A', 'V', 'E' };
+    const uint8_t ogg[] = { 'O', 'g', 'g', 'S', 0, 0 };
+    const uint8_t m4a[] = { 0, 0, 0, 0x18, 'f', 't', 'y', 'p', 'M', '4', 'A', ' ' };
+    const uint8_t unknown[] = { 0x11, 0x22, 0x33, 0x44 };
+
+    assert(xiaozhi_music_format_from_bytes(mp3, sizeof(mp3)) == XIAOZHI_MUSIC_FORMAT_MP3);
+    assert(xiaozhi_music_format_from_bytes(wav, sizeof(wav)) == XIAOZHI_MUSIC_FORMAT_WAV);
+    assert(xiaozhi_music_format_from_bytes(ogg, sizeof(ogg)) == XIAOZHI_MUSIC_FORMAT_OGG);
+    assert(xiaozhi_music_format_from_bytes(m4a, sizeof(m4a)) == XIAOZHI_MUSIC_FORMAT_M4A);
+    assert(xiaozhi_music_format_from_bytes(unknown, sizeof(unknown)) == XIAOZHI_MUSIC_FORMAT_UNKNOWN);
+}
+
+static void test_music_format_sniff_handles_short_and_sparse_streams(void)
+{
+    const uint8_t short_mp3[] = { 'I', 'D', '3' };
+    const uint8_t short_ogg[] = { 'O', 'g', 'g' };
+    const uint8_t empty[] = { 0 };
+
+    assert(xiaozhi_music_format_from_bytes(short_mp3, sizeof(short_mp3)) == XIAOZHI_MUSIC_FORMAT_UNKNOWN);
+    assert(xiaozhi_music_format_from_bytes(short_ogg, sizeof(short_ogg)) == XIAOZHI_MUSIC_FORMAT_UNKNOWN);
+    assert(xiaozhi_music_format_from_bytes(empty, 0) == XIAOZHI_MUSIC_FORMAT_UNKNOWN);
+}
+static void test_music_format_from_url_ignores_query_and_defaults_unknown(void)
+{
+    assert(xiaozhi_music_format_from_url("https://example/song.mp3?token=1") == XIAOZHI_MUSIC_FORMAT_MP3);
+    assert(xiaozhi_music_format_from_url("https://example/song.WAV") == XIAOZHI_MUSIC_FORMAT_WAV);
+    assert(xiaozhi_music_format_from_url("https://example/song.m4a") == XIAOZHI_MUSIC_FORMAT_M4A);
+    assert(xiaozhi_music_format_from_url("https://example/song.ogg") == XIAOZHI_MUSIC_FORMAT_OGG);
+    assert(xiaozhi_music_format_from_url("https://example/song") == XIAOZHI_MUSIC_FORMAT_UNKNOWN);
+}
 static void test_notify_music(void)
 {
     xiaozhi_client_t client;
@@ -143,6 +235,13 @@ static void test_wake_reply_is_consumed_once(void)
 int main(void)
 {
     test_emotion_event();
+    test_emotion_policy_prefers_server_then_state_then_text();
+    test_emotion_policy_state_overrides_stale_text();
+    test_emotion_policy_rejects_unknown_emotion_and_falls_back();
+    test_emotion_policy_covers_every_catalog_id();
+    test_music_format_sniffing();
+    test_music_format_sniff_handles_short_and_sparse_streams();
+    test_music_format_from_url_ignores_query_and_defaults_unknown();
     test_notify_music();
     test_state_mapping();
     test_hello_and_bad_input();
