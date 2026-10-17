@@ -211,6 +211,7 @@ static void bridge_task(void *argument)
 {
     (void)argument;
     const bool management_requested =
+        strlen(device_config_get()->codex_bridge_token) < 16 &&
         strlen(device_config_get()->bridge_url) > 0;
     publish_current_state();
     while (true) {
