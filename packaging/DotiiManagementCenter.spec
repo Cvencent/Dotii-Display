@@ -44,7 +44,6 @@ for relative_name in firmware_files.values():
 # pypinyin reads its phrase dictionaries from package data when converting a
 # custom wake word to pinyin; without it the conversion fails at runtime.
 datas += collect_data_files("pypinyin")
-datas += collect_data_files("pypinyin_dict")
 
 hiddenimports = [
     "codex_bridge",
@@ -53,10 +52,14 @@ hiddenimports = [
     "runtime_paths",
     "platforms",
     # Imported lazily on the wake-word path, so it must be listed explicitly.
+    # pypinyin ships its own dictionaries (pypinyin.pinyin_dict / phrases_dict);
+    # the separate pypinyin_dict distribution does not exist in 0.55.
     "pypinyin",
     "pypinyin.style",
-    "pypinyin_dict",
-    "pypinyin_dict.phrase_pinyin_data",
+    "pypinyin.converter",
+    "pypinyin.core",
+    "pypinyin.phrases_dict",
+    "pypinyin.pinyin_dict",
     *collect_submodules("bleak"),
     *collect_submodules("esptool"),
 ]
