@@ -2184,19 +2184,37 @@ static bool wake_word_start_multinet(xiaozhi_client_t *client, srmodel_list_t *m
         if (data != NULL) iface->destroy(data);
         return false;
     }
-    esp_mn_commands_clear();
+    /* Bind the shared command list to this model. Without it every
+       esp_mn_commands_add() below fails with ESP_ERR_INVALID_STATE and the
+       recogniser keeps an empty vocabulary, which is exactly the "nothing ever
+       wakes it" symptom. */
+    if (esp_mn_commands_alloc(iface, data) != ESP_OK) {
+        ESP_LOGE(TAG, "MultiNet command list allocation failed");
+        iface->destroy(data);
+        return false;
+    }
+    int accepted = 0;
     for (int index = 0; index < word_count; ++index) {
         if (esp_mn_commands_add(index + 1, words[index]) != ESP_OK) {
-            ESP_LOGW(TAG, "wake word %d rejected: %s", index, words[index]);
+            ESP_LOGW(TAG, "wake word %d rejected: %s", index + 1, words[index]);
+        } else {
+            accepted++;
         }
+    }
+    if (accepted == 0) {
+        ESP_LOGE(TAG, "no usable wake word; MultiNet disabled");
+        esp_mn_commands_free();
+        iface->destroy(data);
+        return false;
     }
     esp_mn_error_t *errors = esp_mn_commands_update();
     if (errors != NULL && errors->num > 0) {
         ESP_LOGW(TAG, "MultiNet dropped %d unusable wake word(s)", errors->num);
     }
-    /* Slightly more sensitive than the WakeNet default: a user-typed word
-       misses more often than a model trained for one fixed phrase. */
-    (void)iface->set_det_threshold(data, 0.30f);
+    esp_mn_commands_print();
+    if (iface->print_active_speech_commands != NULL) {
+        iface->print_active_speech_commands(data);
+    }
     client->wake_models = models;
     client->wake_iface = (void *)iface;
     client->wake_data = data;
@@ -2260,8 +2278,7 @@ static bool wake_word_start(xiaozhi_client_t *client)
     /* Prefer the user's own words; fall back to the built-in WakeNet phrase so
        a bad or empty list never leaves the device unable to be woken. */
     if (wake_word_start_multinet(client, models)) return true;
-    ESP_LOGW(TAG, "MultiNet unavailable; falling back to WakeNet '你好小智'");
-    if (wake_word_start_wakenet(client, models)) return true;
+    ESP_LOGW(TAG, "MultiNet unavailable; falling back to WakeNet");
     esp_srmodel_deinit(models);
     return false;
 }

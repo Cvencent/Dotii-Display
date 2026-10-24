@@ -2438,7 +2438,7 @@ void state_ui_start(QueueHandle_t snapshot_queue)
     s_xiaozhi_request_lock = xSemaphoreCreateMutex();
     if (s_xiaozhi_request_lock == NULL) {
         ESP_LOGE(TAG, "Unable to create the xiaozhi request lock");
-    } else if (xTaskCreate(xiaozhi_supervisor_task, "xz_sup", 4096, NULL, 5, NULL) != pdPASS) {
+    } else if (xTaskCreate(xiaozhi_supervisor_task, "xz_sup", 8192, NULL, 5, NULL) != pdPASS) {
         ESP_LOGE(TAG, "Unable to create the xiaozhi supervisor task");
     }
     build_main();

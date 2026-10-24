@@ -1,5 +1,7 @@
 #include "codex_bridge_client.h"
 
+#include "connectivity.h"
+
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -2026,6 +2028,10 @@ static void send_presence_datagram(int socket_fd)
 static void presence_task(void *context)
 {
     (void)context;
+    /* Pairing mode starts this task before lwIP exists; socket() would assert. */
+    while (s_running && !connectivity_is_wifi_connected()) {
+        vTaskDelay(pdMS_TO_TICKS(200));
+    }
     int socket_fd = -1;
     while (s_running) {
         if (socket_fd < 0) {
@@ -2066,6 +2072,13 @@ static uint8_t s_udp_reply[512];
 static void udp_task(void *context)
 {
     (void)context;
+    /* Pairing mode starts the listener before Wi-Fi has configured lwIP.
+       socket() asserts with an invalid mbox until the TCP/IP task exists, so
+       wait for the station instead of racing it. */
+    while (s_running && !connectivity_is_wifi_connected()) {
+        vTaskDelay(pdMS_TO_TICKS(200));
+    }
+    if (!s_running) return;
     int socket_fd = socket(AF_INET, SOCK_DGRAM, 0);
     if (socket_fd < 0) {
         ESP_LOGE(TAG, "UDP socket failed: %d", errno);
@@ -2142,6 +2155,11 @@ static void udp_task(void *context)
 static void tcp_task(void *context)
 {
     (void)context;
+    /* Same pairing-mode race as udp_task: lwIP must exist before socket(). */
+    while (s_running && !connectivity_is_wifi_connected()) {
+        vTaskDelay(pdMS_TO_TICKS(200));
+    }
+    if (!s_running) return;
     int server_socket = socket(AF_INET, SOCK_STREAM, 0);
     if (server_socket < 0) {
         ESP_LOGE(TAG, "TCP socket failed: %d", errno);
