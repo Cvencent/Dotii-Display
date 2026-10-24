@@ -2,19 +2,7 @@
 
 #include <string.h>
 
-static const emotion_def_t *resolve(const char *emotion)
-{
-    if (emotion == NULL || emotion[0] == '\0') {
-        return NULL;
-    }
-    const emotion_def_t *def = emotion_catalog_by_id(emotion);
-    if (def == NULL) {
-        def = emotion_catalog_by_name(emotion);
-    }
-    return def;
-}
-
-void emotion_router_init(emotion_router_t *router, emotion_engine_t *engine)
+void emotion_router_init(emotion_router_t *router, dotii_engine_t *engine)
 {
     if (router == NULL) {
         return;
@@ -22,7 +10,7 @@ void emotion_router_init(emotion_router_t *router, emotion_engine_t *engine)
     memset(router, 0, sizeof(*router));
     router->engine = engine;
     router->active_id[0] = '0';
-    router->active_id[1] = '2';
+    router->active_id[1] = '0';
     router->active_id[2] = '\0';
     router->active_source = EMOTION_SRC_COUNT;
 }
@@ -30,10 +18,19 @@ void emotion_router_init(emotion_router_t *router, emotion_engine_t *engine)
 bool emotion_router_set_source(emotion_router_t *router, emotion_source_t src,
                                const char *emotion, uint16_t hold_ms, uint32_t now_ms)
 {
-    if (router == NULL || src < 0 || src >= EMOTION_SRC_COUNT) {
+    if (router == NULL || (int)src < 0 || src >= EMOTION_SRC_COUNT) {
         return false;
     }
-    const emotion_def_t *def = resolve(emotion);
+    if (emotion == NULL || emotion[0] == '\0') {
+        return false;
+    }
+    if (dotii_catalog_by_id(emotion) == NULL && dotii_catalog_by_name(emotion) == NULL &&
+        dotii_alias_resolve(emotion) == NULL) {
+        return false;
+    }
+    const dotii_expr_t *def = dotii_catalog_by_id(emotion);
+    if (def == NULL) def = dotii_catalog_by_name(emotion);
+    if (def == NULL) def = dotii_catalog_by_name(dotii_alias_resolve(emotion));
     if (def == NULL) {
         return false;
     }
@@ -51,7 +48,7 @@ void emotion_router_clear_source(emotion_router_t *router, emotion_source_t src,
                                  uint32_t now_ms)
 {
     (void)now_ms;
-    if (router == NULL || src < 0 || src >= EMOTION_SRC_COUNT) {
+    if (router == NULL || (int)src < 0 || src >= EMOTION_SRC_COUNT) {
         return;
     }
     router->slots[src].active = false;
@@ -86,29 +83,29 @@ void emotion_router_tick(emotion_router_t *router, uint32_t now_ms)
                              (strcmp(router->active_id, slot->id) != 0) ||
                              !router->has_active;
         if (changed) {
-            emotion_engine_set(router->engine, slot->id, now_ms);
+            dotii_engine_set(router->engine, slot->id, now_ms);
             memcpy(router->active_id, slot->id, sizeof(router->active_id));
             router->active_source = (emotion_source_t)i;
             router->has_active = true;
         }
-        emotion_engine_tick(router->engine, now_ms);
+        dotii_engine_tick(router->engine, now_ms);
         return;
     }
 
-    /* No source active: fall back to the engine's own base emotion. */
+    /* No source active: fall back to idle. */
     if (router->has_active) {
-        emotion_engine_set(router->engine, emotion_catalog_fallback()->id, now_ms);
+        dotii_engine_set(router->engine, dotii_catalog_idle()->id, now_ms);
         router->has_active = false;
         router->active_source = EMOTION_SRC_COUNT;
-        memcpy(router->active_id, emotion_catalog_fallback()->id, 3);
+        memcpy(router->active_id, dotii_catalog_idle()->id, 3);
     }
-    emotion_engine_tick(router->engine, now_ms);
+    dotii_engine_tick(router->engine, now_ms);
 }
 
 const char *emotion_router_active_id(const emotion_router_t *router)
 {
     if (router == NULL) {
-        return "02";
+        return "00";
     }
     return router->active_id;
 }
@@ -116,7 +113,7 @@ const char *emotion_router_active_id(const emotion_router_t *router)
 bool emotion_router_active(const emotion_router_t *router, emotion_source_t src,
                            const char **out_id)
 {
-    if (router == NULL || src < 0 || src >= EMOTION_SRC_COUNT) {
+    if (router == NULL || (int)src < 0 || src >= EMOTION_SRC_COUNT) {
         return false;
     }
     const emotion_router_slot_t *slot = &router->slots[src];

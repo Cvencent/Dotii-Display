@@ -373,3 +373,97 @@ TEST_CASE("read state updates every matching task detail", "[codex_merge]")
     TEST_ASSERT_EQUAL_UINT(2, snapshot->read_count);
     cJSON_Delete(data);
 }
+
+/* ---- account.changed / rate_limits.changed / token_usage.changed ---- */
+
+TEST_CASE("account merge stores plan, remaining windows and 7-day tokens", "[codex_merge]")
+{
+    codex_snapshot_t *snapshot = snapshot_for_test();
+    cJSON *data = parse_json(
+        "{\"plan_type\":\"pro\","
+        "\"rate_limits\":["
+        "{\"window\":\"five_hour\",\"remaining_percent\":37,"
+        "\"reset_at_ms\":1792800000000},"
+        "{\"window\":\"weekly\",\"remaining_percent\":81,"
+        "\"reset_at_ms\":1793800000000}],"
+        "\"token_usage\":{\"seven_day_tokens\":52500}}"
+    );
+
+    codex_snapshot_merge_account(snapshot, data);
+
+    TEST_ASSERT_EQUAL_STRING("pro", snapshot->plan_type);
+    /* remaining_percent is used verbatim; the Bridge already inverted it. */
+    TEST_ASSERT_EQUAL_INT(37, snapshot->five_hour_remaining_percent);
+    TEST_ASSERT_TRUE(snapshot->five_hour_available);
+    TEST_ASSERT_EQUAL_INT(81, snapshot->weekly_remaining_percent);
+    TEST_ASSERT_TRUE(snapshot->weekly_available);
+    TEST_ASSERT_EQUAL_UINT(52500, snapshot->weekly_tokens);
+    TEST_ASSERT_TRUE(snapshot->weekly_tokens_available);
+    /* A reset instant was supplied, so the screen has a date to render. */
+    TEST_ASSERT_TRUE(snapshot->five_hour_reset_date[0] != '\0');
+    TEST_ASSERT_TRUE(snapshot->reset_date[0] != '\0');
+    cJSON_Delete(data);
+}
+
+TEST_CASE("a missing window is cleared so the panel shows --", "[codex_merge]")
+{
+    codex_snapshot_t *snapshot = snapshot_for_test();
+    snapshot->weekly_remaining_percent = 70;
+    snapshot->weekly_available = true;
+    snapshot->five_hour_remaining_percent = 60;
+    snapshot->five_hour_available = true;
+    /* Upstream now reports only the 5-hour window. The weekly window must go
+       unavailable rather than keep showing the stale 70%. */
+    cJSON *data = parse_json(
+        "{\"rate_limits\":[{\"window\":\"five_hour\",\"remaining_percent\":25}]}"
+    );
+
+    codex_snapshot_merge_account(snapshot, data);
+
+    TEST_ASSERT_EQUAL_INT(25, snapshot->five_hour_remaining_percent);
+    TEST_ASSERT_TRUE(snapshot->five_hour_available);
+    TEST_ASSERT_FALSE(snapshot->weekly_available);
+    cJSON_Delete(data);
+}
+
+TEST_CASE("out of range remaining percent is ignored", "[codex_merge]")
+{
+    codex_snapshot_t *snapshot = snapshot_for_test();
+    snapshot->five_hour_remaining_percent = 44;
+    snapshot->five_hour_available = true;
+    cJSON *data = parse_json(
+        "{\"rate_limits\":[{\"window\":\"five_hour\",\"remaining_percent\":250}]}"
+    );
+
+    codex_snapshot_merge_account(snapshot, data);
+
+    TEST_ASSERT_FALSE(snapshot->five_hour_available);
+    cJSON_Delete(data);
+}
+
+TEST_CASE("account read token total lands on the per task metric", "[codex_merge]")
+{
+    codex_snapshot_t *snapshot = snapshot_for_test();
+    cJSON *data = parse_json("{\"token_usage\":{\"token_total\":4321}}");
+
+    codex_snapshot_merge_account(snapshot, data);
+
+    TEST_ASSERT_EQUAL_UINT(4321, snapshot->task_tokens);
+    TEST_ASSERT_TRUE(snapshot->task_tokens_available);
+    cJSON_Delete(data);
+}
+
+TEST_CASE("account merge leaves unrelated fields untouched", "[codex_merge]")
+{
+    codex_snapshot_t *snapshot = snapshot_for_test();
+    snapshot->xiaozhi_mcp_enabled = true;
+    snapshot->display_revision = 77;
+    cJSON *data = parse_json("{\"plan_type\":\"team\"}");
+
+    codex_snapshot_merge_account(snapshot, data);
+
+    TEST_ASSERT_EQUAL_STRING("team", snapshot->plan_type);
+    TEST_ASSERT_TRUE(snapshot->xiaozhi_mcp_enabled);
+    TEST_ASSERT_EQUAL_UINT(77, snapshot->display_revision);
+    cJSON_Delete(data);
+}

@@ -91,3 +91,8 @@ CONFIG_BSP_ERROR_CHECK=n
 # Speech wake word: WakeNet9 nihaoxiaozhi.
 CONFIG_MODEL_IN_FLASH=y
 CONFIG_SR_WN_WN9_NIHAOXIAOZHI_TTS=y
+
+# Two TLS sockets (conversation + MCP tool channel) must coexist, so
+# keep each direction buffer small: websocket JSON frames are tiny.
+CONFIG_MBEDTLS_SSL_IN_CONTENT_LEN=4096
+CONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN=2048

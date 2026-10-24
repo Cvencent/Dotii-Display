@@ -3,7 +3,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#include "emotion_engine.h"
+#include "dotii_engine.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -25,17 +25,17 @@ typedef struct {
 } emotion_router_slot_t;
 
 typedef struct {
-    emotion_engine_t *engine;
+    dotii_engine_t *engine;
     emotion_router_slot_t slots[EMOTION_SRC_COUNT];
     char active_id[3];
     emotion_source_t active_source;
     bool has_active;
 } emotion_router_t;
 
-void emotion_router_init(emotion_router_t *router, emotion_engine_t *engine);
+void emotion_router_init(emotion_router_t *router, dotii_engine_t *engine);
 
-/* Raises a source. A valid emotion id/name replaces that source's slot. An
-   unknown id is ignored and returns false without disturbing other sources. */
+/* Raises a source. A valid emotion id/name/legacy-alias replaces that source's
+   slot. An unknown id is ignored and returns false without disturbing others. */
 bool emotion_router_set_source(emotion_router_t *router, emotion_source_t src,
                                const char *emotion, uint16_t hold_ms, uint32_t now_ms);
 

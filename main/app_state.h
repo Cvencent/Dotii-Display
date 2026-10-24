@@ -87,6 +87,13 @@ typedef struct {
     char xiaozhi_wake_word[33];
     char xiaozhi_voice[33];
     bool xiaozhi_mcp_enabled;
+    char xiaozhi_mcp_url[512];
+    bool qqmusic_logged_in;
+    /* The device no longer calls QQ Music directly: the management bridge
+       holds the session and streams the song. The cookie text is therefore not
+       copied into the snapshot; only its presence is signalled. */
+    char qqmusic_cookie[8];
+    char qqmusic_nickname[65];
     bool custom_enabled;
     bool dotii_enabled;
     bool custom_image_available;
@@ -116,6 +123,14 @@ typedef struct {
     uint16_t running_tasks;
     uint16_t completed_unread_tasks;
     uint16_t failed_unread_tasks;
+    /* Monotonic totals shown on the panel.  The Bridge counters are "unread"
+       counters that collapse back to zero as soon as any client reads a
+       result, so the device keeps its own total that only ever grows. */
+    uint16_t completed_total_tasks;
+    uint16_t failed_total_tasks;
+    /* True once the Bridge delivered a raw counter summary at least once.
+       Until then the panel falls back to the raw unread counters. */
+    bool codex_state_raw_valid;
     char last_user_message[1536];
     char last_assistant_message[256];
     char conversation_text[3073];
@@ -149,6 +164,12 @@ typedef struct {
     char custom_body[257];
     char custom_footer[97];
     time_t task_updated_at;
+    /* True once the Bridge delivered an explicit counter summary, so the
+       locally derived task count no longer overwrites the Bridge value. */
+    bool codex_state_summary_valid;
+    /* True when the counters arrived as a replay baseline: the panel
+       refreshes the numbers but must not ring the task chime for them. */
+    bool codex_state_baseline;
     time_t generated_at;
 } codex_snapshot_t;
 

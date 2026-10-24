@@ -13,3 +13,43 @@ release/
 tools/
 .vscode/
 .DS_Store
+
+# Local scratch/link trees that must never be indexed or committed.
+# These are Windows junctions or generated/experiment output pointing at
+# unrelated projects (aipassport, CodexBridge, client2api) or huge caches.
+aipassport/
+aipassport-link/
+aipassport-src/
+aipassport-fw-link/
+_aipassport-target/
+CodexBridgeLink/
+CodexBridge-fix/
+.codex-client2api-link/
+_codex_bundle_readonly/
+.worktrees/
+.zig-cache/
+output/
+'output/
+$null
+.playwright-cli/
+
+# Plaintext secrets and machine-specific state. `configs/client2api.json`
+# carries a live API key and `data/` carries per-account state; this
+# repository is public, so neither may ever be committed.
+configs/
+data/
+
+# Raw serial captures embed live session tokens (for example the xiaozhi
+# vision token) and device identifiers.
+cbdp_capture_*.txt
+
+# Generated firmware images are release output, not source. They are
+# rebuilt from build/ by packaging/build_windows.ps1 and shipped as
+# release assets instead.
+firmware/
+
+# Agent scratch files: ad-hoc probe/patch scripts, captured logs and
+# throwaway artifacts. Never part of a release.
+.tmp_*
+.tmp-*
+

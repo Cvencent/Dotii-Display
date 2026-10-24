@@ -91,23 +91,23 @@ static const char *classify_user(emotion_mood_t *mood, const char *text)
     if (contains_any(text, sad, sizeof(sad) / sizeof(sad[0]))) {
         mood->valence = clampf(mood->valence - 0.55f, -1.0f, 1.0f);
         mood->arousal = clampf(mood->arousal - 0.10f, 0.0f, 1.0f);
-        return "12";
+        return "21";
     }
     if (contains_any(text, angry, sizeof(angry) / sizeof(angry[0]))) {
         mood->valence = clampf(mood->valence - 0.45f, -1.0f, 1.0f);
         mood->arousal = clampf(mood->arousal + 0.45f, 0.0f, 1.0f);
-        return "21";
+        return "23";
     }
     if (contains_any(text, tired, sizeof(tired) / sizeof(tired[0]))) {
         mood->fatigue = clampf(mood->fatigue + 0.35f, 0.0f, 1.0f);
         mood->arousal = clampf(mood->arousal - 0.25f, 0.0f, 1.0f);
-        return "15";
+        return "24";
     }
     if (contains_any(text, question, sizeof(question) / sizeof(question[0]))) {
         mood->confusion = clampf(mood->confusion + 0.18f, 0.0f, 1.0f);
         static const char *const direct_question[] = {"怎么", "为什么", "如何", "能不能", "可以吗"};
         if (contains_any(text, direct_question, sizeof(direct_question) / sizeof(direct_question[0]))) {
-            return "11";
+            return "18";
         }
         return contains_any(text, ambiguous, sizeof(ambiguous) / sizeof(ambiguous[0])) ? "20" : "11";
     }
@@ -124,12 +124,12 @@ static const char *classify_assistant(emotion_mood_t *mood, const char *text)
         mood->valence = clampf(mood->valence - 0.20f, -1.0f, 1.0f);
         return "34";
     }
-    if (contains_any(text, refusal, sizeof(refusal) / sizeof(refusal[0]))) return "38";
+    if (contains_any(text, refusal, sizeof(refusal) / sizeof(refusal[0]))) return "47";
     if (contains_any(text, success, sizeof(success) / sizeof(success[0]))) {
         mood->valence = clampf(mood->valence + 0.25f, -1.0f, 1.0f);
         return "33";
     }
-    if (contains_any(text, thinking, sizeof(thinking) / sizeof(thinking[0]))) return "30";
+    if (contains_any(text, thinking, sizeof(thinking) / sizeof(thinking[0]))) return "04";
     return NULL;
 }
 
@@ -139,8 +139,8 @@ static const char *classify_emotion(const char *emotion)
     static const char *const negative[] = {"down", "angry", "error", "tired"};
     static const char *const uncertain[] = {"puzzled", "confused", "thinking", "listening"};
     if (contains_any(emotion, positive, sizeof(positive) / sizeof(positive[0]))) return "10";
-    if (contains_any(emotion, negative, sizeof(negative) / sizeof(negative[0]))) return "12";
-    if (contains_any(emotion, uncertain, sizeof(uncertain) / sizeof(uncertain[0]))) return "11";
+    if (contains_any(emotion, negative, sizeof(negative) / sizeof(negative[0]))) return "21";
+    if (contains_any(emotion, uncertain, sizeof(uncertain) / sizeof(uncertain[0]))) return "18";
     return NULL;
 }
 
@@ -218,24 +218,24 @@ bool emotion_mood_has_active_event(const emotion_mood_t *mood)
 
 const char *emotion_mood_current_id(const emotion_mood_t *mood)
 {
-    if (mood == NULL) return "02";
+    if (mood == NULL) return "00";
     if (emotion_mood_has_active_event(mood)) {
         return mood->event_id;
     }
-    if (mood->fatigue > 0.82f) return "00";
-    if (mood->fatigue > 0.62f) return "15";
-    if (mood->confusion > 0.70f) return "20";
+    if (mood->fatigue > 0.82f) return "02";
+    if (mood->fatigue > 0.62f) return "24";
+    if (mood->confusion > 0.70f) return "19";
     if (mood->valence > 0.28f) return "10";
-    if (mood->valence < -0.28f) return "12";
-    if (mood->arousal > 0.75f) return "13";
+    if (mood->valence < -0.28f) return "21";
+    if (mood->arousal > 0.75f) return "20";
     /* Learned preference colours the resting face, but can never override a
        stronger live emotion above. Praise makes the baseline welcoming;
        repeated corrections make it attentive and slightly apologetic. */
     if (mood->positive_bias > 0.30f &&
-        mood->positive_bias > mood->correction_bias) return "19";
+        mood->positive_bias > mood->correction_bias) return "16";
     if (mood->correction_bias > 0.30f &&
         mood->correction_bias > mood->positive_bias) return "14";
-    return "02";
+    return "00";
 }
 
 float emotion_mood_valence(const emotion_mood_t *mood)

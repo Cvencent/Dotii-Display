@@ -39,6 +39,7 @@ esp_err_t device_config_init(void)
     load_string(handle, "bridge_url", s_config.bridge_url, sizeof(s_config.bridge_url));
     load_string(handle, "bridge_tok", s_config.bridge_token, sizeof(s_config.bridge_token));
     load_string(handle, "codex_tok", s_config.codex_bridge_token, sizeof(s_config.codex_bridge_token));
+    load_string(handle, "qq_cookie", s_config.qqmusic_cookie, sizeof(s_config.qqmusic_cookie));
     uint8_t provisioned = 0;
     (void)nvs_get_u8(handle, "provisioned", &provisioned);
     s_config.provisioned = provisioned == 1;
@@ -63,10 +64,59 @@ esp_err_t device_config_save(const device_config_values_t *values)
         (error = nvs_set_str(handle, "bridge_url", values->bridge_url)) == ESP_OK &&
         (error = nvs_set_str(handle, "bridge_tok", values->bridge_token)) == ESP_OK &&
         (error = nvs_set_str(handle, "codex_tok", values->codex_bridge_token)) == ESP_OK &&
+        (error = nvs_set_str(handle, "qq_cookie", values->qqmusic_cookie)) == ESP_OK &&
         (error = nvs_set_u8(handle, "provisioned", 1)) == ESP_OK) {
         error = nvs_commit(handle);
     }
     nvs_close(handle);
+    return error;
+}
+
+esp_err_t device_config_store_qq_cookie(const char *cookie)
+{
+    if (cookie == NULL) return ESP_ERR_INVALID_ARG;
+    nvs_handle_t handle;
+    esp_err_t error = nvs_open(NAMESPACE, NVS_READWRITE, &handle);
+    if (error != ESP_OK) return error;
+    error = nvs_set_str(handle, "qq_cookie", cookie);
+    if (error == ESP_OK) error = nvs_commit(handle);
+    nvs_close(handle);
+    if (error == ESP_OK) {
+        strlcpy(s_config.qqmusic_cookie, cookie, sizeof(s_config.qqmusic_cookie));
+    }
+    return error;
+}
+
+esp_err_t device_config_store_codex_token(const char *token)
+{
+    if (token == NULL) return ESP_ERR_INVALID_ARG;
+    /* 11.8: the wire contract is 16..64 bytes; the buffer holds 64 + NUL. */
+    const size_t length = strlen(token);
+    if (length < 16 || length > 64) return ESP_ERR_INVALID_SIZE;
+    nvs_handle_t handle;
+    esp_err_t error = nvs_open(NAMESPACE, NVS_READWRITE, &handle);
+    if (error != ESP_OK) return error;
+    error = nvs_set_str(handle, "codex_tok", token);
+    if (error == ESP_OK) error = nvs_commit(handle);
+    nvs_close(handle);
+    if (error == ESP_OK) {
+        strlcpy(s_config.codex_bridge_token, token,
+                sizeof(s_config.codex_bridge_token));
+    }
+    return error;
+}
+
+esp_err_t device_config_clear_codex_token(void)
+{
+    nvs_handle_t handle;
+    esp_err_t error = nvs_open(NAMESPACE, NVS_READWRITE, &handle);
+    if (error != ESP_OK) return error;
+    error = nvs_erase_key(handle, "codex_tok");
+    if (error == ESP_ERR_NVS_NOT_FOUND) error = ESP_OK;
+    if (error == ESP_OK) error = nvs_commit(handle);
+    nvs_close(handle);
+    if (error == ESP_OK) memset(s_config.codex_bridge_token, 0,
+                                sizeof(s_config.codex_bridge_token));
     return error;
 }
 

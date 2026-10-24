@@ -6,6 +6,7 @@
 #include <string.h>
 
 #include "esp_log.h"
+#include "device_config.h"
 
 #define CUSTOM_IMAGE_BYTES (466 * 466 * 2)
 
@@ -90,6 +91,7 @@ static void copy_xiaozhi_config(cJSON *root, codex_snapshot_t *snapshot)
     snapshot->xiaozhi_wake_word[0] = '\0';
     snapshot->xiaozhi_voice[0] = '\0';
     snapshot->xiaozhi_mcp_enabled = true;
+    snapshot->xiaozhi_mcp_url[0] = '\0';
     cJSON *xiaozhi = cJSON_GetObjectItemCaseSensitive(root, "xiaozhi");
     if (!cJSON_IsObject(xiaozhi)) return;
     copy_json_string(xiaozhi, "server_url", snapshot->xiaozhi_server_url,
@@ -100,6 +102,40 @@ static void copy_xiaozhi_config(cJSON *root, codex_snapshot_t *snapshot)
                      sizeof(snapshot->xiaozhi_voice));
     cJSON *mcp = cJSON_GetObjectItemCaseSensitive(xiaozhi, "mcp_enabled");
     if (cJSON_IsBool(mcp)) snapshot->xiaozhi_mcp_enabled = cJSON_IsTrue(mcp);
+    copy_json_string(xiaozhi, "mcp_url", snapshot->xiaozhi_mcp_url,
+                     sizeof(snapshot->xiaozhi_mcp_url));
+    ESP_LOGI("snapshot", "xiaozhi from json: mcp=%d mcp_url=%s",
+             (int)snapshot->xiaozhi_mcp_enabled,
+             snapshot->xiaozhi_mcp_url[0] ? "set" : "EMPTY");
+}
+
+static void copy_qqmusic_config(cJSON *root, codex_snapshot_t *snapshot)
+{
+    snapshot->qqmusic_logged_in = false;
+    snapshot->qqmusic_cookie[0] = '\0';
+    snapshot->qqmusic_nickname[0] = '\0';
+    cJSON *qq = cJSON_GetObjectItemCaseSensitive(root, "qqmusic");
+    if (!cJSON_IsObject(qq)) return;
+    cJSON *logged = cJSON_GetObjectItemCaseSensitive(qq, "logged_in");
+    if (cJSON_IsBool(logged)) snapshot->qqmusic_logged_in = cJSON_IsTrue(logged);
+    copy_json_string(qq, "cookies", snapshot->qqmusic_cookie,
+                     sizeof(snapshot->qqmusic_cookie));
+    ESP_LOGI("snapshot", "qqmusic from json: logged_in=%d cookie_len=%u",
+             (int)snapshot->qqmusic_logged_in,
+             (unsigned)strlen(snapshot->qqmusic_cookie));
+    /* Persist the scanned session right here: this parser runs on every poll,
+       whereas the UI config hook only fires once at boot. */
+    if (snapshot->qqmusic_cookie[0] != '\0' &&
+        strcmp(device_config_get()->qqmusic_cookie, snapshot->qqmusic_cookie) != 0) {
+        if (device_config_store_qq_cookie(snapshot->qqmusic_cookie) == ESP_OK) {
+            ESP_LOGI("snapshot", "qqmusic cookie stored (%u bytes)",
+                     (unsigned)strlen(snapshot->qqmusic_cookie));
+        } else {
+            ESP_LOGW("snapshot", "qqmusic cookie store failed");
+        }
+    }
+    copy_json_string(qq, "nickname", snapshot->qqmusic_nickname,
+                     sizeof(snapshot->qqmusic_nickname));
 }
 
 static void copy_module_config(cJSON *root, codex_snapshot_t *snapshot)
@@ -355,6 +391,7 @@ bool management_snapshot_merge(codex_snapshot_t *target, const cJSON *root)
     );
     copy_module_config((cJSON *)root, target);
     copy_xiaozhi_config((cJSON *)root, target);
+    copy_qqmusic_config((cJSON *)root, target);
     copy_display_config((cJSON *)root, target);
     copy_custom_config((cJSON *)root, target);
     copy_dotii_state((cJSON *)root, target);
@@ -388,6 +425,8 @@ void management_snapshot_apply(codex_snapshot_t *target, const codex_snapshot_t 
     memcpy(target->xiaozhi_voice, source->xiaozhi_voice,
            sizeof(target->xiaozhi_voice));
     target->xiaozhi_mcp_enabled = source->xiaozhi_mcp_enabled;
+    memcpy(target->xiaozhi_mcp_url, source->xiaozhi_mcp_url,
+           sizeof(target->xiaozhi_mcp_url));
     target->custom_enabled = source->custom_enabled;
     target->dotii_enabled = source->dotii_enabled;
     target->custom_image_available = source->custom_image_available;

@@ -33,6 +33,10 @@ typedef struct {
     char wake_word[32];
     char voice[32];
     bool mcp_enabled;
+    /* Dedicated MCP access point published by the xiaozhi console
+       (wss://api.xiaozhi.me/mcp/?token=...). Tools are registered here, not on
+       the conversation socket. */
+    char mcp_url[512];
 } xiaozhi_config_t;
 
 typedef struct {
@@ -51,6 +55,12 @@ typedef struct {
     uint32_t assistant_text_revision;
     char last_text[192];
     char pending_audio_url[256];
+    /* A confirmed song waits here until the assistant stops speaking, so the
+       spoken confirmation and the music never fight over the speaker. */
+    char pending_music_url[384];
+    char pending_music_title[192];
+    uint32_t pending_music_ms;
+    bool pending_music_ready;
     char session_id[64];
     char websocket_url[192];
     char token[160];
@@ -75,7 +85,10 @@ typedef struct {
     atomic_bool wake_reply_pending;
     atomic_bool wake_reply_playing;
     atomic_bool music_task_started;
+    atomic_bool task_chime_pending;
+    atomic_bool task_chime_failed;
     bool codec_ready;
+    bool speaker_ready;
     int server_sample_rate;
     int server_frame_duration;
     volatile bool listening;
@@ -90,6 +103,7 @@ bool xiaozhi_client_available(void);
 void xiaozhi_client_init(xiaozhi_client_t *client);
 void xiaozhi_client_configure(xiaozhi_client_t *client, const xiaozhi_config_t *config);
 bool xiaozhi_client_start(xiaozhi_client_t *client);
+
 void xiaozhi_client_stop(xiaozhi_client_t *client);
 
 xiaozhi_session_state_t xiaozhi_client_state(const xiaozhi_client_t *client);
@@ -128,6 +142,18 @@ xiaozhi_music_format_t xiaozhi_music_format_from_url(const char *url);
 
 /* Push-to-talk control used by the round-screen touch UI. */
 bool xiaozhi_client_send_listen(xiaozhi_client_t *client, bool start);
+
+/* Play a resolved stream URL (used by the local QQ Music path). */
+bool xiaozhi_client_play_url(xiaozhi_client_t *client, const char *url, const char *title);
+
+/* Queue a resolved song so it starts only after the assistant finishes its
+   spoken confirmation. A timeout starts it anyway if no speech arrives. */
+void xiaozhi_client_queue_music(xiaozhi_client_t *client, const char *url, const char *title);
+void xiaozhi_client_tick_pending_music(xiaozhi_client_t *client);
+/* Drops a parked song. Called when a newer request arrives or when the
+   queued entry has outlived its usefulness, so an old request can never
+   start playing after a later one failed. */
+void xiaozhi_client_cancel_pending_music(xiaozhi_client_t *client);
 bool xiaozhi_client_send_abort(xiaozhi_client_t *client);
 
 /* Speaker volume used by both the control center and the codec layer. */
@@ -136,6 +162,8 @@ uint8_t xiaozhi_client_set_volume(xiaozhi_client_t *client, int volume, bool per
 
 /* Voice wake is produced by the audio task and consumed by the LVGL thread. */
 void xiaozhi_client_notify_wake_word(xiaozhi_client_t *client);
+/* Queue a short completion chime (failed=true plays a lower tone). */
+void xiaozhi_client_notify_task_completed(xiaozhi_client_t *client, bool failed);
 bool xiaozhi_client_take_wake_event(xiaozhi_client_t *client);
 bool xiaozhi_client_take_wake_reply(xiaozhi_client_t *client);
 

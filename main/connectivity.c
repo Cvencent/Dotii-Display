@@ -98,6 +98,7 @@ static bool fetch_snapshot(codex_snapshot_t *management)
         .buffer_size = 1024,
         .crt_bundle_attach = esp_crt_bundle_attach,
     };
+    ESP_LOGI(TAG, "fetching management snapshot: %s", device_config->bridge_url);
     esp_http_client_handle_t client = esp_http_client_init(&config);
     if (client == NULL) {
         heap_caps_free(response.body);
@@ -121,6 +122,8 @@ static bool fetch_snapshot(codex_snapshot_t *management)
         heap_caps_free(response.body);
         return false;
     }
+    ESP_LOGI(TAG, "snapshot bytes=%u internal free=%u", (unsigned)response.length,
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
     bool parsed = management_snapshot_parse(response.body, management);
     heap_caps_free(response.body);
     /* The standalone custom page is gone, so its 434 KB framebuffer is no
@@ -142,6 +145,21 @@ static void publish_current_state(void)
     if (s_state_lock != NULL) xSemaphoreGive(s_state_lock);
 }
 
+/* The task list carries a per-task status, so the device can always derive
+   the number of in-progress turns even if a bridge emits a stale or missing
+   `running` field in its codex_state message. */
+static uint16_t derive_running_tasks(void)
+{
+    uint16_t running = 0;
+    for (size_t index = 0; index < s_work_task_count; ++index) {
+        if (s_work_tasks[index].status == CODEX_STATUS_WORKING ||
+            s_work_tasks[index].status == CODEX_STATUS_WAITING) {
+            running++;
+        }
+    }
+    return running;
+}
+
 void connectivity_apply_codex_bridge_message(
     const codex_bridge_message_t *message,
     void *context
@@ -152,6 +170,12 @@ void connectivity_apply_codex_bridge_message(
     if (s_state_lock != NULL) xSemaphoreTake(s_state_lock, portMAX_DELAY);
     if (strcmp(message->type, "codex_state") == 0) {
         codex_snapshot_merge_codex_state(&s_work_snapshot, message->data);
+        /* The Bridge counters are authoritative and cover every task it
+           tracks; only fall back to the local task list when the bridge did
+           not deliver a summary. */
+        if (!s_work_snapshot.codex_state_summary_valid && s_work_task_count > 0) {
+            s_work_snapshot.running_tasks = derive_running_tasks();
+        }
         s_last_snapshot = s_work_snapshot;
         app_state_publish(&s_work_snapshot);
         if (s_state_lock != NULL) xSemaphoreGive(s_state_lock);
@@ -166,6 +190,27 @@ void connectivity_apply_codex_bridge_message(
         );
         s_last_snapshot = s_work_snapshot;
         app_state_tasks_publish(s_work_tasks, s_work_task_count);
+        app_state_publish(&s_work_snapshot);
+        if (s_state_lock != NULL) xSemaphoreGive(s_state_lock);
+        return;
+    }
+    if (strcmp(message->type, "bridge_online") == 0) {
+        /* The Bridge session came back (fresh connect, or a reconnect after a
+           restart). Flip the source-online flag so the panel leaves the
+           offline state. The counters themselves are republished by the
+           projection layer once the next home-counter datagram arrives, so
+           nothing is cleared here. */
+        codex_snapshot_apply_source_state(&s_work_snapshot, true, s_bridge_online);
+        s_last_snapshot = s_work_snapshot;
+        app_state_publish(&s_work_snapshot);
+        if (s_state_lock != NULL) xSemaphoreGive(s_state_lock);
+        return;
+    }
+    if (strcmp(message->type, "bridge_offline") == 0) {
+        /* The bridge session died. Clear the source-online flag right away so
+           the panel shows the offline state instead of a frozen task count. */
+        codex_snapshot_apply_source_state(&s_work_snapshot, false, s_bridge_online);
+        s_last_snapshot = s_work_snapshot;
         app_state_publish(&s_work_snapshot);
         if (s_state_lock != NULL) xSemaphoreGive(s_state_lock);
         return;
@@ -185,6 +230,9 @@ void connectivity_apply_codex_bridge_message(
             &s_work_task_count,
             CODEX_TASK_DETAIL_MAX
         );
+        if (!s_work_snapshot.codex_state_summary_valid) {
+            s_work_snapshot.running_tasks = derive_running_tasks();
+        }
     } else if (strcmp(message->kind, "result") == 0) {
         codex_snapshot_merge_result(&s_work_snapshot, message->data);
         codex_snapshot_attach_result(
@@ -195,6 +243,11 @@ void connectivity_apply_codex_bridge_message(
         );
     } else if (strcmp(message->kind, "codex_status") == 0) {
         codex_snapshot_merge_quota(&s_work_snapshot, message->data);
+    } else if (strcmp(message->kind, "account") == 0) {
+        /* account.changed / rate_limits.changed / token_usage.changed arrive
+           as CBDP events and are served here from the same committed state as
+           the account.* read commands. */
+        codex_snapshot_merge_account(&s_work_snapshot, message->data);
     } else {
         if (s_state_lock != NULL) xSemaphoreGive(s_state_lock);
         return;
@@ -210,9 +263,13 @@ void connectivity_apply_codex_bridge_message(
 static void bridge_task(void *argument)
 {
     (void)argument;
-    const bool management_requested =
-        strlen(device_config_get()->codex_bridge_token) < 16 &&
-        strlen(device_config_get()->bridge_url) > 0;
+    /* The management snapshot carries the xiaozhi config (wake word, voice and
+       the MCP tool access point) as well as display settings. Those must keep
+       arriving even when Codex data is also flowing over the direct CDBP
+       session, so the only requirement here is a configured bridge URL.
+       Gating this on the absence of a CodexBridge token left every xiaozhi
+       setting permanently at its default. */
+    const bool management_requested = strlen(device_config_get()->bridge_url) > 0;
     publish_current_state();
     while (true) {
         EventBits_t bits = xEventGroupWaitBits(
@@ -344,9 +401,14 @@ void connectivity_start(void)
        that mode the legacy HTTP snapshot must not run at all, including the
        startup window before the direct session finishes its handshake. */
     const bool direct_requested = strlen(device_config->codex_bridge_token) >= 16;
+    /* With no token the CBDP session starts in pairing mode and waits for the
+       host admin to approve the device, so say that rather than showing a
+       state the user cannot act on. Pairing needs no management URL, so that
+       case takes priority over the legacy snapshot wording. */
     strlcpy(s_bridge_note,
-            direct_requested ? "等待 CodexBridge"
-                             : (strlen(device_config->bridge_url) == 0 ? "未配置" : "等待管理中心"),
+            direct_requested
+                ? "等待 CodexBridge"
+                : (strlen(device_config->bridge_url) == 0 ? "等待电脑端批准" : "等待管理中心"),
             sizeof(s_bridge_note));
 
     /* Reserve the polling task before the Wi-Fi driver fragments internal RAM. */

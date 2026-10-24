@@ -2,6 +2,7 @@
 #include "board_input.h"
 #include "ble_bridge.h"
 #include "bsp/esp-bsp.h"
+#include "codex_bridge_projection.h"
 #include "connectivity.h"
 #include "codex_bridge_client.h"
 #include "device_config.h"
@@ -102,6 +103,9 @@ void app_main(void)
     board_input_prepare_after_wake();
     ESP_ERROR_CHECK(device_identity_init());
     ESP_ERROR_CHECK(device_config_init());
+    /* cJSON trees (projection, BLE, management snapshots) are large and
+       belong in PSRAM: internal RAM is reserved for DMA and the radio. */
+    codex_bridge_cjson_hooks_install();
 
     QueueHandle_t queue = app_state_queue_create();
     ESP_ERROR_CHECK(queue == NULL ? ESP_ERR_NO_MEM : ESP_OK);
@@ -150,6 +154,9 @@ void app_main(void)
     /* LVGL timers must not touch NVS from this PSRAM stack; display
        settings are committed by the ui_nvs worker instead. */
     display_cfg.lv_adapter_cfg.stack_in_psram = true;
+    /* Keep the LVGL worker on the app core so audio (core 0) and radio never
+       contend with face rasterisation. */
+    display_cfg.lv_adapter_cfg.task_core_id = 1;
     lv_display_t *display = bsp_display_start_with_config(&display_cfg);
     log_heap_health("display");
     ESP_ERROR_CHECK(display == NULL ? ESP_FAIL : ESP_OK);

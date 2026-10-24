@@ -153,3 +153,49 @@ TEST_CASE("management snapshot requires schema one", "[management_merge]")
     TEST_ASSERT_FALSE(management_snapshot_merge(snapshot, data));
     cJSON_Delete(data);
 }
+
+/* ---- preview scaffolding must never masquerade as measured data ---- */
+
+TEST_CASE("preview snapshot never claims a measured quota", "[management_merge]")
+{
+    /* app_state_make_preview() used to hard-code 68%, 18420 tokens and the
+       fixed dates "08-18 14:40" / "08-18 10:00" while marking every window
+       available. With no Codex account signed in those numbers are pure
+       fiction, and the panel rendered them exactly like real usage. */
+    codex_snapshot_t snapshot;
+    app_state_make_preview(&snapshot);
+
+    TEST_ASSERT_TRUE(snapshot.preview_data);
+    TEST_ASSERT_FALSE(snapshot.five_hour_available);
+    TEST_ASSERT_FALSE(snapshot.weekly_available);
+    TEST_ASSERT_FALSE(snapshot.weekly_tokens_available);
+    TEST_ASSERT_FALSE(snapshot.task_tokens_available);
+    TEST_ASSERT_EQUAL_STRING("", snapshot.five_hour_reset_date);
+    TEST_ASSERT_EQUAL_STRING("", snapshot.reset_date);
+    /* The scaffolding the layout needs is still filled in. */
+    TEST_ASSERT_TRUE(snapshot.screen_off_timeout_seconds > 0);
+    TEST_ASSERT_TRUE(snapshot.character_id[0] != '\0');
+}
+
+TEST_CASE("real account data replaces the preview scaffolding", "[management_merge]")
+{
+    /* The preview used to be sticky: management snapshots never carried quota
+       fields, so once 68% was seeded it survived every poll and the panel
+       looked like it had live usage. A real account message must take over. */
+    codex_snapshot_t *target = snapshot_for_test();
+    app_state_make_preview(target);
+    TEST_ASSERT_FALSE(target->weekly_available);
+    cJSON *data = parse_json(
+        "{\"plan_type\":\"plus\",\"rate_limits\":["
+        "{\"window\":\"weekly\",\"remaining_percent\":73}],"
+        "\"token_usage\":{\"seven_day_tokens\":5000}}");
+
+    codex_snapshot_merge_account(target, data);
+
+    TEST_ASSERT_TRUE(target->weekly_available);
+    TEST_ASSERT_EQUAL_INT(73, target->weekly_remaining_percent);
+    TEST_ASSERT_EQUAL_UINT(5000, target->weekly_tokens);
+    TEST_ASSERT_TRUE(target->weekly_tokens_available);
+    TEST_ASSERT_EQUAL_STRING("plus", target->plan_type);
+    cJSON_Delete(data);
+}

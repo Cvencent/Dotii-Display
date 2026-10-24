@@ -1,5 +1,6 @@
 #include "state_ui.h"
 
+#include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
@@ -9,22 +10,23 @@
 #include "board_input.h"
 #include "bsp/display.h"
 #include "codex_bridge_client.h"
-#include "codex_read_tracker.h"
 #include "connectivity.h"
-#include "emotion/character_pack.h"
-#include "emotion/emotion_catalog.h"
-#include "emotion/emotion_engine.h"
+#include "emotion/dotii_data.h"
+#include "emotion/dotii_engine.h"
 #include "emotion/emotion_mood.h"
 #include "emotion/emotion_mood_store.h"
-#include "emotion/emotion_render.h"
+#include "emotion/dotii_render.h"
 #include "emotion/emotion_router.h"
 #include "xiaozhi_client.h"
+#include "qqmusic_client.h"
+#include "device_config.h"
 #include "device_config.h"
 #include "esp_attr.h"
 #include "esp_app_desc.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_system.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
@@ -80,16 +82,7 @@ static lv_obj_t *s_plus_running_count;
 static lv_obj_t *s_plus_completed_count;
 static lv_obj_t *s_plus_failed_count;
 static lv_obj_t *s_plus_status_pill;
-static lv_obj_t *s_detail;
 static lv_obj_t *s_xiaozhi_page;
-static lv_obj_t *s_detail_title;
-static lv_obj_t *s_detail_meta;
-static lv_obj_t *s_user_message;
-static lv_obj_t *s_assistant_message;
-static lv_obj_t *s_assistant_speaker;
-static lv_obj_t *s_assistant_bubble;
-static lv_obj_t *s_detail_chat;
-static lv_obj_t *s_detail_footer;
 static lv_obj_t *s_control;
 static lv_obj_t *s_settings;
 static lv_obj_t *s_power;
@@ -107,7 +100,6 @@ static lv_obj_t *s_weekly_tokens;
 static lv_obj_t *s_reset_day;
 static lv_obj_t *s_reset_time;
 static lv_obj_t *s_time_main;
-static lv_obj_t *s_time_detail;
 static lv_obj_t *s_time_xiaozhi;
 static lv_obj_t *s_xiaozhi_status_pill;
 static lv_obj_t *s_xiaozhi_status_dot;
@@ -125,18 +117,36 @@ static lv_obj_t *s_settings_reset_detail;
 static lv_obj_t *s_brightness_slider;
 static lv_obj_t *s_volume_slider;
 static lv_obj_t *s_volume_label;
-static emotion_engine_t s_xiaozhi_engine;
+static dotii_engine_t s_xiaozhi_engine;
 static emotion_router_t s_xiaozhi_router;
-static emotion_render_t s_xiaozhi_render;
+static dotii_render_t s_xiaozhi_render;
 static bool s_xiaozhi_engine_ready;
 static emotion_mood_t s_xiaozhi_mood;
+/* Turn-scoped face semantics: while Xiaozhi speaks, the face only changes on
+   a genuinely new server emotion or a session-state change. Emotion expiry
+   (the server emotion field times out after 5 s), mood drift and streaming
+   text growth never switch the face mid-sentence. */
+#define XIAOZHI_SERVER_EMOTION_MIN_GAP_MS 700u
+#define XIAOZHI_SPEAK_AFTERGLOW_MS 1200u
+static char s_xz_turn_emotion[3] = {0, 0, 0};
+static uint32_t s_xz_turn_emotion_ms;
+static uint32_t s_xz_handled_emotion_rev;
+static bool s_xz_turn_server_applied;
+static xiaozhi_session_state_t s_xz_face_session = XIAOZHI_STATE_DISABLED;
+static uint32_t s_xz_afterglow_until_ms;
 static uint32_t s_xiaozhi_mood_user_revision;
 static uint32_t s_xiaozhi_mood_assistant_revision;
 static uint32_t s_xiaozhi_mood_server_revision;
-static char s_xiaozhi_character[16] = "auto";
-static size_t s_xiaozhi_character_index;
-static uint32_t s_xiaozhi_character_changed_ms;
+
 static xiaozhi_client_t s_xiaozhi;
+/* Set by the page loader when the Xiaozhi screen is loaded, so the first frame
+   after becoming visible repaints the whole canvas. The canvas lives in PSRAM
+   and is normally only repainted inside the previous frame's dirty rectangle,
+   so the pixels outside it are stale and would show as a garbled pattern when
+   the page is shown again. An explicit flag is used instead of a time
+   heuristic: a full repaint itself takes ~200 ms, so any "long gap" test would
+   re-trigger on its own output and loop forever. */
+static bool s_xiaozhi_face_needs_full;
 /* Websocket start/stop can block for a long time (TLS connect, close
    handshake). Those calls must never run inside an LVGL timer: a stalled close
    used to hold the LVGL lock forever, which froze the screen and both hardware
@@ -185,20 +195,7 @@ typedef enum {
 } transition_t;
 static transition_t s_pending_transition;
 static lv_font_t s_ui_font;
-static char *s_rendered_conversation;
-static codex_task_detail_t *s_detail_task;
-static size_t s_detail_task_index;
-static size_t s_detail_task_count;
-static char s_detail_thread_id[64];
-static char s_read_ack_message_id[80];
-static char s_read_ack_result_message_id[80];
 static uint32_t s_xiaozhi_touch_started;
-static uint32_t s_dotii_state_started;
-static uint32_t s_dotii_state_token;
-static uint32_t s_dotii_state_duration_ms;
-static dotii_expression_t s_dotii_state_expression;
-static bool s_dotii_state_assigned;
-static bool s_dotii_state_seen;
 
 typedef struct {
     lv_obj_t *screen;
@@ -213,7 +210,6 @@ static bool page_enabled(uint8_t page);
 static lv_obj_t *page_screen(uint8_t page);
 static lv_obj_t *first_enabled_screen(void);
 static lv_obj_t *enabled_return_screen(lv_obj_t *screen);
-static void render_codex_detail(void);
 static void render_xiaozhi_expression(void);
 static void xiaozhi_sync_config(void);
 static void xiaozhi_supervisor_task(void *argument);
@@ -224,6 +220,30 @@ static void screen_off(void);
 static void screen_wake(void);
 static bool enter_screen_saver(void);
 static bool exit_screen_saver(void);
+/* LVGL frees and re-allocates the text buffer of a label on every
+   lv_label_set_text() call. Writing the same text again on every UI tick
+   therefore fragments the heap, which is what made the panel die with a
+   malloc error. Only touch a label when its text really changed. */
+static void set_label_text_cached(lv_obj_t *label, const char *text)
+{
+    if (label == NULL) return;
+    if (text == NULL) text = "";
+    const char *current = lv_label_get_text(label);
+    if (current != NULL && strcmp(current, text) == 0) return;
+    lv_label_set_text(label, text);
+}
+
+static void set_label_text_fmt_cached(lv_obj_t *label, const char *fmt, ...)
+{
+    if (label == NULL || fmt == NULL) return;
+    char buffer[256];
+    va_list args;
+    va_start(args, fmt);
+    vsnprintf(buffer, sizeof(buffer), fmt, args);
+    va_end(args);
+    set_label_text_cached(label, buffer);
+}
+
 static lv_obj_t *make_label(lv_obj_t *parent, const char *text,
                             const lv_font_t *font, uint32_t text_color);
 
@@ -244,7 +264,7 @@ static void set_screen_background(lv_obj_t *screen)
 static lv_obj_t *make_label(lv_obj_t *parent, const char *text, const lv_font_t *font, uint32_t text_color)
 {
     lv_obj_t *label = lv_label_create(parent);
-    lv_label_set_text(label, text);
+    set_label_text_cached(label, text);
     lv_obj_set_style_text_font(label, font, 0);
     lv_obj_set_style_text_color(label, color(text_color), 0);
     return label;
@@ -290,10 +310,58 @@ static void update_task_counter(lv_obj_t *label, bool available, uint16_t value)
 {
     if (label == NULL) return;
     if (!available) {
-        lv_label_set_text(label, "--");
+        set_label_text_cached(label, "--");
     } else {
-        lv_label_set_text_fmt(label, "%u", (unsigned)value);
+        set_label_text_fmt_cached(label, "%u", (unsigned)value);
     }
+}
+
+/* The usage arc covers the whole panel, so writing its value or its colour
+   invalidates every pixel of the screen and turns a cheap partial update
+   into a full panel flush of about 78 milliseconds. The management snapshot
+   arrives every couple of seconds while the numbers hardly ever change, so
+   the arc is only touched when it really changes. */
+typedef struct {
+    lv_obj_t *arc;
+    int32_t value;
+    uint32_t color;
+    bool used;
+    bool valid;
+} arc_display_slot_t;
+
+static arc_display_slot_t s_arc_slots[3];
+
+static void arc_display_update(lv_obj_t *arc, int32_t value, uint32_t hex)
+{
+    if (arc == NULL) return;
+    arc_display_slot_t *slot = NULL;
+    for (size_t i = 0; i < sizeof(s_arc_slots) / sizeof(s_arc_slots[0]); ++i) {
+        if (s_arc_slots[i].used && s_arc_slots[i].arc == arc) {
+            slot = &s_arc_slots[i];
+            break;
+        }
+    }
+    if (slot == NULL) {
+        for (size_t i = 0; i < sizeof(s_arc_slots) / sizeof(s_arc_slots[0]); ++i) {
+            if (!s_arc_slots[i].used) {
+                slot = &s_arc_slots[i];
+                slot->used = true;
+                slot->arc = arc;
+                break;
+            }
+        }
+    }
+    if (slot == NULL) {
+        lv_arc_set_value(arc, value);
+        lv_obj_set_style_arc_color(arc, color(hex), LV_PART_INDICATOR);
+        return;
+    }
+    if (slot->valid && slot->value == value && slot->color == hex) return;
+    slot->valid = true;
+    slot->value = value;
+    slot->color = hex;
+    lv_arc_set_value(arc, value);
+    lv_obj_set_style_arc_color(arc, color(hex), LV_PART_INDICATOR);
 }
 
 /* Centering a scaled label by its glyph bounds is unstable because Chinese
@@ -385,6 +453,7 @@ static void load_screen_commit(void *user_data)
     if (s_pending_transition == TRANSITION_DIRECT) {
         lv_screen_load(screen);
         lv_obj_invalidate(screen);
+        if (screen == s_xiaozhi_page) s_xiaozhi_face_needs_full = true;
         lv_refr_now(lv_obj_get_display(screen));
         s_screen_load_pending = false;
         if (s_voice_wake_transition_pending && screen == s_xiaozhi_page) {
@@ -394,6 +463,7 @@ static void load_screen_commit(void *user_data)
         return;
     }
 
+    if (screen == s_xiaozhi_page) s_xiaozhi_face_needs_full = true;
     lv_screen_load_anim(screen,
                         s_pending_transition == TRANSITION_CONTROL_DOWN ? LV_SCREEN_LOAD_ANIM_OVER_BOTTOM :
                         s_pending_transition == TRANSITION_CONTROL_UP ? LV_SCREEN_LOAD_ANIM_OUT_TOP :
@@ -475,8 +545,7 @@ static void add_activity_event(lv_obj_t *screen)
 
 static void return_from_current(void)
 {
-    if (s_current == s_detail) load_screen(enabled_return_screen(page_screen(0)), false);
-    else if (s_current == s_settings) load_screen(first_enabled_screen(), false);
+    if (s_current == s_settings) load_screen(first_enabled_screen(), false);
     else if (s_current == s_power) load_screen(enabled_return_screen(s_before_power), false);
 }
 
@@ -498,27 +567,6 @@ static void swipe_event(lv_event_t *event)
         /* One upward swipe advances one viewport step. */
     } else if (direction == LV_DIR_BOTTOM && page_scroll_current(false)) {
         /* One downward swipe returns one viewport step. */
-    } else if ((s_current == s_main || s_current == s_plus_main) && direction == LV_DIR_LEFT) {
-        s_detail_task_index = 0;
-        s_detail_thread_id[0] = '\0';
-        render_codex_detail();
-        load_screen(s_detail, true);
-    } else if (s_current == s_detail && direction == LV_DIR_LEFT) {
-        if (s_detail_task_index + 1 < s_detail_task_count) {
-            bsp_display_transform_set_next_sweep(BSP_DISPLAY_SWEEP_LEFT);
-            s_detail_task_index++;
-            s_detail_thread_id[0] = '\0';
-            render_codex_detail();
-        }
-    } else if (s_current == s_detail && direction == LV_DIR_RIGHT) {
-        if (s_detail_task_index > 0) {
-            bsp_display_transform_set_next_sweep(BSP_DISPLAY_SWEEP_RIGHT);
-            s_detail_task_index--;
-            s_detail_thread_id[0] = '\0';
-            render_codex_detail();
-        } else {
-            return_from_current();
-        }
     } else if (direction == LV_DIR_RIGHT) {
         return_from_current();
     }
@@ -548,7 +596,7 @@ static void volume_changed(lv_event_t *event)
     const uint8_t volume = xiaozhi_client_set_volume(
         &s_xiaozhi, requested, code == LV_EVENT_RELEASED);
     if (s_volume_label != NULL) {
-        lv_label_set_text_fmt(s_volume_label, "音量 %u%%", (unsigned)volume);
+        set_label_text_fmt_cached(s_volume_label, "音量 %u%%", (unsigned)volume);
     }
 }
 
@@ -700,11 +748,6 @@ static void refresh_clicked(lv_event_t *event)
     if (lv_event_get_code(event) == LV_EVENT_CLICKED) connectivity_request_refresh();
 }
 
-static void restart_anim_exec(void *object, int32_t value)
-{
-    lv_bar_set_value((lv_obj_t *)object, value, LV_ANIM_OFF);
-}
-
 static void restart_hold_anim_exec(void *object, int32_t value)
 {
     lv_color_t mixed = lv_color_mix(color(0x286348), color(0x173D2D), (uint8_t)value);
@@ -731,19 +774,19 @@ static void provisioning_reset_anim_done(lv_anim_t *animation)
     (void)animation;
     esp_err_t config_error = device_config_clear_provisioning();
     if (config_error != ESP_OK) {
-        lv_label_set_text(s_settings_reset_detail, "重置失败，请重试");
+        set_label_text_cached(s_settings_reset_detail, "重置失败，请重试");
         lv_obj_set_style_bg_color(s_settings_reset_button, color(0x321A1A), 0);
         lv_obj_set_style_bg_color(s_settings_reset_button, color(0x4A2422), LV_STATE_PRESSED);
         return;
     }
     esp_err_t bonds_error = ble_bridge_clear_bonds();
     if (bonds_error != ESP_OK) {
-        lv_label_set_text(s_settings_reset_detail, "重置失败，请重试");
+        set_label_text_cached(s_settings_reset_detail, "重置失败，请重试");
         lv_obj_set_style_bg_color(s_settings_reset_button, color(0x321A1A), 0);
         lv_obj_set_style_bg_color(s_settings_reset_button, color(0x4A2422), LV_STATE_PRESSED);
         return;
     }
-    lv_label_set_text(s_settings_reset_detail, "已清除，正在重新启动");
+    set_label_text_cached(s_settings_reset_detail, "已清除，正在重新启动");
     esp_restart();
 }
 
@@ -752,7 +795,7 @@ static void provisioning_reset_event(lv_event_t *event)
     lv_event_code_t code = lv_event_get_code(event);
     lv_obj_t *button = lv_event_get_current_target(event);
     if (code == LV_EVENT_PRESSED) {
-        lv_label_set_text(s_settings_reset_detail, "继续按住以确认");
+        set_label_text_cached(s_settings_reset_detail, "继续按住以确认");
         lv_anim_t animation;
         lv_anim_init(&animation);
         lv_anim_set_var(&animation, button);
@@ -765,7 +808,7 @@ static void provisioning_reset_event(lv_event_t *event)
         lv_anim_delete(button, provisioning_reset_hold_anim_exec);
         lv_obj_set_style_bg_color(button, color(0x321A1A), 0);
         lv_obj_set_style_bg_color(button, color(0x4A2422), LV_STATE_PRESSED);
-        lv_label_set_text(s_settings_reset_detail, "长按 1.2 秒，清除配网信息");
+        set_label_text_cached(s_settings_reset_detail, "长按 1.2 秒，清除配网信息");
     }
 }
 
@@ -887,7 +930,7 @@ static lv_obj_t *first_enabled_screen(void)
 
 static bool screen_enabled(lv_obj_t *screen)
 {
-    if (screen == s_main || screen == s_plus_main || screen == s_detail) return page_enabled(0);
+    if (screen == s_main || screen == s_plus_main) return page_enabled(0);
     if (screen == s_xiaozhi_page) return page_enabled(1);
     return true;
 }
@@ -1120,7 +1163,7 @@ static void build_plus_main(void)
 static void set_usage_reset_text(lv_obj_t *label, const char *reset_date, bool time_only)
 {
     if (reset_date == NULL || reset_date[0] == '\0') {
-        lv_label_set_text(label, "--");
+        set_label_text_cached(label, "--");
         return;
     }
     const char *value = reset_date;
@@ -1128,15 +1171,15 @@ static void set_usage_reset_text(lv_obj_t *label, const char *reset_date, bool t
         const char *space = strchr(reset_date, ' ');
         if (space != NULL && space[1] != '\0') value = space + 1;
     }
-    lv_label_set_text(label, value);
+    set_label_text_cached(label, value);
 }
 
 static void set_weekly_reset_text(lv_obj_t *day_label, lv_obj_t *time_label,
                                   const char *reset_date)
 {
     if (reset_date == NULL || reset_date[0] == '\0') {
-        lv_label_set_text(day_label, "--");
-        lv_label_set_text(time_label, "");
+        set_label_text_cached(day_label, "--");
+        set_label_text_cached(time_label, "");
         return;
     }
 
@@ -1147,8 +1190,8 @@ static void set_weekly_reset_text(lv_obj_t *day_label, lv_obj_t *time_label,
     if (sscanf(reset_date, "%d-%d %d:%d", &month, &day, &hour, &minute) != 4 ||
         month < 1 || month > 12 || day < 1 || day > 31 ||
         hour < 0 || hour > 23 || minute < 0 || minute > 59) {
-        lv_label_set_text(day_label, "--");
-        lv_label_set_text(time_label, reset_date);
+        set_label_text_cached(day_label, "--");
+        set_label_text_cached(time_label, reset_date);
         return;
     }
 
@@ -1156,7 +1199,7 @@ static void set_weekly_reset_text(lv_obj_t *day_label, lv_obj_t *time_label,
     struct tm local;
     localtime_r(&now, &local);
     if (local.tm_year < 120) {
-        lv_label_set_text(day_label, "--");
+        set_label_text_cached(day_label, "--");
     } else {
         struct tm reset = local;
         reset.tm_mon = month - 1;
@@ -1179,223 +1222,12 @@ static void set_weekly_reset_text(lv_obj_t *day_label, lv_obj_t *time_label,
         };
         struct tm reset_local;
         localtime_r(&reset_at, &reset_local);
-        lv_label_set_text(day_label, weekdays[reset_local.tm_wday]);
+        set_label_text_cached(day_label, weekdays[reset_local.tm_wday]);
     }
 
     char time_text[6];
     snprintf(time_text, sizeof(time_text), "%02d:%02d", hour, minute);
-    lv_label_set_text(time_label, time_text);
-}
-
-static lv_obj_t *make_bubble(lv_obj_t *parent, const char *speaker, bool user)
-{
-    lv_obj_t *row = lv_obj_create(parent);
-    lv_obj_remove_style_all(row);
-    lv_obj_set_width(row, LV_PCT(100));
-    lv_obj_set_height(row, LV_SIZE_CONTENT);
-    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
-    lv_obj_remove_flag(row, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_remove_flag(row, LV_OBJ_FLAG_CLICKABLE);
-
-    lv_obj_t *bubble = lv_obj_create(row);
-    lv_obj_set_width(bubble, 334);
-    lv_obj_set_height(bubble, LV_SIZE_CONTENT);
-    lv_obj_set_style_radius(bubble, 20, 0);
-    lv_obj_set_style_bg_color(bubble, color(user ? 0x17283B : COLOR_SURFACE), 0);
-    lv_obj_set_style_bg_opa(bubble, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_width(bubble, user ? 0 : 1, 0);
-    lv_obj_set_style_border_color(bubble, color(0x303735), 0);
-    lv_obj_set_style_pad_all(bubble, 13, 0);
-    lv_obj_set_flex_flow(bubble, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_row(bubble, 5, 0);
-    lv_obj_t *who = make_label(bubble, speaker, &s_ui_font, user ? COLOR_BLUE : COLOR_TEXT);
-    lv_obj_set_style_bg_color(who, color(user ? 0x17283B : COLOR_SURFACE), 0);
-    lv_obj_set_style_bg_opa(who, LV_OPA_COVER, 0);
-    if (!user) {
-        s_assistant_speaker = who;
-        s_assistant_bubble = bubble;
-    }
-    lv_obj_set_width(who, LV_PCT(100));
-    lv_obj_t *message = make_label(bubble, "--", &ui_font_cjk_20, user ? 0xD8EBFF : 0xD8E2DE);
-    lv_obj_set_style_bg_color(message, color(user ? 0x17283B : COLOR_SURFACE), 0);
-    lv_obj_set_style_bg_opa(message, LV_OPA_COVER, 0);
-    lv_label_set_long_mode(message, LV_LABEL_LONG_WRAP);
-    lv_obj_set_width(message, LV_PCT(100));
-    lv_obj_set_style_text_line_space(message, 3, 0);
-    return message;
-}
-
-static bool update_assistant_messages(const char *text)
-{
-    const char *render_text = text != NULL && text[0] ? text : "暂无 Codex 消息";
-    if (s_rendered_conversation != NULL && strcmp(s_rendered_conversation, render_text) == 0) return false;
-    size_t render_size = strlen(render_text) + 1;
-    char *cache = heap_caps_realloc(s_rendered_conversation, render_size,
-                                    MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (cache != NULL) {
-        s_rendered_conversation = cache;
-        memcpy(s_rendered_conversation, render_text, render_size);
-    }
-
-    while (lv_obj_get_child_count(s_assistant_bubble) > 1) {
-        lv_obj_delete(lv_obj_get_child(s_assistant_bubble, 1));
-    }
-
-    const char *cursor = render_text;
-    bool first = true;
-    while (*cursor != '\0') {
-        const char *separator = strchr(cursor, '\x1E');
-        size_t length = separator != NULL ? (size_t)(separator - cursor) : strlen(cursor);
-        if (!first) {
-            lv_obj_t *line = lv_obj_create(s_assistant_bubble);
-            lv_obj_remove_style_all(line);
-            lv_obj_set_size(line, LV_PCT(100), 1);
-            lv_obj_set_style_bg_color(line, color(0x44504C), 0);
-            lv_obj_set_style_bg_opa(line, LV_OPA_70, 0);
-            lv_obj_set_style_margin_top(line, 5, 0);
-            lv_obj_set_style_margin_bottom(line, 5, 0);
-            lv_obj_remove_flag(line, LV_OBJ_FLAG_SCROLLABLE);
-        }
-        lv_obj_t *message = make_label(s_assistant_bubble, "", &ui_font_cjk_20, 0xD8E2DE);
-        lv_obj_set_style_bg_color(message, color(COLOR_SURFACE), 0);
-        lv_obj_set_style_bg_opa(message, LV_OPA_COVER, 0);
-        lv_label_set_long_mode(message, LV_LABEL_LONG_WRAP);
-        lv_obj_set_width(message, LV_PCT(100));
-        lv_obj_set_style_text_line_space(message, 3, 0);
-        lv_label_set_text_fmt(message, "%.*s", (int)length, cursor);
-        if (first) s_assistant_message = message;
-        first = false;
-        if (separator == NULL) break;
-        cursor = separator + 1;
-    }
-    lv_obj_update_layout(s_detail_chat);
-    lv_obj_invalidate(s_detail_chat);
-    return true;
-}
-
-static void position_codex_detail(codex_task_status_t status)
-{
-    lv_obj_update_layout(s_detail_chat);
-    if (status == CODEX_STATUS_WORKING || status == CODEX_STATUS_WAITING) {
-        int32_t bottom = lv_obj_get_scroll_bottom(s_detail_chat);
-        lv_obj_scroll_to_y(s_detail_chat, lv_obj_get_scroll_y(s_detail_chat) + bottom, LV_ANIM_OFF);
-        return;
-    }
-    lv_obj_t *assistant_row = lv_obj_get_parent(s_assistant_bubble);
-    lv_obj_scroll_to_y(s_detail_chat, lv_obj_get_y(assistant_row), LV_ANIM_OFF);
-}
-
-static void render_codex_detail(void)
-{
-    if (s_detail_task == NULL) return;
-    codex_task_status_t previous_status = s_detail_task->status;
-    codex_conversation_mode_t previous_mode = s_detail_task->conversation_mode;
-    time_t previous_updated_at = s_detail_task->updated_at;
-    s_detail_task_count = app_state_task_count();
-    if (s_detail_task_count == 0) return;
-
-    bool entering_detail = s_current != s_detail;
-    if (s_detail_thread_id[0] != '\0') {
-        for (size_t index = 0; index < s_detail_task_count; index++) {
-            if (app_state_task_copy(index, s_detail_task) &&
-                strcmp(s_detail_task->thread_id, s_detail_thread_id) == 0) {
-                s_detail_task_index = index;
-                break;
-            }
-        }
-    }
-    if (s_detail_task_index >= s_detail_task_count) s_detail_task_index = s_detail_task_count - 1;
-    if (!app_state_task_copy(s_detail_task_index, s_detail_task)) return;
-    bool thread_changed = strcmp(s_detail_thread_id, s_detail_task->thread_id) != 0;
-    bool task_changed = previous_status != s_detail_task->status ||
-                        previous_mode != s_detail_task->conversation_mode ||
-                        previous_updated_at != s_detail_task->updated_at;
-    strlcpy(s_detail_thread_id, s_detail_task->thread_id, sizeof(s_detail_thread_id));
-
-    codex_read_tracker_visit(
-        s_detail_task->message_id,
-        s_detail_task->result_message_id,
-        lv_tick_get()
-    );
-
-    lv_label_set_text(s_detail_title, s_detail_task->title[0] ? s_detail_task->title : "暂无任务");
-    if (s_detail_task->read_count > 0) {
-        lv_label_set_text_fmt(s_detail_meta, "%s · %lu 分钟 · %lu 人已读",
-                              app_state_status_text(s_detail_task->status),
-                              (unsigned long)(s_detail_task->duration_seconds / 60),
-                              (unsigned long)s_detail_task->read_count);
-    } else {
-        lv_label_set_text_fmt(s_detail_meta, "%s · %lu 分钟",
-                              app_state_status_text(s_detail_task->status),
-                              (unsigned long)(s_detail_task->duration_seconds / 60));
-    }
-    lv_label_set_text(s_user_message, s_detail_task->last_user_message != NULL &&
-                      s_detail_task->last_user_message[0] ?
-                      s_detail_task->last_user_message : "暂无用户消息");
-    lv_label_set_text(s_assistant_speaker,
-                      s_detail_task->conversation_mode == CODEX_CONVERSATION_PROGRESS ?
-                          "Codex 中间消息" :
-                      s_detail_task->conversation_mode == CODEX_CONVERSATION_HISTORY ?
-                          "Codex 最终回复" : "Codex 最终回复");
-    bool conversation_changed = update_assistant_messages(s_detail_task->conversation_text);
-    if (entering_detail || thread_changed || task_changed || conversation_changed) {
-        position_codex_detail(s_detail_task->status);
-    }
-
-    static const char *task_numbers[] = {"一", "二", "三", "四", "五", "六"};
-    if (s_detail_task_count > 1) {
-        lv_label_set_text_fmt(s_detail_footer, "任务%s · %lu 消息",
-                              task_numbers[s_detail_task_index],
-                              (unsigned long)s_detail_task->message_count);
-    } else {
-        lv_label_set_text_fmt(s_detail_footer, "%lu 消息",
-                              (unsigned long)s_detail_task->message_count);
-    }
-    if (s_current == s_detail) lv_obj_invalidate(s_detail);
-}
-
-static void build_detail(void)
-{
-    s_detail = lv_obj_create(NULL);
-    set_screen_background(s_detail);
-    add_activity_event(s_detail);
-    lv_obj_add_event_cb(s_detail, swipe_event, LV_EVENT_GESTURE, NULL);
-    lv_obj_t *safe = make_safe(s_detail);
-
-    s_time_detail = make_label(safe, "--:--", &lv_font_montserrat_16, COLOR_MUTED);
-    lv_obj_align(s_time_detail, LV_ALIGN_TOP_MID, 0, -34);
-    s_detail_title = make_centered_title(safe, "开发 Codex 状态页面",
-                                         &ui_font_cjk_20, 336, 282, 1, 2);
-    lv_label_set_long_mode(s_detail_title, LV_LABEL_LONG_DOT);
-    lv_obj_set_style_bg_color(s_detail_title, color(COLOR_BG), 0);
-    lv_obj_set_style_bg_opa(s_detail_title, LV_OPA_COVER, 0);
-    s_detail_meta = make_label(s_detail, "工作中 · 12 分钟", &s_ui_font, COLOR_BLUE);
-    lv_obj_set_style_bg_color(s_detail_meta, color(COLOR_BG), 0);
-    lv_obj_set_style_bg_opa(s_detail_meta, LV_OPA_COVER, 0);
-    lv_obj_align(s_detail_meta, LV_ALIGN_TOP_MID, 0, 24);
-
-    s_detail_chat = lv_obj_create(safe);
-    lv_obj_remove_style_all(s_detail_chat);
-    lv_obj_set_size(s_detail_chat, 350, 324);
-    lv_obj_set_style_bg_color(s_detail_chat, color(COLOR_BG), 0);
-    lv_obj_set_style_bg_opa(s_detail_chat, LV_OPA_COVER, 0);
-    lv_obj_align(s_detail_chat, LV_ALIGN_TOP_MID, 0, 40);
-    lv_obj_set_flex_flow(s_detail_chat, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_row(s_detail_chat, 10, 0);
-    lv_obj_add_flag(s_detail_chat, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_scroll_dir(s_detail_chat, LV_DIR_VER);
-    s_user_message = make_bubble(s_detail_chat, "你", true);
-    s_assistant_message = make_bubble(s_detail_chat, "Codex", false);
-
-    s_detail_footer = make_label(s_detail, "12 消息", &s_ui_font, COLOR_MUTED);
-    lv_obj_set_style_bg_color(s_detail_footer, color(COLOR_BG), 0);
-    lv_obj_set_style_bg_opa(s_detail_footer, LV_OPA_COVER, 0);
-    lv_obj_set_size(s_detail_footer, 260, 24);
-    lv_obj_set_style_text_align(s_detail_footer, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_pad_top(s_detail_footer, 2, 0);
-    lv_obj_align(s_detail_footer, LV_ALIGN_BOTTOM_MID, 0, -14);
-    register_page_scroll_target(s_detail, s_detail_chat);
+    set_label_text_cached(time_label, time_text);
 }
 
 static void xiaozhi_listen_badge_set_visible(bool visible)
@@ -1434,7 +1266,7 @@ static void build_xiaozhi(void)
     lv_obj_center(face);
     lv_obj_remove_flag(face, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_remove_flag(face, LV_OBJ_FLAG_CLICKABLE);
-    emotion_render_attach(&s_xiaozhi_render, face, SCREEN_SIZE);
+    dotii_render_attach(&s_xiaozhi_render, face, SCREEN_SIZE);
     /* Keep the selected character palette visible. A previous pure-black body
        override made every character look identical on the Xiaozhi page. */
 
@@ -1558,19 +1390,16 @@ static void build_xiaozhi(void)
 
 
 
-static uint32_t dotii_expression_duration(dotii_expression_t expression)
-{
-    if (expression < 0 || expression >= DOTII_EXPRESSION_COUNT) return 800;
-    uint32_t duration = s_snapshot.dotii_expression_durations_ms[expression];
-    return duration >= 800 && duration <= 10000 ? duration : 800;
-}
+/* Touch feedback shows the greeting face briefly; the expression itself owns
+   its animation length, this only bounds the touch-source hold window. */
+#define XIAOZHI_TOUCH_HOLD_MS 900u
 
 static bool xiaozhi_touch_active(void)
 {
     return s_xiaozhi_touch_started != 0 &&
-           lv_tick_elaps(s_xiaozhi_touch_started) <
-               dotii_expression_duration(s_snapshot.dotii_touch_expression);
+           lv_tick_elaps(s_xiaozhi_touch_started) < XIAOZHI_TOUCH_HOLD_MS;
 }
+
 
 
 
@@ -1583,12 +1412,12 @@ static const char *business_emotion_id(void)
         return NULL;
     }
     switch (s_snapshot.status) {
-    case CODEX_STATUS_WORKING:   return "30";
-    case CODEX_STATUS_WAITING:   return "35";
-    case CODEX_STATUS_COMPLETED: return "33";
-    case CODEX_STATUS_FAILED:    return "34";
-    case CODEX_STATUS_IDLE:      return "02";
-    case CODEX_STATUS_OFFLINE:   return "36";
+    case CODEX_STATUS_WORKING:   return "30"; /* coding 处理任务 */
+    case CODEX_STATUS_WAITING:   return "32"; /* waiting 等待输入 */
+    case CODEX_STATUS_COMPLETED: return "33"; /* success 完成 */
+    case CODEX_STATUS_FAILED:    return "34"; /* error 出错 */
+    case CODEX_STATUS_IDLE:      return "00"; /* idle 待机 */
+    case CODEX_STATUS_OFFLINE:   return "38"; /* offline 离线 */
     default:                     return NULL;
     }
 }
@@ -1598,7 +1427,7 @@ static const char *touch_emotion_id(void)
     if (!xiaozhi_touch_active()) {
         return NULL;
     }
-    return "13";
+    return "26"; /* greeting 打招呼 */
 }
 
 static void xiaozhi_engine_ensure(void)
@@ -1606,7 +1435,7 @@ static void xiaozhi_engine_ensure(void)
     if (s_xiaozhi_engine_ready) {
         return;
     }
-    emotion_engine_init(&s_xiaozhi_engine, lv_tick_get());
+    dotii_engine_init(&s_xiaozhi_engine, lv_tick_get());
     emotion_router_init(&s_xiaozhi_router, &s_xiaozhi_engine);
     emotion_mood_init(&s_xiaozhi_mood, lv_tick_get());
     (void)emotion_mood_store_load(&s_xiaozhi_mood);
@@ -1628,6 +1457,10 @@ static void xiaozhi_sync_config(void)
             s_snapshot.xiaozhi_voice[0] ? s_snapshot.xiaozhi_voice : "default",
             sizeof(config.voice));
     config.mcp_enabled = s_snapshot.xiaozhi_mcp_enabled;
+    strlcpy(config.mcp_url, s_snapshot.xiaozhi_mcp_url, sizeof(config.mcp_url));
+
+    ESP_LOGI(TAG, "xiaozhi config: mcp=%d mcp_url=%s", (int)config.mcp_enabled,
+             config.mcp_url[0] ? "set" : "EMPTY");
 
     if (s_xiaozhi_request_lock == NULL) return;
     if (xSemaphoreTake(s_xiaozhi_request_lock, pdMS_TO_TICKS(50)) != pdTRUE) return;
@@ -1646,6 +1479,7 @@ static bool xiaozhi_config_differs(const xiaozhi_config_t *left, const xiaozhi_c
     return strcmp(left->server_url, right->server_url) != 0 ||
            strcmp(left->wake_word, right->wake_word) != 0 ||
            strcmp(left->voice, right->voice) != 0 ||
+           strcmp(left->mcp_url, right->mcp_url) != 0 ||
            left->mcp_enabled != right->mcp_enabled;
 }
 
@@ -1663,19 +1497,113 @@ static void xiaozhi_supervisor_task(void *argument)
         }
 
         const bool want_run = want_enabled;
-        if (want_run && !s_xiaozhi.running) {
+        static uint32_t s_last_sup_log;
+        const uint32_t sup_now = xTaskGetTickCount() * portTICK_PERIOD_MS;
+        if ((uint32_t)(sup_now - s_last_sup_log) >= 10000u) {
+            s_last_sup_log = sup_now;
+            ESP_LOGI(TAG, "sup: want_run=%d running=%d cur_mcp_url=%d want_mcp_url=%d differ=%d",
+                     (int)want_run, (int)s_xiaozhi.running,
+                     s_xiaozhi.config.mcp_url[0] ? 1 : 0,
+                     want_config.mcp_url[0] ? 1 : 0,
+                     (int)xiaozhi_config_differs(&s_xiaozhi.config, &want_config));
+        }
+        /* Starting the websocket before the station has an address only
+           produces a DNS failure and a five second reconnect timer. Wait for
+           the link; the loop retries every two hundred milliseconds. */
+        const bool network_ready = connectivity_is_wifi_connected();
+        if (want_run && network_ready && !s_xiaozhi.running) {
+            ESP_LOGI(TAG, "sup: starting xiaozhi session");
             xiaozhi_client_configure(&s_xiaozhi, &want_config);
             xiaozhi_client_start(&s_xiaozhi);
         } else if (!want_run && s_xiaozhi.running) {
             xiaozhi_client_stop(&s_xiaozhi);
         } else if (want_run && s_xiaozhi.running &&
                    xiaozhi_config_differs(&s_xiaozhi.config, &want_config)) {
+            ESP_LOGI(TAG, "sup: config changed, restarting xiaozhi session");
             xiaozhi_client_stop(&s_xiaozhi);
             xiaozhi_client_configure(&s_xiaozhi, &want_config);
             xiaozhi_client_start(&s_xiaozhi);
         }
 
+        /* Built-in MCP tool calls arrive on the conversation socket, so no
+           extra channel needs reconciling here. */
+
+
         vTaskDelay(pdMS_TO_TICKS(200));
+    }
+}
+
+/* ---- human-like fatigue cycle -------------------------------------------
+   A cartoon person gets sleepy after a long awake stretch, yawns, falls
+   asleep, and wakes up when spoken to or touched. Night time shortens the
+   awake window so the character behaves like a real person's daily rhythm. */
+#define XZ_FATIGUE_NIGHT_LIMIT_MS 120000u  /* ~2 min awake at night */
+#define XZ_FATIGUE_DAY_LIMIT_MS   480000u  /* ~8 min awake by day */
+#define XZ_YAWN_MS                 3200u
+#define XZ_WAKING_MS               1800u
+
+typedef enum {
+    XZ_BODY_AWAKE = 0,
+    XZ_BODY_YAWN,
+    XZ_BODY_ASLEEP,
+    XZ_BODY_WAKING,
+} xz_body_t;
+
+static xz_body_t s_body_state = XZ_BODY_AWAKE;
+static uint32_t s_body_state_ms;
+static uint32_t s_body_awake_since;
+static bool s_body_activity_pending;
+
+static void xiaozhi_face_activity(void)
+{
+    s_body_activity_pending = true;
+}
+
+static const char *xiaozhi_body_expression(uint32_t now)
+{
+    if (s_body_activity_pending) {
+        s_body_activity_pending = false;
+        if (s_body_state == XZ_BODY_ASLEEP) {
+            s_body_state = XZ_BODY_WAKING;
+            s_body_state_ms = now;
+        } else if (s_body_state == XZ_BODY_YAWN) {
+            s_body_state = XZ_BODY_AWAKE;
+            s_body_awake_since = now;
+        } else if (s_body_state == XZ_BODY_AWAKE) {
+            s_body_awake_since = now;
+        }
+    }
+
+    switch (s_body_state) {
+    case XZ_BODY_ASLEEP:
+        return "02"; /* sleep: closed eyes + drifting Zzz */
+    case XZ_BODY_WAKING:
+        if (now - s_body_state_ms >= XZ_WAKING_MS) {
+            s_body_state = XZ_BODY_AWAKE;
+            s_body_awake_since = now;
+        }
+        return "01"; /* wake: eyes fly open */
+    case XZ_BODY_YAWN:
+        if (now - s_body_state_ms >= XZ_YAWN_MS) {
+            s_body_state = XZ_BODY_ASLEEP;
+            s_body_state_ms = now;
+        }
+        return "24"; /* tired: drooping lids before sleep */
+    case XZ_BODY_AWAKE:
+    default: {
+        time_t wall = time(NULL);
+        struct tm local;
+        localtime_r(&wall, &local);
+        const bool night = local.tm_hour >= 22 || local.tm_hour < 6;
+        const uint32_t limit = night ? XZ_FATIGUE_NIGHT_LIMIT_MS
+                                     : XZ_FATIGUE_DAY_LIMIT_MS;
+        if (now - s_body_awake_since >= limit) {
+            s_body_state = XZ_BODY_YAWN;
+            s_body_state_ms = now;
+            return "24";
+        }
+        return NULL; /* normal idle / mood */
+    }
     }
 }
 
@@ -1683,19 +1611,30 @@ static void render_xiaozhi_expression(void)
 {
     if (s_xiaozhi_page == NULL || !s_xiaozhi_render.attached ||
         (s_current != s_xiaozhi_page && s_current != NULL)) return;
+
+
+    if (s_xiaozhi_face_needs_full) {
+        s_xiaozhi_face_needs_full = false;
+        dotii_render_invalidate_all(&s_xiaozhi_render);
+    }
     xiaozhi_engine_ensure();
 
     const uint32_t now = lv_tick_get();
     const char *touch = touch_emotion_id();
     if (touch != NULL) {
         emotion_router_set_source(&s_xiaozhi_router, EMOTION_SRC_TOUCH, touch,
-                                  (uint16_t)dotii_expression_duration(s_snapshot.dotii_touch_expression), now);
+                                  XIAOZHI_TOUCH_HOLD_MS, now);
     } else {
         emotion_router_clear_source(&s_xiaozhi_router, EMOTION_SRC_TOUCH, now);
     }
 
     const char *business = business_emotion_id();
     if (business != NULL) {
+        /* A live Codex turn is activity: stay awake and show the working face
+           instead of dozing off mid-task. */
+        if (strcmp(business, "30") == 0 || strcmp(business, "32") == 0) {
+            xiaozhi_face_activity();
+        }
         emotion_router_set_source(&s_xiaozhi_router, EMOTION_SRC_BUSINESS, business, 0, now);
     } else {
         emotion_router_clear_source(&s_xiaozhi_router, EMOTION_SRC_BUSINESS, now);
@@ -1709,6 +1648,10 @@ static void render_xiaozhi_expression(void)
         static float s_saved_correction_bias;
         if (s_xiaozhi.last_user_text[0] != '\0' &&
             s_xiaozhi.user_text_revision != s_xiaozhi_mood_user_revision) {
+            /* Playback is driven solely by the MCP music tools. A second local
+               auto-start here raced the model's own tool call: the song began
+               immediately and was then interrupted by the assistant asking
+               which version to play. */
             emotion_mood_ingest_user(&s_xiaozhi_mood, s_xiaozhi.last_user_text, now);
             s_xiaozhi_mood_user_revision = s_xiaozhi.user_text_revision;
             const float positive_bias = emotion_mood_positive_bias(&s_xiaozhi_mood);
@@ -1734,23 +1677,87 @@ static void render_xiaozhi_expression(void)
         }
         emotion_mood_tick(&s_xiaozhi_mood, now);
 
-        const char *state_emotion = xiaozhi_client_emotion_policy(
-            xiaozhi_client_state(&s_xiaozhi),
-            xiaozhi_client_last_emotion(&s_xiaozhi),
-            s_xiaozhi.last_text);
-        const char *mood_emotion = emotion_mood_current_id(&s_xiaozhi_mood);
-        const char *xiaozhi_emotion = mood_emotion;
-        /* A live user/assistant emotion is the face of this turn. While it
-           is active, transport states only win when they carry information
-           the face would otherwise lose (music or an error). */
-        const bool mood_event = emotion_mood_has_active_event(&s_xiaozhi_mood);
-        if (state_emotion != NULL &&
-            (!mood_event || strcmp(state_emotion, "34") == 0 ||
-             strcmp(state_emotion, "42") == 0)) {
-            xiaozhi_emotion = state_emotion;
+        const xiaozhi_session_state_t session = xiaozhi_client_state(&s_xiaozhi);
+        server_emotion = xiaozhi_client_last_emotion(&s_xiaozhi);
+        const char *xiaozhi_emotion = NULL;
+
+        if (session == XIAOZHI_STATE_SPEAKING) {
+            const bool entering = s_xz_face_session != XIAOZHI_STATE_SPEAKING;
+            if (entering) {
+                /* Turn start: server emotion > text intent > plain speaking. */
+                const char *initial = xiaozhi_client_emotion_policy(
+                    session, server_emotion, s_xiaozhi.last_text);
+                if (initial != NULL) {
+                    s_xz_turn_emotion[0] = initial[0];
+                    s_xz_turn_emotion[1] = initial[1];
+                    s_xz_turn_emotion_ms = now;
+                }
+                s_xz_handled_emotion_rev = s_xiaozhi.server_emotion_revision;
+                s_xz_turn_server_applied = server_emotion != NULL;
+                s_xz_afterglow_until_ms = 0;
+            } else if (s_xiaozhi.server_emotion_revision != s_xz_handled_emotion_rev) {
+                s_xz_handled_emotion_rev = s_xiaozhi.server_emotion_revision;
+                /* Only a NEW server emotion is a semantic cue. The 5 s expiry of
+                   the previous emotion (NULL with unchanged revision) never
+                   reaches this branch, so sentences no longer flicker. */
+                if (server_emotion != NULL &&
+                    dotii_catalog_by_id(server_emotion) != NULL &&
+                    (!s_xz_turn_server_applied ||
+                     now - s_xz_turn_emotion_ms >= XIAOZHI_SERVER_EMOTION_MIN_GAP_MS)) {
+                    s_xz_turn_emotion[0] = server_emotion[0];
+                    s_xz_turn_emotion[1] = server_emotion[1];
+                    s_xz_turn_emotion_ms = now;
+                    s_xz_turn_server_applied = true;
+                }
+            }
+            xiaozhi_emotion = s_xz_turn_emotion[0] ? s_xz_turn_emotion : "05";
+        } else if (session == XIAOZHI_STATE_ACTIVATING ||
+                   session == XIAOZHI_STATE_CONNECTING ||
+                   session == XIAOZHI_STATE_LISTENING ||
+                   session == XIAOZHI_STATE_THINKING ||
+                   session == XIAOZHI_STATE_MUSIC ||
+                   session == XIAOZHI_STATE_ERROR) {
+            /* Transport states carry their own meaning, and being spoken to
+               keeps the character awake. */
+            xiaozhi_face_activity();
+            xiaozhi_emotion = xiaozhi_client_emotion_policy(
+                session, server_emotion, s_xiaozhi.last_text);
+            if (session == XIAOZHI_STATE_ERROR && xiaozhi_emotion != NULL &&
+                !(xiaozhi_emotion[0] == '3' && xiaozhi_emotion[1] == '4')) {
+                xiaozhi_emotion = "34";
+            }
+            s_xz_afterglow_until_ms = 0;
+        } else {
+            /* Idle: the body cycle (awake -> yawn -> asleep -> waking) has the
+               strongest say. Otherwise hold the finished turn's emotion briefly
+               (a meaningful afterglow), then let the mood model drive subtle
+               presence. */
+            const char *body = xiaozhi_body_expression(now);
+            if (body != NULL) {
+                xiaozhi_emotion = body;
+            } else if (s_xz_face_session == XIAOZHI_STATE_SPEAKING &&
+                       s_xz_turn_emotion[0] != '\0') {
+                s_xz_afterglow_until_ms = now + XIAOZHI_SPEAK_AFTERGLOW_MS;
+                xiaozhi_emotion = s_xz_turn_emotion;
+            } else if ((int32_t)(s_xz_afterglow_until_ms - now) > 0 &&
+                       s_xz_turn_emotion[0] != '\0') {
+                xiaozhi_emotion = s_xz_turn_emotion;
+            } else {
+                s_xz_afterglow_until_ms = 0;
+                /* Passive mood drift must not invent expressions: at idle the
+                   face only reflects a mood that came from a recent real event
+                   (user text / server emotion); otherwise it just idles. */
+                if (emotion_mood_has_active_event(&s_xiaozhi_mood)) {
+                    xiaozhi_emotion = emotion_mood_current_id(&s_xiaozhi_mood);
+                }
+                if (xiaozhi_emotion == NULL) xiaozhi_emotion = "00";
+            }
         }
+        s_xz_face_session = session;
+
         if (xiaozhi_emotion != NULL) {
-            emotion_router_set_source(&s_xiaozhi_router, EMOTION_SRC_XIAOZHI, xiaozhi_emotion, 0, now);
+            emotion_router_set_source(&s_xiaozhi_router, EMOTION_SRC_XIAOZHI,
+                                      xiaozhi_emotion, 0, now);
         } else {
             emotion_router_clear_source(&s_xiaozhi_router, EMOTION_SRC_XIAOZHI, now);
         }
@@ -1759,33 +1766,20 @@ static void render_xiaozhi_expression(void)
     }
     emotion_router_tick(&s_xiaozhi_router, now);
 
-    const emotion_engine_state_t *state = emotion_engine_state(&s_xiaozhi_engine);
-    const emotion_def_t *def = emotion_catalog_by_id(emotion_router_active_id(&s_xiaozhi_router));
-    if (def == NULL) def = emotion_catalog_fallback();
-    const char *configured = s_snapshot.character_id[0] != '\0' ? s_snapshot.character_id : s_xiaozhi_character;
-    /* Older management snapshots persisted dotii as the default even though
-       the character picker no longer exists. Treat that value as the legacy
-       default so those devices rotate too. */
-    const bool auto_rotate = strcmp(configured, "auto") == 0 ||
-                             strcmp(configured, "dotii") == 0 ||
-                             strcmp(configured, "") == 0;
-    const size_t character_count = character_pack_count();
-    if (auto_rotate && character_count > 1) {
-        if (s_xiaozhi_character_changed_ms == 0) {
-            s_xiaozhi_character_changed_ms = now;
-        } else if (now - s_xiaozhi_character_changed_ms >= 12000u) {
-            s_xiaozhi_character_index = character_pack_next_index(s_xiaozhi_character_index);
-            s_xiaozhi_character_changed_ms = now;
-            ESP_LOGI(TAG, "xiaozhi: character -> %s", character_pack_id_at(s_xiaozhi_character_index));
-        }
-    } else {
-        s_xiaozhi_character_changed_ms = now;
+    /* The Dotii face ignores the legacy character picker; management may still
+       send character_id but it no longer changes the look. */
+    const char *active = emotion_router_active_id(&s_xiaozhi_router);
+    static char s_last_expression[3];
+    if (strcmp(active, s_last_expression) != 0) {
+        memcpy(s_last_expression, active, 3);
+        const dotii_expr_t *logged = dotii_catalog_by_id(active);
+        ESP_LOGI(TAG, "xiaozhi expression -> %s %s", active, logged ? logged->name : "?");
     }
-    const character_def_t *pack = auto_rotate
-        ? character_pack_at(s_xiaozhi_character_index)
-        : character_pack_lookup(configured);
-    if (pack == NULL) pack = character_pack_fallback();
-    emotion_render_update(&s_xiaozhi_render, state, def, pack);
+    const dotii_expr_t *expr = dotii_catalog_by_id(active);
+    if (expr == NULL) expr = dotii_catalog_idle();
+    (void)dotii_engine_set(&s_xiaozhi_engine, active, now);
+    (void)dotii_engine_tick(&s_xiaozhi_engine, now);
+    dotii_render_update(&s_xiaozhi_render, expr, &s_xiaozhi_engine.state.pose);
 }
 static void xiaozhi_listen_hold(void)
 {
@@ -1807,6 +1801,10 @@ static void xiaozhi_listen_release(void)
 static void xiaozhi_touch_event(lv_event_t *event)
 {
     const lv_event_code_t code = lv_event_get_code(event);
+    if (code == LV_EVENT_PRESSED || code == LV_EVENT_LONG_PRESSED ||
+        code == LV_EVENT_RELEASED || code == LV_EVENT_SHORT_CLICKED) {
+        xiaozhi_face_activity();
+    }
     if (code == LV_EVENT_LONG_PRESSED) {
         xiaozhi_listen_hold();
     } else if (code == LV_EVENT_RELEASED) {
@@ -1836,6 +1834,7 @@ static void xiaozhi_face_timer(lv_timer_t *timer)
         } else {
             ESP_LOGI(TAG, "voice wake: Xiaozhi face already active");
         }
+        xiaozhi_face_activity();
         xiaozhi_listen_badge_set_visible(true);
         render_xiaozhi_expression();
         return;
@@ -1910,7 +1909,7 @@ static void build_control(void)
     s_volume_label = make_label(safe, "音量", &s_ui_font, COLOR_MUTED);
     lv_obj_set_style_transform_scale(s_volume_label, 282, 0);
     lv_obj_set_pos(s_volume_label, 12, 131);
-    lv_label_set_text_fmt(s_volume_label, "音量 %u%%",
+    set_label_text_fmt_cached(s_volume_label, "音量 %u%%",
                           (unsigned)xiaozhi_client_get_volume(&s_xiaozhi));
     s_volume_slider = lv_slider_create(safe);
     lv_obj_set_size(s_volume_slider, 330, 22);
@@ -2079,19 +2078,85 @@ static void build_power(void)
     lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -2);
 }
 
+/* A finished task raises the Bridge's "completed unread" counter, but that
+   counter oscillates while other clients read the same result
+   (2 -> 3 -> 2 -> 3), so a plain "greater than last" test rang several times
+   within a few seconds. The OnePlus passport device solves the same problem
+   with a settle window: a rise arms a pending alert and the alert only rings
+   when the counter is still elevated after four seconds. A genuine
+   completion stays unread, while the oscillation falls back within a second
+   and disarms the alert again. */
+#define CODEX_ALERT_SETTLE_MS 4000
+
+static bool s_alert_seeded;
+static uint16_t s_alert_last_completed;
+static uint16_t s_alert_last_failed;
+static int64_t s_alert_armed_ms;
+static uint16_t s_alert_armed_completed;
+static uint16_t s_alert_armed_failed;
+static bool s_alert_armed_is_failure;
+
+static void codex_alert_update(const codex_snapshot_t *snapshot)
+{
+    if (snapshot == NULL || !snapshot->valid || !snapshot->codex_state_raw_valid) {
+        return;
+    }
+    const uint16_t completed = snapshot->completed_unread_tasks;
+    const uint16_t failed = snapshot->failed_unread_tasks;
+    if (snapshot->codex_state_baseline) {
+        /* A replayed frame only re-establishes the reference counters, so it
+           must not ring. */
+        s_alert_seeded = true;
+        s_alert_last_completed = completed;
+        s_alert_last_failed = failed;
+        s_alert_armed_ms = 0;
+        return;
+    }
+    if (!s_alert_seeded) {
+        s_alert_seeded = true;
+        s_alert_last_completed = completed;
+        s_alert_last_failed = failed;
+        return;
+    }
+    const bool rose_completed = completed > s_alert_last_completed;
+    const bool rose_failed = failed > s_alert_last_failed;
+    s_alert_last_completed = completed;
+    s_alert_last_failed = failed;
+    const int64_t now_ms = esp_timer_get_time() / 1000;
+    if (rose_completed || rose_failed) {
+        /* Arm the alert and wait for the counters to settle. */
+        s_alert_armed_ms = now_ms;
+        s_alert_armed_completed = completed;
+        s_alert_armed_failed = failed;
+        s_alert_armed_is_failure = rose_failed;
+        return;
+    }
+    if (s_alert_armed_ms == 0) return;
+    if (completed < s_alert_armed_completed || failed < s_alert_armed_failed) {
+        /* The counters fell back: another client read the result, so this was
+           not a new task. */
+        s_alert_armed_ms = 0;
+        return;
+    }
+    if (now_ms - s_alert_armed_ms >= CODEX_ALERT_SETTLE_MS) {
+        const bool is_failure = s_alert_armed_is_failure;
+        s_alert_armed_ms = 0;
+        xiaozhi_client_notify_task_completed(&s_xiaozhi, is_failure);
+    }
+}
+
 static void update_snapshot(const codex_snapshot_t *snapshot)
 {
-    if (!s_dotii_state_seen || snapshot->dotii_state_token != s_dotii_state_token ||
-        snapshot->dotii_state_assigned != s_dotii_state_assigned ||
-        snapshot->dotii_state_duration_ms != s_dotii_state_duration_ms ||
-        snapshot->dotii_expression != s_dotii_state_expression) {
-        s_dotii_state_seen = true;
-        s_dotii_state_token = snapshot->dotii_state_token;
-        s_dotii_state_assigned = snapshot->dotii_state_assigned;
-        s_dotii_state_duration_ms = snapshot->dotii_state_duration_ms;
-        s_dotii_state_expression = snapshot->dotii_expression;
-        s_dotii_state_started = lv_tick_get();
-    }
+    /* Follow the Bridge's authoritative counters, exactly like the OnePlus
+       passport device does.  The Bridge computes the globally unread
+       results, so a result that is read on the phone or the desktop
+       lowers the number again.  A device-side "only ever grows" total
+       would latch the badge forever, which is the "the number is never
+       right" complaint.  The monotonic totals stay in the snapshot: the
+       completion chime uses them, because another client reading the
+       same result must not silence our sound notification. */
+    const uint16_t completed_display = snapshot->completed_unread_tasks;
+    const uint16_t failed_display = snapshot->failed_unread_tasks;
     s_snapshot = *snapshot;
     if (snapshot->docked_rotation_tenths >= DISPLAY_ANGLE_MIN_TENTHS &&
         snapshot->docked_rotation_tenths <= DISPLAY_ANGLE_MAX_TENTHS &&
@@ -2125,71 +2190,67 @@ static void update_snapshot(const codex_snapshot_t *snapshot)
         if (s_current != NULL) lv_obj_invalidate(s_current);
     }
     if (!snapshot->valid || snapshot->stale || !snapshot->weekly_available) {
-        lv_label_set_text(s_percent, "--");
-        lv_arc_set_value(s_main_arc, 0);
-        lv_obj_set_style_arc_color(s_main_arc, color(0x59605E), LV_PART_INDICATOR);
+        set_label_text_cached(s_percent, "--");
+        arc_display_update(s_main_arc, 0, 0x59605E);
     } else {
-        lv_label_set_text_fmt(s_percent, "%d%%", snapshot->weekly_remaining_percent);
-        lv_arc_set_value(s_main_arc, snapshot->weekly_remaining_percent);
-        lv_obj_set_style_arc_color(s_main_arc, color(COLOR_BLUE), LV_PART_INDICATOR);
+        set_label_text_fmt_cached(s_percent, "%d%%", snapshot->weekly_remaining_percent);
+        arc_display_update(s_main_arc, snapshot->weekly_remaining_percent, COLOR_BLUE);
     }
 
+    /* The counters stay on the screen while the Bridge is restarting. They
+       hold the last known values, and a blank panel would look like a dead
+       device instead of a Bridge that is coming back. */
     const bool task_counts_available =
-        snapshot->valid && snapshot->codex_source_online;
+        snapshot->valid && snapshot->codex_state_raw_valid;
     update_task_counter(s_running_count, task_counts_available,
                         snapshot->running_tasks);
     update_task_counter(s_completed_count, task_counts_available,
-                        snapshot->completed_unread_tasks);
+                        completed_display);
     update_task_counter(s_failed_count, task_counts_available,
-                        snapshot->failed_unread_tasks);
+                        failed_display);
 
-    if (!snapshot->weekly_tokens_available) lv_label_set_text(s_weekly_tokens, "--");
-    else if (snapshot->weekly_tokens >= 1000) lv_label_set_text_fmt(s_weekly_tokens, "%.1fk", snapshot->weekly_tokens / 1000.0);
-    else lv_label_set_text_fmt(s_weekly_tokens, "%lu", (unsigned long)snapshot->weekly_tokens);
+    if (!snapshot->weekly_tokens_available) set_label_text_cached(s_weekly_tokens, "--");
+    else if (snapshot->weekly_tokens >= 1000) set_label_text_fmt_cached(s_weekly_tokens, "%.1fk", snapshot->weekly_tokens / 1000.0);
+    else set_label_text_fmt_cached(s_weekly_tokens, "%lu", (unsigned long)snapshot->weekly_tokens);
     if (snapshot->weekly_available && snapshot->reset_date[0]) {
         const char *space = strchr(snapshot->reset_date, ' ');
         if (space != NULL) {
-            lv_label_set_text_fmt(s_reset_day, "%.*s", (int)(space - snapshot->reset_date), snapshot->reset_date);
-            lv_label_set_text(s_reset_time, space + 1);
+            set_label_text_fmt_cached(s_reset_day, "%.*s", (int)(space - snapshot->reset_date), snapshot->reset_date);
+            set_label_text_cached(s_reset_time, space + 1);
         } else {
-            lv_label_set_text(s_reset_day, snapshot->reset_date);
-            lv_label_set_text(s_reset_time, "");
+            set_label_text_cached(s_reset_day, snapshot->reset_date);
+            set_label_text_cached(s_reset_time, "");
         }
     } else {
-        lv_label_set_text(s_reset_day, "--");
-        lv_label_set_text(s_reset_time, "");
+        set_label_text_cached(s_reset_day, "--");
+        set_label_text_cached(s_reset_time, "");
     }
 
     if (!snapshot->valid || snapshot->stale || !snapshot->five_hour_available) {
-        lv_label_set_text(s_plus_five_percent, "--");
-        lv_arc_set_value(s_plus_five_arc, 0);
-        lv_obj_set_style_arc_color(s_plus_five_arc, color(0x59605E), LV_PART_INDICATOR);
+        set_label_text_cached(s_plus_five_percent, "--");
+        arc_display_update(s_plus_five_arc, 0, 0x59605E);
         set_usage_reset_text(s_plus_five_reset, "", true);
     } else {
-        lv_label_set_text_fmt(s_plus_five_percent, "%d%%", snapshot->five_hour_remaining_percent);
-        lv_arc_set_value(s_plus_five_arc, snapshot->five_hour_remaining_percent);
-        lv_obj_set_style_arc_color(s_plus_five_arc, color(COLOR_ORANGE), LV_PART_INDICATOR);
+        set_label_text_fmt_cached(s_plus_five_percent, "%d%%", snapshot->five_hour_remaining_percent);
+        arc_display_update(s_plus_five_arc, snapshot->five_hour_remaining_percent, COLOR_ORANGE);
         set_usage_reset_text(s_plus_five_reset, snapshot->five_hour_reset_date, true);
     }
     if (!snapshot->valid || snapshot->stale || !snapshot->weekly_available) {
-        lv_label_set_text(s_plus_weekly_percent, "--");
-        lv_arc_set_value(s_plus_weekly_arc, 0);
-        lv_obj_set_style_arc_color(s_plus_weekly_arc, color(0x59605E), LV_PART_INDICATOR);
+        set_label_text_cached(s_plus_weekly_percent, "--");
+        arc_display_update(s_plus_weekly_arc, 0, 0x59605E);
         set_weekly_reset_text(s_plus_weekly_reset_day, s_plus_weekly_reset, "");
     } else {
-        lv_label_set_text_fmt(s_plus_weekly_percent, "%d%%", snapshot->weekly_remaining_percent);
-        lv_arc_set_value(s_plus_weekly_arc, snapshot->weekly_remaining_percent);
-        lv_obj_set_style_arc_color(s_plus_weekly_arc, color(COLOR_BLUE_USAGE), LV_PART_INDICATOR);
+        set_label_text_fmt_cached(s_plus_weekly_percent, "%d%%", snapshot->weekly_remaining_percent);
+        arc_display_update(s_plus_weekly_arc, snapshot->weekly_remaining_percent, COLOR_BLUE_USAGE);
         set_weekly_reset_text(s_plus_weekly_reset_day, s_plus_weekly_reset,
                               snapshot->reset_date);
     }
     update_task_counter(s_plus_running_count, task_counts_available,
                         snapshot->running_tasks);
     update_task_counter(s_plus_completed_count, task_counts_available,
-                        snapshot->completed_unread_tasks);
+                        completed_display);
     update_task_counter(s_plus_failed_count, task_counts_available,
-                        snapshot->failed_unread_tasks);
-    render_codex_detail();
+                        failed_display);
 
     const xiaozhi_session_state_t xiaozhi_session = xiaozhi_client_state(&s_xiaozhi);
     const char *xiaozhi_state = xiaozhi_client_state_name(xiaozhi_session);
@@ -2231,12 +2292,12 @@ static void update_snapshot(const codex_snapshot_t *snapshot)
     }
     const char *reported_emotion = xiaozhi_client_last_emotion(&s_xiaozhi);
     if (reported_emotion != NULL) {
-        const emotion_def_t *reported_def = emotion_catalog_by_id(reported_emotion);
-        if (reported_def == NULL) reported_def = emotion_catalog_by_name(reported_emotion);
+        const dotii_expr_t *reported_def = dotii_catalog_by_id(reported_emotion);
+        if (reported_def == NULL) reported_def = dotii_catalog_by_name(reported_emotion);
         xiaozhi_emotion = reported_def != NULL ? reported_def->label : reported_emotion;
     }
-    lv_label_set_text(s_xiaozhi_status, xiaozhi_state);
-    lv_label_set_text(s_xiaozhi_emotion, xiaozhi_emotion);
+    set_label_text_cached(s_xiaozhi_status, xiaozhi_state);
+    set_label_text_cached(s_xiaozhi_emotion, xiaozhi_emotion);
     lv_obj_set_style_text_color(s_xiaozhi_status, color(xiaozhi_color), 0);
     lv_obj_set_style_bg_color(s_xiaozhi_status_dot, color(xiaozhi_color), 0);
     lv_obj_set_style_bg_color(s_xiaozhi_status_pill, color(xiaozhi_color), 0);
@@ -2264,22 +2325,27 @@ static void update_snapshot(const codex_snapshot_t *snapshot)
         /* Pairing needs the widest single hint row we have. */
         lv_obj_add_flag(s_time_xiaozhi, LV_OBJ_FLAG_HIDDEN);
         lv_obj_set_width(s_xiaozhi_server, 236);
-        lv_label_set_text_fmt(s_xiaozhi_emotion, "设备码 %s", activation_code);
-        lv_label_set_text(s_xiaozhi_server, "xiaozhi.me 输入设备码");
+        set_label_text_fmt_cached(s_xiaozhi_emotion, "设备码 %s", activation_code);
+        set_label_text_cached(s_xiaozhi_server, "xiaozhi.me 输入设备码");
     } else if (xiaozhi_session == XIAOZHI_STATE_ACTIVATING) {
         lv_obj_add_flag(s_time_xiaozhi, LV_OBJ_FLAG_HIDDEN);
         lv_obj_set_width(s_xiaozhi_server, 236);
-        lv_label_set_text(s_xiaozhi_emotion, "获取设备码中");
-        lv_label_set_text(s_xiaozhi_server, s_xiaozhi.connected ?
+        set_label_text_cached(s_xiaozhi_emotion, "获取设备码中");
+        set_label_text_cached(s_xiaozhi_server, s_xiaozhi.connected ?
                           "等待 xiaozhi.me 完成配对" : "正在连接小智服务");
     } else if (xiaozhi_busy) {
         lv_obj_remove_flag(s_time_xiaozhi, LV_OBJ_FLAG_HIDDEN);
         lv_obj_set_width(s_xiaozhi_server, 186);
-        lv_label_set_text(s_xiaozhi_server, s_xiaozhi.connected ? "长按说话，松开发送" : "等待小智服务连接");
+        if (xiaozhi_session == XIAOZHI_STATE_MUSIC &&
+            s_xiaozhi.last_assistant_text[0] != '\0') {
+            set_label_text_cached(s_xiaozhi_server, s_xiaozhi.last_assistant_text);
+        } else {
+            set_label_text_cached(s_xiaozhi_server, s_xiaozhi.connected ? "长按说话，松开发送" : "等待小智服务连接");
+        }
     } else {
         lv_obj_remove_flag(s_time_xiaozhi, LV_OBJ_FLAG_HIDDEN);
         lv_obj_set_width(s_xiaozhi_server, 186);
-        lv_label_set_text(s_xiaozhi_server, "长按说话");
+        set_label_text_cached(s_xiaozhi_server, "长按说话");
     }
     /* Hand the desired lifecycle to the supervisor task; starting or stopping
        the websocket here would block the LVGL worker. */
@@ -2303,45 +2369,11 @@ static void ui_timer(lv_timer_t *timer)
 {
     (void)timer;
     if (xQueueReceive(s_snapshot_queue, &s_snapshot, 0) == pdTRUE) update_snapshot(&s_snapshot);
+    /* The completion alert runs on the UI beat and not on the snapshot, so a
+       result that stays unread still rings after the settle window even when
+       no new snapshot arrived in between. */
+    codex_alert_update(&s_snapshot);
 
-    if (s_current == s_detail && s_screen_on && !s_screen_saver_active &&
-        s_detail_task != NULL &&
-        codex_read_tracker_take_due(
-            s_detail_task->message_id,
-            s_detail_task->result_message_id,
-            lv_tick_get()
-        )) {
-        bool acknowledged = true;
-        if (s_detail_task->message_id[0] != '\0' &&
-            strcmp(s_read_ack_message_id, s_detail_task->message_id) != 0 &&
-            codex_bridge_client_send_read_ack(s_detail_task->message_id) == ESP_OK) {
-            strlcpy(s_read_ack_message_id, s_detail_task->message_id,
-                    sizeof(s_read_ack_message_id));
-        } else if (s_detail_task->message_id[0] != '\0' &&
-                   strcmp(s_read_ack_message_id, s_detail_task->message_id) != 0) {
-            acknowledged = false;
-        }
-        if (s_detail_task->result_message_id[0] != '\0' &&
-            strcmp(s_read_ack_result_message_id, s_detail_task->result_message_id) != 0 &&
-            acknowledged &&
-            codex_bridge_client_send_read_ack(s_detail_task->result_message_id) == ESP_OK) {
-            strlcpy(s_read_ack_result_message_id, s_detail_task->result_message_id,
-                    sizeof(s_read_ack_result_message_id));
-        } else if (s_detail_task->result_message_id[0] != '\0' &&
-                   strcmp(s_read_ack_result_message_id,
-                          s_detail_task->result_message_id) != 0) {
-            acknowledged = false;
-        }
-        if (!acknowledged) {
-            codex_read_tracker_rearm(
-                s_detail_task->message_id,
-                s_detail_task->result_message_id,
-                lv_tick_get()
-            );
-        }
-    } else if (s_current != s_detail) {
-        codex_read_tracker_reset();
-    }
 
     time_t now = time(NULL);
     struct tm local;
@@ -2349,17 +2381,16 @@ static void ui_timer(lv_timer_t *timer)
     char clock[8];
     if (local.tm_year >= 120) snprintf(clock, sizeof(clock), "%02d:%02d", local.tm_hour, local.tm_min);
     else strlcpy(clock, "--:--", sizeof(clock));
-    lv_label_set_text(s_time_main, clock);
-    lv_label_set_text(s_time_detail, clock);
-    lv_label_set_text(s_time_xiaozhi, clock);
+    set_label_text_cached(s_time_main, clock);
+    set_label_text_cached(s_time_xiaozhi, clock);
 
     char summary[80];
     connectivity_get_summary(summary, sizeof(summary));
-    lv_label_set_text(s_settings_wifi, summary);
+    set_label_text_cached(s_settings_wifi, summary);
     connectivity_get_ip(summary, sizeof(summary));
-    lv_label_set_text_fmt(s_settings_ip, "IP %s", summary);
+    set_label_text_fmt_cached(s_settings_ip, "IP %s", summary);
     connectivity_get_bridge_summary(summary, sizeof(summary));
-    lv_label_set_text(s_settings_bridge, summary);
+    set_label_text_cached(s_settings_bridge, summary);
 
     uint32_t inactive_ms = lv_tick_elaps(s_last_activity);
     /* Docked means the panel is on a desk with power attached. Treat it as an
@@ -2388,10 +2419,6 @@ static void ui_timer(lv_timer_t *timer)
 void state_ui_start(QueueHandle_t snapshot_queue)
 {
     s_snapshot_queue = snapshot_queue;
-    /* Conversation text and its render cache grow on demand in PSRAM so a
-       complete Codex reply is not truncated to a fixed character budget. */
-    s_detail_task = heap_caps_calloc(1, sizeof(*s_detail_task),
-                                     MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     load_persisted_settings();
     s_display_save_signal = xSemaphoreCreateBinary();
     if (s_display_save_signal != NULL) {
@@ -2411,7 +2438,6 @@ void state_ui_start(QueueHandle_t snapshot_queue)
     }
     build_main();
     build_plus_main();
-    build_detail();
     build_xiaozhi();
     build_settings();
     build_control();
@@ -2427,7 +2453,8 @@ void state_ui_start(QueueHandle_t snapshot_queue)
     lv_timer_create(ui_timer, 1000, NULL);
     /* 50 FPS keeps the eye motion fluid. The 90-degree transform is a
        pixel-exact copy, so the per-frame cost stays low. */
-    lv_timer_create(xiaozhi_face_timer, 20, NULL);
+    /* 30 FPS leaves headroom for audio decode/playback on the other core. */
+    lv_timer_create(xiaozhi_face_timer, 33, NULL);
 }
 
 void state_ui_button_a_short(void)
@@ -2527,12 +2554,12 @@ void state_ui_set_power(uint8_t percent, bool external_power, bool charging)
     }
     s_battery = percent;
     if (percent <= 100) {
-        lv_label_set_text_fmt(s_battery_label,
+        set_label_text_fmt_cached(s_battery_label,
                               charging ? "电量 %u%% · 充电中" :
                               external_power ? "电量 %u%% · 充电中" : "电量 %u%%",
                               percent);
     } else {
-        lv_label_set_text(s_battery_label,
+        set_label_text_cached(s_battery_label,
                           charging ? "电量 -- · 充电中" :
                           external_power ? "电量 -- · 充电中" : "电量 --");
     }

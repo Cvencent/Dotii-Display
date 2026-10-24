@@ -24,11 +24,11 @@ static void test_context_questions_and_user_mood(void)
     emotion_mood_init(&mood, 0);
     emotion_mood_ingest_user(&mood, "这个应该怎么选？", 100);
     emotion_mood_tick(&mood, 100);
-    assert(strcmp(emotion_mood_current_id(&mood), "11") == 0);
+    assert(strcmp(emotion_mood_current_id(&mood), "18") == 0);
 
     emotion_mood_ingest_user(&mood, "我今天真的很难过", 200);
     emotion_mood_tick(&mood, 200);
-    assert(strcmp(emotion_mood_current_id(&mood), "12") == 0);
+    assert(strcmp(emotion_mood_current_id(&mood), "21") == 0);
 }
 
 static void test_assistant_outcomes(void)
@@ -75,7 +75,7 @@ static void test_active_context_expression_is_exposed(void)
 
     emotion_mood_ingest_user(&mood, "这个应该怎么选？", 100);
     assert(emotion_mood_has_active_event(&mood));
-    assert(strcmp(emotion_mood_current_id(&mood), "11") == 0);
+    assert(strcmp(emotion_mood_current_id(&mood), "18") == 0);
 
     emotion_mood_tick(&mood, 4700);
     assert(!emotion_mood_has_active_event(&mood));

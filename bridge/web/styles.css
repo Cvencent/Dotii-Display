@@ -87,7 +87,7 @@ h1 { font-size: 17px; line-height: 1.2; letter-spacing: -.01em; }
 .bridge-state[data-state="online"] .state-dot { background: var(--green); }
 .bridge-state[data-state="error"] .state-dot { background: var(--danger); }
 
-.quiet-button, .copy-field button, .primary-button {
+.quiet-button, .ghost-button, .copy-field button, .primary-button {
   min-height: 36px;
   border: 1px solid var(--line-strong);
   border-radius: var(--radius-control);
@@ -95,10 +95,10 @@ h1 { font-size: 17px; line-height: 1.2; letter-spacing: -.01em; }
   cursor: pointer;
   transition: border-color 150ms ease, background 150ms ease, transform 120ms ease;
 }
-.quiet-button { padding: 0 14px; }
-.quiet-button:hover, .copy-field button:hover, .primary-button:hover { border-color: #53615d; background: #1a2220; }
-.quiet-button:active, .copy-field button:active, .primary-button:active { transform: translateY(1px); }
-.quiet-button:focus-visible, .copy-field button:focus-visible, .primary-button:focus-visible, .module-tab:focus-visible, input:focus-visible, textarea:focus-visible, .ui-select-trigger:focus-visible, .ui-select-menu button:focus-visible {
+.quiet-button, .ghost-button { padding: 0 14px; }
+.quiet-button:hover, .ghost-button:hover, .copy-field button:hover, .primary-button:hover { border-color: #53615d; background: #1a2220; }
+.quiet-button:active, .ghost-button:active, .copy-field button:active, .primary-button:active { transform: translateY(1px); }
+.quiet-button:focus-visible, .ghost-button:focus-visible, .copy-field button:focus-visible, .primary-button:focus-visible, .module-tab:focus-visible, input:focus-visible, textarea:focus-visible, .ui-select-trigger:focus-visible, .ui-select-menu button:focus-visible {
   outline: 2px solid var(--blue);
   outline-offset: 2px;
 }
@@ -224,13 +224,16 @@ input:checked + .switch-track::after { transform: translateX(18px); background: 
 .status-pill { flex: 0 0 auto; padding: 5px 9px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted-strong); font-size: 12px; }
 .status-pill[data-state="online"] { border-color: var(--green-accent); background: rgba(66, 217, 140, .14); color: var(--green-accent); }
 .status-pill[data-state="waiting"] { border-color: #70612f; background: #39321a; color: #e7ce74; }
-.settings-fields { display: grid; gap: 14px; }
-.settings-fields label { display: grid; gap: 7px; color: var(--muted-strong); font-size: 13px; }
-.settings-fields input { min-height: 42px; padding: 0 12px; border: 1px solid #35413e; border-radius: 9px; background: #0d1211; color: var(--text); }
 .form-actions { display: flex; gap: 9px; margin-top: 20px; }
 .settings-help { margin: 18px 0 0; padding-top: 16px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; line-height: 1.65; }
 .settings-help.bluetooth-recovery-help { margin-top: 10px; padding-top: 0; border-top: 0; }
 .error-detail { margin: 14px 0 0; color: #e8a29c; font-size: 12px; line-height: 1.55; }
+.settings-fields, .xiaozhi-fields { display: grid; gap: 14px; }
+.settings-fields label, .xiaozhi-fields > label:not(.check-row) { display: grid; gap: 7px; color: var(--muted-strong); font-size: 13px; }
+.settings-fields input, .xiaozhi-fields > label:not(.check-row) input { min-height: 42px; padding: 0 12px; border: 1px solid #35413e; border-radius: 9px; background: #0d1211; color: var(--text); }
+.xiaozhi-fields > label.field { grid-column: 1 / -1; }
+.xiaozhi-fields > label.check-row { display: flex; align-items: center; gap: 10px; grid-column: 1 / -1; }
+.xiaozhi-fields > label.check-row input { width: 18px; height: 18px; min-height: 0; padding: 0; border: 0; background: none; }
 .settings-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .network-note { display: grid; grid-template-columns: auto 1fr; align-items: baseline; gap: 8px 14px; margin: 18px 0 0; padding: 14px 16px; border: 1px solid #30433d; border-radius: var(--radius-control); background: #0d1714; color: var(--muted); font-size: 12px; line-height: 1.6; }
 .network-note strong { color: #a9d9c4; font-size: 12px; white-space: nowrap; }
@@ -437,6 +440,7 @@ button:disabled { cursor: not-allowed; opacity: .55; transform: none; }
 }
 .xiaozhi-activation .primary-button { justify-self: start; }
 .status-pill.waiting { border-color: #70612f; background: #39321a; color: #e7ce74; }
+.qqmusic-qr-wrap { padding: 12px 0; text-align: center; }
 .codex-ui-field { display: grid; gap: 8px; }
 .codex-ui-field .time-field-label { font-size: 13px; color: var(--muted-strong); }
 .codex-info-panel .runtime-row { display: flex; align-items: baseline; justify-content: space-between; gap: 14px; padding: 11px 0; border-bottom: 1px solid var(--line); font-size: 13px; }

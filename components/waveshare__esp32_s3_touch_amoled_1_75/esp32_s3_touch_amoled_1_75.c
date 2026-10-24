@@ -10,6 +10,7 @@
 #include "esp_log.h"
 #include "esp_check.h"
 #include "esp_attr.h"
+#include "esp_timer.h"
 #include "esp_vfs_fat.h"
 #include "esp_spiffs.h"
 #include "driver/gpio.h"
@@ -418,6 +419,10 @@ static esp_err_t lcd_transform_draw_bitmap(lv_display_t *disp,
                                            int x_start, int y_start, int x_end, int y_end,
                                            const void *color_map, void *user_ctx)
 {
+    const int64_t flush_t0 = esp_timer_get_time();
+    static uint32_t perf_frames;
+    static int64_t perf_flush_us;
+    static int64_t perf_window_us;
     (void)user_ctx;
     if (s_lcd_transform.logical_fb == NULL || s_lcd_transform.dma_tile == NULL) {
         return ESP_ERR_INVALID_STATE;
@@ -438,6 +443,22 @@ static esp_err_t lcd_transform_draw_bitmap(lv_display_t *disp,
                     full_refresh ? lcd_transform_flush_full(panel) :
                                    lcd_transform_flush_dirty(panel);
     s_lcd_transform.dirty_valid = false;
+
+    /* 1 Hz perf summary for the panel transform path. */
+    perf_flush_us += esp_timer_get_time() - flush_t0;
+    if (lv_display_flush_is_last(disp)) {
+        perf_frames++;
+        const int64_t perf_now = esp_timer_get_time();
+        if (perf_window_us == 0) perf_window_us = perf_now;
+        if (perf_now - perf_window_us >= 1000000) {
+            ESP_LOGI(TAG, "panel flush: %lu fps, avg %lld us",
+                     (unsigned long)perf_frames,
+                     (long long)(perf_flush_us / (perf_frames ? perf_frames : 1)));
+            perf_frames = 0;
+            perf_flush_us = 0;
+            perf_window_us = perf_now;
+        }
+    }
     return ret;
 }
 
@@ -649,7 +670,13 @@ esp_err_t bsp_audio_init(const i2s_std_config_t *i2s_config)
        frames each) no longer fits once the Xiaozhi client and its websocket
        are running, which made every audio init fail. Four descriptors still
        give the pair about 40 ms of slack at 24 kHz. */
-    chan_cfg.dma_desc_num = 4;
+    /* 6 x 240 frames = 60 ms at 24 kHz mono. Measured playback showed the
+       decoder/writer loop stalling 24-78 ms between codec writes (network read
+       plus decode), so the old 40 ms ring ran dry and the music stuttered.
+       The ring must cover that gap. NOTE: these descriptors come from internal
+       DMA RAM, which the TLS handshake also needs - verify free heap after any
+       change here. */
+    chan_cfg.dma_desc_num = 6;
     chan_cfg.dma_frame_num = 240;
     BSP_ERROR_CHECK_RETURN_ERR(i2s_new_channel(&chan_cfg, &i2s_tx_chan, &i2s_rx_chan));
 

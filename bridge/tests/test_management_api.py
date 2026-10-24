@@ -23,6 +23,7 @@ from codex_bridge import (  # noqa: E402
     StateStore,
     XiaozhiConfigStore,
 )
+from qqmusic import QQMusicAccount, QQMusicNotLoggedIn  # noqa: E402
 
 TOKEN = "management-api-test-token"
 
@@ -54,6 +55,7 @@ class ManagementApiTests(unittest.TestCase):
             ModuleConfigStore(cls.root / "modules.json"),
             DisplayConfigStore(cls.root / "display.json"),
             XiaozhiConfigStore(cls.root / "xiaozhi.json"),
+            QQMusicAccount(cls.root),
             BluetoothBridge(cls.root),
             FirmwareFlasher(BRIDGE.parent, cls.root),
             cls.root,
@@ -300,6 +302,47 @@ class ManagementApiTests(unittest.TestCase):
         status, payload = self.json_body("POST", "/api/v1/admin/firmware/flash", payload={})
         self.assertEqual(status, 400)
         self.assertIn("确认", payload["error"])
+
+    def test_device_music_search_reports_an_expired_session_as_unauthorized(self):
+        """A dead QQ session must answer 401, not a generic 502.
+
+        The device shows the error text from this response, so the message has
+        to say the login needs refreshing rather than blaming the network.
+        """
+        def expired(*_args, **_kwargs):
+            raise QQMusicNotLoggedIn("QQ Music login expired; sign in again.")
+
+        original = self.server.qqmusic.search
+        self.server.qqmusic.search = expired
+        try:
+            status, payload = self.json_body(
+                "POST", "/api/v1/device/music/search",
+                payload={"q": "苦瓜", "limit": 3}, token=TOKEN,
+            )
+        finally:
+            self.server.qqmusic.search = original
+
+        self.assertEqual(status, 401, payload)
+        self.assertIn("login", payload["error"].lower())
+
+    def test_device_music_search_success_returns_results(self):
+        def found(*_args, **_kwargs):
+            return [{"mid": "000UPdbN1GKIda", "title": "苦瓜",
+                     "artist": "陈奕迅", "album": "", "playable": True}]
+
+        original = self.server.qqmusic.search
+        self.server.qqmusic.search = found
+        try:
+            status, payload = self.json_body(
+                "POST", "/api/v1/device/music/search",
+                payload={"q": "苦瓜", "limit": 3}, token=TOKEN,
+            )
+        finally:
+            self.server.qqmusic.search = original
+
+        self.assertEqual(status, 200, payload)
+        self.assertEqual(payload["results"][0]["mid"], "000UPdbN1GKIda")
+
 
     def test_unknown_endpoints_return_not_found(self):
         status, payload = self.json_body("POST", "/api/v1/admin/does-not-exist", payload={})

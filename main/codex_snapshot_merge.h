@@ -12,6 +12,11 @@ void codex_snapshot_refresh_dotii_state(codex_snapshot_t *target);
 void codex_snapshot_merge_status(codex_snapshot_t *target, const cJSON *data);
 void codex_snapshot_merge_codex_state(codex_snapshot_t *target, const cJSON *data);
 void codex_snapshot_merge_quota(codex_snapshot_t *target, const cJSON *data);
+/* Merge an account.changed / rate_limits.changed / token_usage.changed
+   payload decoded by the CBDP projection. Only the families present in the
+   object are touched; rate_limits replaces the window set wholesale so an
+   unreported window renders as "--" instead of a stale percentage. */
+void codex_snapshot_merge_account(codex_snapshot_t *target, const cJSON *data);
 void codex_snapshot_merge_tasks(
     codex_snapshot_t *target,
     const cJSON *data,

@@ -210,12 +210,81 @@ function formatMinutes(value) {
   return `${Math.floor(minutes / 60)} 小时 ${minutes % 60} 分钟`;
 }
 
+async function apiPost(path, payload = {}) {
+  const response = await fetch(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) throw new Error(await response.text());
+  return response.json();
+}
+
+function qqmusicVipLabel(status = {}) {
+  if (!status.vip) return "普通账号";
+  // 豪华版 (Super VIP) and 年费 are distinct badges on the QQ Music profile,
+  // so show both rather than a single generic "VIP".
+  const parts = [];
+  if (status.vip_year) parts.push("年费");
+  parts.push(status.vip_super ? "豪华版" : "绿钻");
+  if (status.vip_level) parts.push("Lv" + status.vip_level);
+  return parts.join(" ");
+}
+
+function renderQqmusic(status = {}) {
+  const logged = Boolean(status.logged_in);
+  byId("qqmusic-state").textContent = logged ? "已登录" : "未登录";
+  byId("qqmusic-logged-out").hidden = logged;
+  byId("qqmusic-logged-in").hidden = !logged;
+  if (logged) {
+    byId("qqmusic-nickname").textContent = status.nickname || status.uin || "QQ 音乐用户";
+    byId("qqmusic-vip").textContent = qqmusicVipLabel(status);
+  } else {
+    byId("qqmusic-vip").textContent = "-";
+    byId("qqmusic-qr-wrap").hidden = true;
+  }
+}
+
+let qqPollTimer = null;
+
+async function startQqLogin() {
+  byId("qqmusic-qr-wrap").hidden = false;
+  byId("qqmusic-qr-hint").textContent = "已打开登录窗口，请在新窗口里用手机 QQ 扫码登录…";
+  await apiPost("/api/v1/admin/qqmusic/browser-login");
+  if (qqPollTimer) clearInterval(qqPollTimer);
+  const deadline = Date.now() + 180000;
+  qqPollTimer = setInterval(async () => {
+    try {
+      const status = await fetch("/api/v1/admin/qqmusic/status").then((r) => r.json());
+      if (status.logged_in) {
+        clearInterval(qqPollTimer);
+        qqPollTimer = null;
+        renderQqmusic(status);
+        byId("qqmusic-qr-hint").textContent = "登录成功，设备已获得授权";
+      } else if (Date.now() > deadline) {
+        clearInterval(qqPollTimer);
+        qqPollTimer = null;
+        byId("qqmusic-qr-hint").textContent = "登录窗口已超时，请重新点击登录";
+      }
+    } catch (error) {
+      console.warn("qqmusic status poll failed", error);
+    }
+  }, 2000);
+}
+
+async function logoutQq() {
+  const result = await apiPost("/api/v1/admin/qqmusic/logout");
+  renderQqmusic(result);
+}
+
 function renderXiaozhi(config = {}, enabled = true, bluetooth = {}) {
+  if (arguments.length > 3) renderQqmusic(arguments[3] || {});
   if (!state.xiaozhiLoaded && !state.xiaozhiSaving) {
     byId("xiaozhi-server-url").value = config.server_url || "https://api.tenclass.net/xiaozhi/ota/";
     byId("xiaozhi-wake-word").value = config.wake_word || "你好小智";
     byId("xiaozhi-voice").value = config.voice || "default";
     byId("xiaozhi-mcp-enabled").checked = config.mcp_enabled !== false;
+byId("xiaozhi-mcp-url").value = config.mcp_url || "";
     state.xiaozhiLoaded = true;
   }
   if (!state.moduleSaving.xiaozhi) byId("xiaozhi-enabled").checked = enabled;
@@ -259,6 +328,7 @@ async function saveXiaozhi(event) {
         wake_word: byId("xiaozhi-wake-word").value.trim(),
         voice: byId("xiaozhi-voice").value.trim(),
         mcp_enabled: byId("xiaozhi-mcp-enabled").checked,
+mcp_url: byId("xiaozhi-mcp-url").value.trim(),
       }),
     });
     const result = await response.json();
@@ -423,7 +493,7 @@ function renderOverview(overview) {
   setBridgeState(bridge);
   renderBluetooth(overview.bluetooth || {});
   renderFirmware(overview.firmware || {});
-  renderXiaozhi(overview.xiaozhi_config || {}, xiaozhiEnabled, overview.bluetooth || {});
+  renderXiaozhi(overview.xiaozhi_config || {}, xiaozhiEnabled, overview.bluetooth || {}, overview.qqmusic || {});
   const displayConfig = overview.display_config || snapshot.display || {};
   if (!state.displayDirty && !state.displaySaving) {
     const angle = Math.max(80, Math.min(100, Number(displayConfig.docked_rotation_tenths || 900) / 10));
@@ -668,10 +738,20 @@ byId("xiaozhi-server-url").addEventListener("input", () => setText("xiaozhi-save
 byId("xiaozhi-wake-word").addEventListener("input", () => setText("xiaozhi-save-state", "有尚未保存的修改"));
 byId("xiaozhi-voice").addEventListener("input", () => setText("xiaozhi-save-state", "有尚未保存的修改"));
 byId("xiaozhi-mcp-enabled").addEventListener("change", () => setText("xiaozhi-save-state", "有尚未保存的修改"));
+byId("xiaozhi-mcp-url").addEventListener("input", () => setText("xiaozhi-save-state", "有尚未保存的修改"));
 byId("bluetooth-install").addEventListener("click", installBluetooth);
 byId("bluetooth-scan").addEventListener("click", scanBluetooth);
 byId("bluetooth-configure").addEventListener("click", configureBluetooth);
 byId("bluetooth-ssid").addEventListener("input", () => renderBluetooth(state.overview?.bluetooth || {}));
+byId("qqmusic-login")?.addEventListener("click", () => {
+  startQqLogin().catch((error) => {
+    console.error("qqmusic login failed", error);
+    setText("qqmusic-qr-hint", "获取二维码失败：" + (error.message || error));
+  });
+});
+byId("qqmusic-logout")?.addEventListener("click", () => {
+  logoutQq().catch((error) => console.error("qqmusic logout failed", error));
+});
 byId("firmware-refresh").addEventListener("click", refreshFirmware);
 byId("firmware-flash").addEventListener("click", flashFirmware);
 

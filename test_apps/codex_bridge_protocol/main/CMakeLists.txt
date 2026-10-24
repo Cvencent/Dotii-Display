@@ -1,12 +1,17 @@
 idf_component_register(
     SRCS
         "test_codex_bridge_protocol.c"
+        "test_cbdp_codec.c"
+        "test_cbdp_auth.c"
+        "test_cbdp_discovery.c"
+        "test_cbdp_projection.c"
         "test_codex_read_tracker.c"
         "test_codex_snapshot_merge.c"
         "test_management_snapshot.c"
         "device_config.c"
         "../../../main/codex_bridge_client.c"
         "../../../main/codex_bridge_protocol.c"
+        "../../../main/codex_bridge_projection.c"
         "../../../main/codex_snapshot_merge.c"
         "../../../main/management_snapshot.c"
         "../../../main/app_state.c"
@@ -24,6 +29,7 @@ idf_component_register(
         espressif__cjson
         freertos
         lwip
+        mbedtls
         nvs_flash
         unity
     WHOLE_ARCHIVE

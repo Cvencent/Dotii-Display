@@ -25,14 +25,17 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 from bluetooth_bridge import BluetoothBridge
 from codex_bridge_link import claim_codex_bridge_token
 from firmware_flasher import FirmwareFlasher
+import requests
+from qqmusic import QQMusicAccount, QQMusicNotLoggedIn
 from platforms import current_platform
 from runtime_paths import (
     application_root,
+    application_version,
     is_frozen,
     project_root,
     resource_path,
@@ -52,6 +55,9 @@ XIAOZHI_DEFAULTS = {
     "wake_word": "你好小智",
     "voice": "default",
     "mcp_enabled": True,
+    # Tool access point published by the xiaozhi console
+    # (wss://api.xiaozhi.me/mcp/?token=...). Tools are registered here.
+    "mcp_url": "",
 }
 
 
@@ -80,6 +86,12 @@ def validate_xiaozhi_config(payload: Any) -> dict[str, Any]:
     if not isinstance(mcp_enabled, bool):
         raise ValueError("xiaozhi.mcp_enabled must be a boolean")
 
+    mcp_url = bounded(payload.get("mcp_url"), "mcp_url", 512, defaults["mcp_url"])
+    if mcp_url:
+        parsed_mcp = urlparse(mcp_url)
+        if parsed_mcp.scheme not in {"ws", "wss"} or not parsed_mcp.hostname:
+            raise ValueError("xiaozhi.mcp_url must be a ws(s):// URL")
+
     server_url = bounded(payload.get("server_url"), "server_url", 192,
                          defaults["server_url"]) or defaults["server_url"]
     parsed = urlparse(server_url)
@@ -94,6 +106,7 @@ def validate_xiaozhi_config(payload: Any) -> dict[str, Any]:
         "voice": bounded(payload.get("voice"), "voice", 32,
                          defaults["voice"]) or defaults["voice"],
         "mcp_enabled": mcp_enabled,
+        "mcp_url": mcp_url,
     }
 
 
@@ -597,10 +610,11 @@ class BridgeHandler(BaseHTTPRequestHandler):
 
     def _overview(self) -> dict[str, Any]:
         snapshot = self.bridge.snapshot()
+        snapshot["qqmusic"] = self.bridge.qqmusic.status()
         address = local_ipv4()
         runtime = self.bridge.runtime.snapshot()
         return {
-            "app": {"name": "Dotii 管理中心", "version": "1.1.9"},
+            "app": {"name": "Dotii 管理中心", "version": application_version()},
             "bridge": {
                 "online": True,
                 "local_url": f"http://127.0.0.1:{self.bridge.server_port}",
@@ -616,6 +630,7 @@ class BridgeHandler(BaseHTTPRequestHandler):
             "xiaozhi_config": self.bridge.xiaozhi.read(),
             "bluetooth": self.bridge.bluetooth.snapshot(),
             "firmware": self.bridge.firmware.snapshot(),
+            "qqmusic": self.bridge.qqmusic.status(),
             "modules": [
                 {"id": "xiaozhi", "name": "小智", "enabled": snapshot["modules"]["xiaozhi"], "available": True, "locked": False},
             ],
@@ -637,6 +652,49 @@ class BridgeHandler(BaseHTTPRequestHandler):
                 self._send_json(HTTPStatus.OK, self.bridge.snapshot())
             except (OSError, ValueError, json.JSONDecodeError) as error:
                 self._send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": str(error)})
+        elif path == "/api/v1/device/music/stream":
+            if not self._authorized():
+                self._send_json(HTTPStatus.UNAUTHORIZED, {"error": "invalid bridge token"})
+                return
+            try:
+                mid = str(parse_qs(urlparse(self.path).query).get("mid", [""])[0]).strip()
+                if not mid or not mid.isalnum():
+                    raise ValueError("invalid mid")
+                resolved = self.bridge.qqmusic.resolve(mid)
+                if not resolved.get("available"):
+                    self._send_json(HTTPStatus.NOT_FOUND, {"error": resolved.get("reason", "unavailable")})
+                    return
+                upstream = requests.get(resolved["url"], stream=True, timeout=(10, 30))
+                if upstream.status_code >= 400:
+                    self._send_json(HTTPStatus.BAD_GATEWAY, {"error": "upstream error"})
+                    return
+                self.send_response(HTTPStatus.OK)
+                self.send_header("Content-Type", upstream.headers.get("Content-Type", "audio/mp4"))
+                length = upstream.headers.get("Content-Length")
+                if length:
+                    self.send_header("Content-Length", length)
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                # Windows buffers small socket writes; a music stream must not
+                # sit in the sender's buffer, or the device hears bursts of
+                # audio followed by silence.
+                self.connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+                for chunk in upstream.iter_content(chunk_size=32 * 1024):
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+            except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
+                pass  # device stopped or seeked; nothing to clean up here
+            except Exception as error:
+                try:
+                    self._send_json(HTTPStatus.BAD_GATEWAY, {"error": str(error)})
+                except Exception:
+                    pass
+            return
+        elif path == "/api/v1/admin/qqmusic/status":
+            if self._deny_nonlocal():
+                return
+            self._send_json(HTTPStatus.OK, self.bridge.qqmusic.status())
         elif path == "/api/v1/admin/overview":
             if self._deny_nonlocal():
                 return
@@ -706,6 +764,91 @@ class BridgeHandler(BaseHTTPRequestHandler):
                     self._send_json(HTTPStatus.ACCEPTED, {"ok": True})
             except (OSError, ValueError, UnicodeDecodeError, json.JSONDecodeError) as error:
                 self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
+            return
+        if path == "/api/v1/admin/qqmusic/browser-login":
+            if self._deny_nonlocal():
+                return
+            try:
+                self._read_admin_action()
+                import time as _time
+                started = getattr(self.bridge.qqmusic, "_login_started", 0)
+                if getattr(self.bridge.qqmusic, "_login_running", False) and \
+                   _time.time() - started <= 300:
+                    self._send_json(HTTPStatus.CONFLICT, {"error": "login already running"})
+                    return
+                self.bridge.qqmusic._login_running = True
+
+                def worker():
+                    try:
+                        self.bridge.qqmusic.browser_login()
+                    finally:
+                        self.bridge.qqmusic._login_running = False
+
+                import threading as _threading
+                _threading.Thread(target=worker, daemon=True).start()
+                self._send_json(HTTPStatus.ACCEPTED, {"ok": True, "state": "opening"})
+            except Exception as error:
+                self.bridge.qqmusic._login_running = False
+                self._send_json(HTTPStatus.BAD_GATEWAY, {"error": str(error)})
+            return
+        if path == "/api/v1/admin/qqmusic/qr":
+            if self._deny_nonlocal():
+                return
+            try:
+                self._read_admin_action()
+                self._send_json(HTTPStatus.OK, self.bridge.qqmusic.qr_begin())
+            except Exception as error:
+                self._send_json(HTTPStatus.BAD_GATEWAY, {"error": str(error)})
+            return
+        if path == "/api/v1/admin/qqmusic/poll":
+            if self._deny_nonlocal():
+                return
+            try:
+                self._read_admin_action()
+                self._send_json(HTTPStatus.OK, self.bridge.qqmusic.qr_poll())
+            except Exception as error:
+                self._send_json(HTTPStatus.BAD_GATEWAY, {"error": str(error)})
+            return
+        if path == "/api/v1/admin/qqmusic/logout":
+            if self._deny_nonlocal():
+                return
+            try:
+                self._read_admin_action()
+                self.bridge.qqmusic.logout()
+                self._send_json(HTTPStatus.OK, {"ok": True, **self.bridge.qqmusic.status()})
+            except Exception as error:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
+            return
+        if path == "/api/v1/device/music/search":
+            if not self._authorized():
+                self._send_json(HTTPStatus.UNAUTHORIZED, {"error": "invalid bridge token"})
+                return
+            try:
+                payload = self._read_admin_action()
+                query = str(payload.get("q", "")).strip()
+                if not query:
+                    raise ValueError("missing query")
+                results = self.bridge.qqmusic.search(query, int(payload.get("limit", 3)))
+                self._send_json(HTTPStatus.OK, {"ok": True, "results": results})
+            except QQMusicNotLoggedIn as error:
+                # The device relays this text to the user, so distinguish "the
+                # QQ login needs refreshing" from a genuine upstream failure.
+                self._send_json(HTTPStatus.UNAUTHORIZED, {"error": str(error)})
+            except Exception as error:
+                self._send_json(HTTPStatus.BAD_GATEWAY, {"error": str(error)})
+            return
+        if path == "/api/v1/device/music/resolve":
+            if not self._authorized():
+                self._send_json(HTTPStatus.UNAUTHORIZED, {"error": "invalid bridge token"})
+                return
+            try:
+                payload = self._read_admin_action()
+                mid = str(payload.get("mid", "")).strip()
+                if not mid:
+                    raise ValueError("missing mid")
+                self._send_json(HTTPStatus.OK, self.bridge.qqmusic.resolve(mid))
+            except Exception as error:
+                self._send_json(HTTPStatus.BAD_GATEWAY, {"error": str(error)})
             return
         if path == "/api/v1/admin/xiaozhi":
             if self._deny_nonlocal():
@@ -794,6 +937,7 @@ class BridgeServer(ThreadingHTTPServer):
         modules: ModuleConfigStore,
         display: DisplayConfigStore,
         xiaozhi: XiaozhiConfigStore,
+        qqmusic: QQMusicAccount,
         bluetooth: BluetoothBridge,
         firmware: FirmwareFlasher,
         runtime_folder: Path,
@@ -806,6 +950,7 @@ class BridgeServer(ThreadingHTTPServer):
         self.modules = modules
         self.display = display
         self.xiaozhi = xiaozhi
+        self.qqmusic = qqmusic
         self.bluetooth = bluetooth
         self.firmware = firmware
         self.runtime_folder = runtime_folder
@@ -819,6 +964,11 @@ class BridgeServer(ThreadingHTTPServer):
         snapshot["character"] = dotii_config["character"]
         snapshot["display"] = self.display.read()
         snapshot["xiaozhi"] = self.xiaozhi.read()
+        qq = self.qqmusic.status()
+        # The device stores this cookie bundle so it can search and stream on
+        # its own without the management center running.
+        qq["cookies"] = self.qqmusic.cookie_header()
+        snapshot["qqmusic"] = qq
         return snapshot
 
 
@@ -849,6 +999,7 @@ def main() -> None:
         modules,
         DisplayConfigStore(writable_root / "display.json"),
         XiaozhiConfigStore(writable_root / "xiaozhi.json"),
+        QQMusicAccount(writable_root),
         bluetooth,
         firmware,
         writable_root,

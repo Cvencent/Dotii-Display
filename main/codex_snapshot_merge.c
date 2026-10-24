@@ -150,6 +150,16 @@ static void copy_string_checked(const cJSON *parent, const char *name,
     if (value != NULL) strlcpy(target, value->valuestring, size);
 }
 
+/* Render an absolute reset instant as the "MM-DD HH:MM" string the on-device
+   usage screens already display. */
+static void format_epoch_date(time_t epoch, char *target, size_t size)
+{
+    if (epoch <= 0 || target == NULL || size == 0) return;
+    struct tm local;
+    if (localtime_r(&epoch, &local) == NULL) return;
+    (void)strftime(target, size, "%m-%d %H:%M", &local);
+}
+
 /* Convert an absolute reset instant into the "MM-DD HH:MM" string the
    on-device usage screens already render. */
 static void copy_epoch_date(const cJSON *parent, const char *name,
@@ -157,10 +167,7 @@ static void copy_epoch_date(const cJSON *parent, const char *name,
 {
     cJSON *value = NULL;
     if (!json_number(parent, name, &value) || value->valuedouble <= 0) return;
-    time_t epoch = (time_t)value->valuedouble;
-    struct tm local;
-    if (localtime_r(&epoch, &local) == NULL) return;
-    if (strftime(target, size, "%m-%d %H:%M", &local) == 0) return;
+    format_epoch_date((time_t)value->valuedouble, target, size);
 }
 
 static void apply_quota(const cJSON *quota, codex_snapshot_t *target)
@@ -333,6 +340,13 @@ void codex_snapshot_merge_status(codex_snapshot_t *target, const cJSON *data)
     }
 }
 
+/* Add two counters without wrapping around. */
+static uint16_t saturating_add_u16(uint16_t base, uint16_t delta)
+{
+    const uint32_t sum = (uint32_t)base + (uint32_t)delta;
+    return sum > 0xFFFFu ? 0xFFFFu : (uint16_t)sum;
+}
+
 void codex_snapshot_merge_codex_state(codex_snapshot_t *target, const cJSON *data)
 {
     if (target == NULL || !cJSON_IsObject(data)) return;
@@ -341,7 +355,27 @@ void codex_snapshot_merge_codex_state(codex_snapshot_t *target, const cJSON *dat
     target->codex_source_online = true;
     target->source_online = true;
 
-    copy_bounded_u16(data, "running", &target->running_tasks);
+    cJSON *running_value = NULL;
+    if (json_number(data, "running", &running_value)) {
+        copy_bounded_u16(data, "running", &target->running_tasks);
+        /* The Bridge sent an explicit counter summary: it is authoritative and
+           must not be replaced by a locally derived task count. */
+        target->codex_state_summary_valid = true;
+    }
+
+    /* A replayed frame only re-establishes the reference counters. The panel
+       refreshes the numbers from it but must not ring the task chime, because
+       those tasks finished before the device connected. */
+    cJSON *baseline = cJSON_GetObjectItemCaseSensitive(data, "baseline");
+    target->codex_state_baseline = cJSON_IsTrue(baseline);
+
+    /* Remember the previous raw counters.  The Bridge counters are "unread"
+       counters that drop back to zero as soon as any client reads a result,
+       so the device derives its own monotonic totals from the growth of
+       these values. */
+    const bool have_previous = target->codex_state_raw_valid;
+    const uint16_t previous_completed = target->completed_unread_tasks;
+    const uint16_t previous_failed = target->failed_unread_tasks;
 
     cJSON *completed = NULL;
     if (json_number(data, "completed_unread", &completed)) {
@@ -358,10 +392,37 @@ void codex_snapshot_merge_codex_state(codex_snapshot_t *target, const cJSON *dat
         copy_bounded_u16(data, "failed", &target->failed_unread_tasks);
     }
 
-    ESP_LOGI(TAG, "running=%u completed_unread=%u failed_unread=%u",
+    /* The Bridge counters are "unread" counters: they collapse back to zero
+       as soon as the desktop or the phone reads a result.  The panel needs a
+       stable number, so the device keeps a total that only ever grows.
+       The first summary seeds the total with whatever the Bridge already
+       knows, so the panel does not jump when the device connects.  A replayed
+       baseline frame only re-establishes the reference counters and never
+       adds to the total. */
+    if (!have_previous) {
+        target->completed_total_tasks = target->completed_unread_tasks;
+        target->failed_total_tasks = target->failed_unread_tasks;
+    } else if (!target->codex_state_baseline) {
+        if (target->completed_unread_tasks > previous_completed) {
+            target->completed_total_tasks = saturating_add_u16(
+                target->completed_total_tasks,
+                (uint16_t)(target->completed_unread_tasks - previous_completed));
+        }
+        if (target->failed_unread_tasks > previous_failed) {
+            target->failed_total_tasks = saturating_add_u16(
+                target->failed_total_tasks,
+                (uint16_t)(target->failed_unread_tasks - previous_failed));
+        }
+    }
+    target->codex_state_raw_valid = true;
+
+    ESP_LOGI(TAG, "codex_state merged running=%u completed_unread=%u failed_unread=%u totals=%u/%u summary_valid=%d",
              (unsigned)target->running_tasks,
              (unsigned)target->completed_unread_tasks,
-             (unsigned)target->failed_unread_tasks);
+             (unsigned)target->failed_unread_tasks,
+             (unsigned)target->completed_total_tasks,
+             (unsigned)target->failed_total_tasks,
+             target->codex_state_summary_valid ? 1 : 0);
 }
 
 void codex_snapshot_merge_quota(codex_snapshot_t *target, const cJSON *data)
@@ -374,6 +435,76 @@ void codex_snapshot_merge_quota(codex_snapshot_t *target, const cJSON *data)
     target->source_online = true;
     copy_time(data, "generated_at_epoch", &target->generated_at);
     apply_quota(quota, target);
+    codex_snapshot_refresh_dotii_state(target);
+}
+
+void codex_snapshot_merge_account(codex_snapshot_t *target, const cJSON *data)
+{
+    if (target == NULL || !cJSON_IsObject(data)) return;
+    target->valid = true;
+    target->codex_source_online = true;
+    target->source_online = true;
+
+    /* account.changed. An absent plan_type means upstream did not report one;
+       keep the previous text instead of inventing a tier. */
+    copy_string_checked(data, "plan_type", target->plan_type, sizeof(target->plan_type));
+
+    /* rate_limits.changed. The array lists exactly the windows upstream
+       reported, so a missing window must render as "--" instead of keeping a
+       stale percentage. Both availabilities are therefore cleared first and
+       only re-armed by a window that is actually present. */
+    cJSON *rate_limits = json_array(data, "rate_limits");
+    if (rate_limits != NULL) {
+        target->five_hour_available = false;
+        target->weekly_available = false;
+        cJSON *item = NULL;
+        cJSON_ArrayForEach(item, rate_limits) {
+            cJSON *window = json_string(item, "window");
+            cJSON *remaining = NULL;
+            if (window == NULL) continue;
+            /* remaining_percent is already the REMAINING percentage. The
+               Bridge inverted usedPercent; inverting it again here would
+               show a full bar to an exhausted account. */
+            if (!json_number(item, "remaining_percent", &remaining)) continue;
+            if (remaining->valuedouble < 0 || remaining->valuedouble > 100) continue;
+            cJSON *reset = NULL;
+            time_t reset_epoch = 0;
+            if (json_number(item, "reset_at_ms", &reset) && reset->valuedouble > 0) {
+                reset_epoch = (time_t)(reset->valuedouble / 1000.0);
+            }
+            if (strcmp(window->valuestring, "five_hour") == 0) {
+                target->five_hour_remaining_percent = (int)remaining->valuedouble;
+                target->five_hour_available = true;
+                format_epoch_date(reset_epoch, target->five_hour_reset_date,
+                                  sizeof(target->five_hour_reset_date));
+            } else if (strcmp(window->valuestring, "weekly") == 0) {
+                target->weekly_remaining_percent = (int)remaining->valuedouble;
+                target->weekly_available = true;
+                format_epoch_date(reset_epoch, target->reset_date,
+                                  sizeof(target->reset_date));
+            }
+        }
+    }
+
+    /* token_usage.changed. seven_day_tokens is the 7-day running total. */
+    cJSON *token_usage = json_object(data, "token_usage");
+    if (token_usage != NULL) {
+        cJSON *seven_day = NULL;
+        if (json_number(token_usage, "seven_day_tokens", &seven_day) &&
+            seven_day->valuedouble >= 0) {
+            target->weekly_tokens = (uint32_t)seven_day->valuedouble;
+            target->weekly_tokens_available = true;
+        }
+        /* account.token_usage.read reports this turn/thread's total rather
+           than the 7-day aggregate; it belongs on the per-task metric. */
+        cJSON *token_total = NULL;
+        if (json_number(token_usage, "token_total", &token_total) &&
+            token_total->valuedouble >= 0) {
+            target->task_tokens = (uint32_t)token_total->valuedouble;
+            target->task_tokens_available = true;
+        }
+    }
+
     codex_snapshot_refresh_dotii_state(target);
 }
 
@@ -521,15 +652,21 @@ void codex_snapshot_apply_read_state(
         const bool result_matches =
             strcmp(tasks[index].result_message_id, message_id->valuestring) == 0;
         if (!message_matches && !result_matches) continue;
+        /* When the Bridge delivered a counter summary it owns the raw
+           counters.  Decrementing them locally would make the next summary
+           look like a larger growth and ring the task chime twice for a
+           single finished task, so the local decrement is only used when no
+           summary was received. */
         if (result_matches && tasks[index].read_count == 0 && read_count > 0 &&
-            !decremented) {
+            !decremented && !target->codex_state_raw_valid) {
             decrement_terminal_unread(target, tasks[index].status);
             decremented = true;
         }
         tasks[index].read_count = read_count;
     }
     if (strcmp(target->message_id, message_id->valuestring) == 0) {
-        if (target->read_count == 0 && read_count > 0 && !decremented) {
+        if (target->read_count == 0 && read_count > 0 && !decremented &&
+            !target->codex_state_raw_valid) {
             decrement_terminal_unread(target, target->status);
         }
         target->read_count = read_count;

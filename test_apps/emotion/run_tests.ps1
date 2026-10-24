@@ -26,15 +26,12 @@ $cjsonSrc = 'managed_components\espressif__cjson\cJSON\cJSON.c'
 # same parsing code against these stubs so the mapping stays covered.
 $hostStubs = 'test_apps\emotion\host_stubs'
 $tests = @(
-    @{ name = 'emotion_catalog'; src = 'test_apps\emotion\test_emotion_catalog.c'; libs = @('main\emotion\emotion_catalog.c') },
-    @{ name = 'animation';       src = 'test_apps\emotion\test_animation.c';       libs = @('main\emotion\animation.c') },
-    @{ name = 'emotion_engine';  src = 'test_apps\emotion\test_emotion_engine.c';  libs = @('main\emotion\emotion_engine.c', 'main\emotion\emotion_catalog.c') },
-    @{ name = 'character_pack';  src = 'test_apps\emotion\test_character_pack.c';  libs = @('main\emotion\character_pack.c') },
-    @{ name = 'emotion_router';  src = 'test_apps\emotion\test_emotion_router.c';  libs = @('main\emotion\emotion_router.c', 'main\emotion\emotion_engine.c', 'main\emotion\emotion_catalog.c') },
-    @{ name = 'emotion_face';    src = 'test_apps\emotion\test_emotion_face.c';    libs = @('main\emotion\emotion_face.c', 'main\emotion\emotion_catalog.c') }
-    @{ name = 'emotion_mood';    src = 'test_apps\emotion\test_emotion_mood.c';    libs = @('main\emotion\emotion_mood.c') }
-    @{ name = 'emotion_pose';    src = 'test_apps\emotion\test_emotion_pose.c';    libs = @('main\emotion\emotion_pose.c', 'main\emotion\emotion_geometry.c', 'main\emotion\emotion_engine.c', 'main\emotion\emotion_catalog.c', 'main\emotion\character_pack.c', 'main\emotion\animation.c') }
-    @{ name = 'xiaozhi_client'; src = 'test_apps\emotion\test_xiaozhi_client.c';  libs = @('main\xiaozhi_client.c', 'main\emotion\emotion_catalog.c', $cjsonSrc, "$hostStubs\host_stubs.c"); inc = @($hostStubs, 'main', $cjsonInc) }
+    @{ name = 'dotii_catalog';  src = 'test_apps\\emotion\\test_dotii_catalog.c';  libs = @('main\\emotion\\dotii_data.c') },
+    @{ name = 'dotii_engine';   src = 'test_apps\\emotion\\test_dotii_engine.c';   libs = @('main\\emotion\\dotii_engine.c', 'main\\emotion\\dotii_data.c'); extra = '-lm' },
+    @{ name = 'emotion_router'; src = 'test_apps\\emotion\\test_emotion_router.c'; libs = @('main\\emotion\\emotion_router.c', 'main\\emotion\\dotii_engine.c', 'main\\emotion\\dotii_data.c'); extra = '-lm' },
+    @{ name = 'emotion_mood';   src = 'test_apps\\emotion\\test_emotion_mood.c';   libs = @('main\\emotion\\emotion_mood.c') },
+    @{ name = 'dotii_frames'; src = 'test_apps\\emotion\\test_dotii_frames.c'; libs = @('main\\emotion\\dotii_draw.c', 'main\\emotion\\dotii_engine.c', 'main\\emotion\\dotii_data.c', "$hostStubs\\host_stubs.c"); inc = @("$hostStubs"); extra = '-lm' },
+    @{ name = 'xiaozhi_client'; src = 'test_apps\\emotion\\test_xiaozhi_client.c'; libs = @('main\\xiaozhi_client.c', 'main\\emotion\\dotii_data.c', $cjsonSrc, "$hostStubs\\host_stubs.c", "$hostStubs\\device_config.c"); inc = @($hostStubs, 'main', $cjsonInc); extra = '-lm' }
 )
 
 $failed = 0
@@ -43,6 +40,7 @@ foreach ($t in $tests) {
     $exe = Join-Path $outDir ("{0}.exe" -f $t.name)
     $extra = ''
     if ($t.inc) { $extra = ($t.inc | ForEach-Object { "-I $_" }) -join ' ' }
+    if ($t.extra) { $extra = "$extra $($t.extra)" }
     $cmd = "$cc -std=c11 -Wall -Wextra -I $inc $extra $($t.src) $($t.libs -join ' ') -o $exe"
     Write-Host "== $($t.name) =="
     # Compiler warnings arrive on stderr; only a non-zero exit is a failure.
@@ -58,3 +56,7 @@ foreach ($t in $tests) {
 }
 if ($failed -ne 0) { Write-Error "$failed test binary/binaries failed"; exit 1 }
 Write-Host 'all emotion host tests passed'
+
+
+
+

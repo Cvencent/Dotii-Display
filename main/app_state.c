@@ -109,10 +109,14 @@ void app_state_make_preview(codex_snapshot_t *snapshot)
     snapshot->valid = true;
     snapshot->preview_data = true;
     snapshot->source_online = false;
-    snapshot->five_hour_available = true;
-    snapshot->weekly_available = true;
-    snapshot->weekly_tokens_available = true;
-    snapshot->task_tokens_available = true;
+    /* The quota windows stay UNAVAILABLE. The panel then renders "--" for the
+       percentages, tokens and reset dates. Hard-coding 68% / 18420 tokens and
+       the fixed date "08-18" made a signed-out device look like it had real
+       usage, and the values were indistinguishable from measured ones. */
+    snapshot->five_hour_available = false;
+    snapshot->weekly_available = false;
+    snapshot->weekly_tokens_available = false;
+    snapshot->task_tokens_available = false;
     snapshot->conversation_mode = CODEX_CONVERSATION_PROGRESS;
     snapshot->codex_enabled = true;
     snapshot->xiaozhi_enabled = true;
@@ -125,7 +129,6 @@ void app_state_make_preview(codex_snapshot_t *snapshot)
     snapshot->sleep_timeout_seconds = 300;
     snapshot->charging_screen_off_timeout_seconds = 60;
     snapshot->charging_sleep_timeout_seconds = 300;
-    snapshot->five_hour_remaining_percent = 68;
     snapshot->dotii_touch_expression = DOTII_EXPRESSION_TOUCH_RESPONSE;
     snapshot->dotii_blink_expression = DOTII_EXPRESSION_BLINK;
     snapshot->dotii_long_idle_expression = DOTII_EXPRESSION_SLEEPY_YAWN;
@@ -136,19 +139,16 @@ void app_state_make_preview(codex_snapshot_t *snapshot)
     codex_snapshot_reset_dotii_mapping(snapshot);
     snapshot->status = CODEX_STATUS_WORKING;
     codex_snapshot_refresh_dotii_state(snapshot);
-    snapshot->weekly_remaining_percent = 68;
-    snapshot->weekly_tokens = 18420;
     snapshot->duration_seconds = 754;
     snapshot->message_count = 1;
-    snapshot->task_tokens = 18420;
     snapshot->plan_completed = 2;
     snapshot->plan_total = 4;
     snapshot->custom_accent = 0xF2C66D;
     snapshot->custom_ring_start = 0xF2C66D;
     snapshot->custom_ring_end = 0x5DA9FF;
     snapshot->generated_at = time(NULL);
-    strlcpy(snapshot->five_hour_reset_date, "08-18 14:40", sizeof(snapshot->five_hour_reset_date));
-    strlcpy(snapshot->reset_date, "08-18 10:00", sizeof(snapshot->reset_date));
+    /* No reset instant exists without a real window, so leave both dates
+       empty: the UI prints "--" for them instead of a stale constant. */
     strlcpy(snapshot->title, "等待 Codex 任务", sizeof(snapshot->title));
     strlcpy(snapshot->last_user_message, "请在电脑端启动 Dotii 管理中心。", sizeof(snapshot->last_user_message));
     strlcpy(snapshot->last_assistant_message, "Dotii 正在等待 Codex 任务数据。", sizeof(snapshot->last_assistant_message));
