@@ -1453,6 +1453,11 @@ static void xiaozhi_sync_config(void)
     strlcpy(config.wake_word,
             s_snapshot.xiaozhi_wake_word[0] ? s_snapshot.xiaozhi_wake_word : "你好小智",
             sizeof(config.wake_word));
+    /* The device registers the wake words through MultiNet, which takes the
+       whole ';' separated pinyin list. Without this the recogniser starts with
+       an empty vocabulary and falls back to WakeNet. */
+    strlcpy(config.wake_words, s_snapshot.xiaozhi_wake_word,
+            sizeof(config.wake_words));
     strlcpy(config.voice,
             s_snapshot.xiaozhi_voice[0] ? s_snapshot.xiaozhi_voice : "default",
             sizeof(config.voice));

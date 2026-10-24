@@ -49,10 +49,15 @@ SCHEMA_VERSION = 1
 MAX_BODY = 32 * 1024
 MODULE_DEFAULTS = {"xiaozhi": True}
 
+# The device recognises up to three wake words. MultiNet takes pinyin, so the
+# admin centre converts the user's Chinese text before it reaches the device.
+WAKE_WORD_MAX = 3
+
 XIAOZHI_DEFAULTS = {
     "enabled": True,
     "server_url": "https://api.tenclass.net/xiaozhi/ota/",
     "wake_word": "你好小智",
+    "wake_words": ["你好小智"],
     "voice": "default",
     "mcp_enabled": True,
     # Tool access point published by the xiaozhi console
@@ -63,6 +68,32 @@ XIAOZHI_DEFAULTS = {
 
 def default_xiaozhi_config() -> dict[str, Any]:
     return dict(XIAOZHI_DEFAULTS)
+
+
+def _wake_word_pinyin(text: str) -> str:
+    """Convert one wake phrase to the space separated pinyin MultiNet expects."""
+    # Imported lazily: the dependency is only needed on the configuration path,
+    # so a missing install degrades to "cannot customise" instead of breaking
+    # the whole admin server at import time.
+    from pypinyin import lazy_pinyin
+
+    return " ".join(lazy_pinyin(text)).strip()
+
+
+def wake_word_list_to_wire(words: list[str]) -> str:
+    """Pack the user-facing phrases into the device's ';' separated pinyin form."""
+    packed = []
+    for word in words:
+        phrase = word.strip()
+        if not phrase:
+            continue
+        try:
+            pinyin = _wake_word_pinyin(phrase)
+        except ImportError as error:  # pragma: no cover - depends on install
+            raise ValueError("缺少拼音转换组件，无法保存唤醒词") from error
+        if pinyin:
+            packed.append(pinyin)
+    return ";".join(packed[:WAKE_WORD_MAX])
 
 
 def validate_xiaozhi_config(payload: Any) -> dict[str, Any]:
@@ -98,11 +129,31 @@ def validate_xiaozhi_config(payload: Any) -> dict[str, Any]:
     if parsed.scheme not in {"http", "https", "ws", "wss"} or not parsed.hostname:
         raise ValueError("xiaozhi.server_url must be an http(s):// or ws(s):// URL")
 
+    # Accept either the new list or the legacy single string.
+    raw_words = payload.get("wake_words")
+    if raw_words is None:
+        legacy = bounded(payload.get("wake_word"), "wake_word", 32,
+                         defaults["wake_word"]) or defaults["wake_word"]
+        raw_words = [legacy]
+    if not isinstance(raw_words, list):
+        raise ValueError("xiaozhi.wake_words must be a list")
+    if len(raw_words) > WAKE_WORD_MAX:
+        raise ValueError(f"最多支持 {WAKE_WORD_MAX} 个唤醒词")
+    words: list[str] = []
+    for item in raw_words:
+        if not isinstance(item, str):
+            raise ValueError("xiaozhi.wake_words entries must be strings")
+        phrase = item.strip()[:32]
+        if phrase:
+            words.append(phrase)
+    if not words:
+        words = list(defaults["wake_words"])
+
     return {
         "enabled": enabled,
         "server_url": server_url,
-        "wake_word": bounded(payload.get("wake_word"), "wake_word", 32,
-                             defaults["wake_word"]) or defaults["wake_word"],
+        "wake_word": words[0],
+        "wake_words": words,
         "voice": bounded(payload.get("voice"), "voice", 32,
                          defaults["voice"]) or defaults["voice"],
         "mcp_enabled": mcp_enabled,
@@ -964,6 +1015,18 @@ class BridgeServer(ThreadingHTTPServer):
         snapshot["character"] = dotii_config["character"]
         snapshot["display"] = self.display.read()
         snapshot["xiaozhi"] = self.xiaozhi.read()
+        # The admin centre stores what the user typed; the device needs the
+        # MultiNet pinyin form. Convert here so the stored list stays readable
+        # and the wire never carries Chinese the recogniser cannot use.
+        words = snapshot["xiaozhi"].get("wake_words") or []
+        try:
+            wire_wake = wake_word_list_to_wire(words)
+        except ValueError:
+            # No pinyin component installed: leave the previous value so the
+            # device keeps its current wake word instead of losing it.
+            wire_wake = ""
+        if wire_wake:
+            snapshot["xiaozhi"]["wake_word"] = wire_wake
         qq = self.qqmusic.status()
         # The device stores this cookie bundle so it can search and stream on
         # its own without the management center running.

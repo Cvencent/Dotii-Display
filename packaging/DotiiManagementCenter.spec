@@ -41,12 +41,22 @@ for relative_name in firmware_files.values():
     destination = Path("firmware") / relative.parent
     datas.append((str(source), str(destination)))
 
+# pypinyin reads its phrase dictionaries from package data when converting a
+# custom wake word to pinyin; without it the conversion fails at runtime.
+datas += collect_data_files("pypinyin")
+datas += collect_data_files("pypinyin_dict")
+
 hiddenimports = [
     "codex_bridge",
     "bluetooth_bridge",
     "firmware_flasher",
     "runtime_paths",
     "platforms",
+    # Imported lazily on the wake-word path, so it must be listed explicitly.
+    "pypinyin",
+    "pypinyin.style",
+    "pypinyin_dict",
+    "pypinyin_dict.phrase_pinyin_data",
     *collect_submodules("bleak"),
     *collect_submodules("esptool"),
 ]

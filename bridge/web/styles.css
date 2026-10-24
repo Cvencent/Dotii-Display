@@ -231,7 +231,11 @@ input:checked + .switch-track::after { transform: translateX(18px); background: 
 .settings-fields, .xiaozhi-fields { display: grid; gap: 14px; }
 .settings-fields label, .xiaozhi-fields > label:not(.check-row) { display: grid; gap: 7px; color: var(--muted-strong); font-size: 13px; }
 .settings-fields input, .xiaozhi-fields > label:not(.check-row) input { min-height: 42px; padding: 0 12px; border: 1px solid #35413e; border-radius: 9px; background: #0d1211; color: var(--text); }
-.xiaozhi-fields > label.field { grid-column: 1 / -1; }
+.xiaozhi-fields > label.field, .xiaozhi-fields > div.field { grid-column: 1 / -1; }
+/* Three stacked wake-word inputs, one per supported word. */
+.wake-word-field { display: grid; gap: 7px; color: var(--muted-strong); font-size: 13px; }
+.wake-word-field input { min-height: 42px; padding: 0 12px; border: 1px solid #35413e; border-radius: 9px; background: #0d1211; color: var(--text); }
+.wake-word-field .field-hint { color: var(--muted); font-size: 12px; line-height: 1.5; }
 .xiaozhi-fields > label.check-row { display: flex; align-items: center; gap: 10px; grid-column: 1 / -1; }
 .xiaozhi-fields > label.check-row input { width: 18px; height: 18px; min-height: 0; padding: 0; border: 0; background: none; }
 .settings-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
