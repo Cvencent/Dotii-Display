@@ -1,98 +1,327 @@
 # Dotii 桌面交互屏
 
-Dotii 是一套由 ESP32-S3 圆形 AMOLED 桌面屏、CodexBridge 与小智 AI 组成的开源桌面对话终端。设备固件原生运行小智语音助手，只有一个与小智会话直连的表情页面，能随对话、音乐播放和触摸切换表情，也会自动轮换固件内置的 4 个形象，并能显示 Codex 状态。CodexBridge 是常驻托盘、以通用设备协议提供 Codex 额度、近 7 日 Token、任务状态与多设备已读同步的桥接器；Dotii 管理中心是可安装到本机的独立后台程序，只管小智连接、显示设置、BLE 配网与烧录。
+Dotii 是一套由 ESP32-S3 圆形 AMOLED 桌面屏、Dotii 管理中心与 CodexBridge 组成的开源桌面对话终端。设备固件原生运行小智语音助手，主界面与小智会话直连，随对话、音乐播放和触摸切换表情，并自动轮换固件内置形象；同时显示 Codex 额度、近 7 日 Token 与任务状态。Dotii 管理中心是可安装到本机的独立后台程序，负责小智连接、显示设置、蓝牙配网与固件烧录；CodexBridge 负责采集 Codex 数据并按设备能力下发。
 
 ![Dotii 桌面交互屏产品渲染图](assets/dotii-product-render.png)
 
-[Windows 下载](https://github.com/Cvencent/Dotii-Display/releases/tag/management-center-v1.1.3) · [固件 1.1.4](https://github.com/Cvencent/Dotii-Display/releases/tag/firmware-v1.1.4) · [MakerWorld 模型与打印文件](https://makerworld.com.cn/zh/models/2918764-dotii-zhuo-mian-jiao-hu-ping#profileId-3421401) · [开发指南](开发指南.md)
+**下载**：[管理中心 v1.1.9](https://github.com/Cvencent/Dotii-Display/releases/tag/management-center-v1.1.9) · [固件 1.1.9](https://github.com/Cvencent/Dotii-Display/releases/tag/firmware-v1.1.9) · [CodexBridge](https://github.com/Cvencent/CodexBridge/releases) · [MakerWorld 模型与打印文件](https://makerworld.com.cn/zh/models/2918764-dotii-zhuo-mian-jiao-hu-ping#profileId-3421401) · [开发指南](开发指南.md)
 
-## 选择你的系统
+---
 
-| 系统 | 支持范围 | 下载内容 | 当前状态 |
-| --- | --- | --- | --- |
-| Windows | Windows 10/11 x64 | [CodexBridge Releases](https://github.com/Cvencent/CodexBridge/releases) | 正式版 |
-| macOS | Apple Silicon、macOS 13 及以上 | 当前预览包仍由 Dotii-Display Release 提供 | 迁移到 CodexBridge 打包前的过渡版本 |
+## 目录
 
-macOS 预览版目前不支持 Intel Mac。由于尚未经过苹果公证，首次打开时需要在“系统设置 > 隐私与安全性”中手动允许。发布包会包含运行所需组件，普通用户无需安装 Python、Node.js、Codex CLI 或 ESP-IDF。
+- [1. 系统组成](#1-系统组成)
+- [2. 准备工作](#2-准备工作)
+- [3. 快速上手](#3-快速上手)
+- [4. 设备端页面手册](#4-设备端页面手册)
+- [5. 按键与手势速查](#5-按键与手势速查)
+- [6. 管理中心页面手册](#6-管理中心页面手册)
+- [7. 设备无线配对](#7-设备无线配对)
+- [8. 更新与卸载](#8-更新与卸载)
+- [9. 常见问题](#9-常见问题)
+- [10. 数据与安全](#10-数据与安全)
+- [11. 开发与二次开发](#11-开发与二次开发)
+- [12. 社区贡献与扩展](#12-社区贡献与扩展)
 
-## 使用前准备
+---
+
+## 1. 系统组成
+
+Dotii 由三个彼此独立的部分组成，可以分开升级：
+
+| 部分 | 运行位置 | 职责 |
+| --- | --- | --- |
+| **Dotii 固件** | ESP32-S3 设备 | 小智语音会话、表情渲染、Codex 数据展示、本机设置页 |
+| **Dotii 管理中心** | 你的电脑（Windows / macOS） | 蓝牙配网、屏幕与睡眠设置、QQ 音乐登录、固件烧录、设备配对 |
+| **CodexBridge** | 你的电脑（Windows，常驻托盘） | 采集 Codex 额度 / 7 日 Token / 任务状态，按设备能力下发 |
+
+设备与电脑之间使用两套链路：
+
+- **蓝牙（BLE）**：仅用于首次配网，把 Wi-Fi 与设备令牌写入设备。密码不保存在电脑端。
+- **局域网**：设备发现用 UDP `8764`；控制与数据会话用 TCP `8765`。
+
+> 普通用户不需要安装 Python、Node.js、Codex CLI 或 ESP-IDF，发布包已包含运行所需组件。
+
+---
+
+## 2. 准备工作
 
 | 类别 | 项目 | 数量 | 购买/资料链接 |
 | --- | --- | ---: | --- |
-| 核心硬件 | 微雪 Waveshare ESP32-S3-Touch-AMOLED-1.75 开发板（含 1.75 英寸圆形屏，无外壳） | ×1 | [淘宝购买链接](https://e.tb.cn/h.8msjONXF0M0Vdg1?tk=X4anTUTbPSP) · [官方说明文档](https://docs.waveshare.net/ESP32-S3-Touch-AMOLED-1.75/) |
-| 供电 | 3.7 V、400 mAh 602030 锂电池，带 **MX1.25 2P 插头** | ×1 | [拼多多购买链接](https://mobile.yangkeduo.com/goods.html?ps=nMO2vEcuRY) |
-| 结构配件 | Type-C 弯公头转母头，用于底座内的接口引出 | ×1 | [拼多多购买链接](https://mobile.yangkeduo.com/goods.html?ps=m4Bzx5p2iF) |
-| 紧固件 | M2 螺丝，长度 4–7 mm 均可 | ×3 | — |
-| 3D 打印件 | 按 MakerWorld 模型打印的外壳、底座、按钮等结构件 | ×5 | [MakerWorld 模型、打印文件和装配资料](https://makerworld.com.cn/zh/models/2918764-dotii-zhuo-mian-jiao-hu-ping#profileId-3421401) |
+| 核心硬件 | 微雪 Waveshare ESP32-S3-Touch-AMOLED-1.75 开发板（1.75 英寸圆形屏，无外壳） | ×1 | [淘宝](https://e.tb.cn/h.8msjONXF0M0Vdg1?tk=X4anTUTbPSP) · [官方文档](https://docs.waveshare.net/ESP32-S3-Touch-AMOLED-1.75/) |
+| 供电 | 3.7 V、400 mAh 602030 锂电池，带 **MX1.25 2P 插头** | ×1 | [拼多多](https://mobile.yangkeduo.com/goods.html?ps=nMO2vEcuRY) |
+| 结构配件 | Type-C 弯公头转母头，用于底座内接口引出 | ×1 | [拼多多](https://mobile.yangkeduo.com/goods.html?ps=m4Bzx5p2iF) |
+| 紧固件 | M2 螺丝，长度 4–7 mm | ×3 | — |
+| 3D 打印件 | 外壳、底座、按钮等结构件 | ×5 | [MakerWorld](https://makerworld.com.cn/zh/models/2918764-dotii-zhuo-mian-jiao-hu-ping#profileId-3421401) |
 | 连接与网络 | 支持数据传输的 USB 线、2.4 GHz Wi-Fi | 各 ×1 | — |
 
-## Windows 快速上手
+> ⚠️ 设备**只支持 2.4 GHz Wi-Fi**。USB 线必须支持数据传输，纯充电线无法烧录。
 
-1. 从 [CodexBridge Releases](https://github.com/Cvencent/CodexBridge/releases) 下载并运行 `CodexBridge.exe`。它是常驻系统托盘的 Codex 桥接器，负责 Codex 采集与设备协议，默认管理接口为 `http://127.0.0.1:8788`。
-2. 从本仓库 Releases 下载 `Dotii-Setup-1.1.3.exe` 并安装到本机；也可以继续使用便携版。它与 CodexBridge 是两个独立程序，只负责设备管理。安装后可在系统托盘右键选择“关于 Dotii 管理中心”查看版本。
-3. 用 USB 线连接 Dotii，在管理中心“设置”中识别设备。首次使用时可通过“一键烧录”写入随包固件。
-4. 使用蓝牙配网，将 2.4 GHz Wi-Fi 同步到 Dotii，并写入与 CodexBridge 配对的设备令牌。
-5. 在管理中心“小智”中填写小智服务端地址与唤醒词，设备即可直接进行语音对话。
-6. 在 CodexBridge 托盘中按设备启用 `quota` 能力，Codex 额度与近 7 日 Token 会通过通用协议下发到设备。
-`CodexBridge.exe` 常驻托盘，负责 Codex 采集、统一协议、设备能力开关与已读同步；`DotiiManagementCenter.exe` 负责刷机、蓝牙配网、小智、表情与显示设置，关闭后不常驻。Windows 安装版默认安装在 `%LOCALAPPDATA%\Programs\Dotii Management Center`，并提供开始菜单、桌面快捷方式和卸载入口。
+---
 
-### 更新 Windows 管理中心
+## 3. 快速上手
 
-先从系统托盘彻底退出旧版 CodexBridge，安装新版；再单独更新 `DotiiManagementCenter.exe`。CodexBridge 的设备配对、能力与语音设置保存在 `%LOCALAPPDATA%\CodexBridge`；Dotii 的小智连接、显示、配网与烧录配置继续保存在 `%LOCALAPPDATA%\StateDisplay`。若新版本包含 Dotii 固件更新，请在管理中心重新执行“一键烧录”。
+### 3.1 安装 Dotii 管理中心（Windows）
 
-## macOS 快速上手
+1. 从 [Releases](https://github.com/Cvencent/Dotii-Display/releases/tag/management-center-v1.1.9) 下载 `Dotii-Setup-1.1.9.exe`。
+2. 双击安装。默认装在 `%LOCALAPPDATA%\Programs\Dotii Management Center`，并提供开始菜单、桌面快捷方式与卸载入口。
+3. 安装完成后从托盘或开始菜单打开。管理页地址为 `http://127.0.0.1:8787`，**只允许本机访问**。
 
-1. 从 [macOS Release](https://github.com/Cvencent/Dotii-Display/releases/tag/management-center-v1.1.3) 下载 DMG。当前版本仅支持 Apple Silicon Mac 和 macOS 13 及以上。
-2. 打开 DMG，将 `DotiiManagementCenter-1.1.3.app` 拖到“应用程序”。
-3. 从“应用程序”打开 Dotii 管理中心。如果系统阻止启动，请打开“系统设置 > 隐私与安全性”，在对应提示旁选择“仍要打开”，然后再次确认。
-4. 首次扫描 Dotii 时允许蓝牙权限；连接 Dotii 时按系统提示允许本地网络权限。
-5. 应用启动后会驻留在菜单栏。后续烧录、蓝牙配网及模块设置均在管理页面中完成。
+也可以使用 `DotiiManagementCenter-1.1.9-portable.zip` 便携版，解压即用。
 
-不需要也不建议全局关闭 macOS 的安全检查。受管理的公司或学校 Mac 可能禁止打开未经公证的应用。
+### 3.2 烧录固件
 
-### 可选：校验下载文件
+1. 用 USB 线连接 Dotii。
+2. 打开管理中心 → **设置** → **Dotii 固件**，点"重新扫描"选择串口。
+3. 点"烧录 Dotii"。程序只会向识别为 Dotii ESP32-S3 的设备开放烧录，并校验固件哈希。
 
-将 DMG 和 `.dmg.sha256` 文件放在同一目录，在终端进入该目录并执行：
+管理中心内置的固件与 Release 中的固件一致，因此**通常不需要手动下载固件包**。
+
+### 3.3 蓝牙配网
+
+1. 设备首次开机会自动进入配网热点模式（`LEO Radio`）；也可以**长按 A 键**进入设备**设置**页确认网络状态。
+2. 管理中心 → **设置** → **蓝牙配网**，点"扫描 Dotii"选择设备。
+3. 填入 2.4 GHz Wi-Fi 名称与密码，点"保存并连接"。设备重启后接入局域网。
+
+> Wi-Fi 密码只用于本次加密蓝牙配置，不会保存在电脑端。
+
+### 3.4 电脑端数据（Codex）
+
+1. 从 [CodexBridge Releases](https://github.com/Cvencent/CodexBridge/releases) 下载并运行 `CodexBridge.exe`，它常驻系统托盘。
+2. 在 CodexBridge 托盘中为该设备启用需要的**能力**（如 `quota`）。
+3. 设备会自动读取并显示。未启用的能力不会下发任何数据。
+
+### 3.5 小智语音
+
+1. 管理中心 → **小智**，确认 OTA 地址（默认 `https://api.tenclass.net/xiaozhi/ota/`）、唤醒词与音色，点"保存小智设置"。
+2. 设备联网后会向小智官方服务申请激活，**屏幕状态条会显示 6 位设备码**。
+3. 打开 [xiaozhi.me](https://xiaozhi.me/) 登录并输入设备码完成绑定。
+4. 绑定完成后设备自动连上语音服务，即可直接对话。
+
+---
+
+## 4. 设备端页面手册
+
+设备共 **5 个页面**：2 个数据页（Codex、小智，用 A 键循环切换）与 3 个功能页（控制中心、设置、电源）。
+
+### 4.1 页面总览
+
+| 页面 | 内容 | 如何进入 |
+| --- | --- | --- |
+| **Codex 页** | 额度、7 日 Token、任务计数 | 默认首页（第 1 个数据页） |
+| **小智页** | 全屏形象 + 语音状态 | 短按 A 键切到第 2 个数据页 |
+| **控制中心** | 亮度、音量、快捷跳转、电量 | 从屏幕**顶部向下滑** |
+| **设置** | 网络、地址、数据源、设备信息、重置配网 | **长按 A 键** |
+| **电源** | 重启、关机 | **长按 B 键** |
+
+页面底部有**页码圆点**，指示当前在第几个数据页。数据页在对应功能未启用时会自动隐藏。
+
+### 4.2 Codex 页
+
+Dotii 会根据 CodexBridge 下发的额度形态，自动在两种布局之间切换：
+
+**单额度形态**（只有周额度）
+- 外圈圆弧表示**周剩余百分比**
+- 中央大号数字为百分比
+- 顶部显示当前时间
+
+**双额度形态**（同时有 5 小时与周额度）
+- 上半环：**5H 剩余**百分比
+- 下半环：**周剩余**百分比
+- 中部显示两组额度的**重置时间**
+- 底部状态条显示**任务计数**：运行中 / 已完成未读 / 失败未读
+
+> 接口没有提供的数值显示为 `--`，不会自动推算。数据由 CodexBridge 提供，管理中心不参与转发。
+
+### 4.3 小智页
+
+这是一张**沉浸式全屏形象页**，角色铺满整个 466 px 圆形屏，没有标题栏。
+
+- **表情**：由小智服务端下发的 `emotion` 字段驱动；服务端未指定时，按会话状态（聆听 / 思考 / 说话）自动切换。
+- **状态条**：只在需要时出现（设备码、错误、会话中），平时隐藏，保持画面干净。
+- **聆听角标**：录音时左上角显示"聆听中"。
+- **形象轮换**：固件内置 4 个形象，在本页自动轮换。
+- **触摸**：轻点或长按屏幕会给出对应的触摸反馈表情。
+
+### 4.4 控制中心
+
+从屏幕**顶部向下滑**打开，向上滑返回。
+
+| 项目 | 说明 |
+| --- | --- |
+| **屏幕亮度** | 滑块调节，范围 10–100 |
+| **音量** | 滑块调节，范围 0–100，松手后生效 |
+| **快捷跳转** | 左侧按钮直达 Codex 页，右侧按钮直达小智页 |
+| **电量** | 底部显示电量百分比，充电时附带"充电中" |
+
+### 4.5 设置
+
+**长按 A 键**进入。
+
+| 项目 | 说明 |
+| --- | --- |
+| **立即刷新数据** | 主动拉取一次最新数据 |
+| **网络** | 当前 Wi-Fi 状态 |
+| **设备地址** | 设备在局域网中的 IP |
+| **Codex 数据源** | 当前 CodexBridge 连接状态 |
+| **设备** | 固件版本与 ESP-IDF 版本 |
+| **重置配网** | **长按 1.2 秒**确认。清除 Wi-Fi、电脑端绑定与蓝牙配对后重启 |
+
+> 更换路由器或更换电脑时，用"重置配网"，通常**不需要重新烧录固件**。
+
+### 4.6 电源
+
+**长按 B 键**进入，提供两个操作：
+
+- **重新启动**：重启设备
+- **关机**：断电关机
+
+两个操作都需要**按住 1.2 秒**确认，向右滑动可取消。
+
+### 4.7 熄屏与屏保
+
+设备无操作后会先熄屏，再按设置进入低功耗睡眠。屏幕默认策略：
+
+| 供电方式 | 熄屏 | 深度睡眠 |
+| --- | --- | --- |
+| 电池 | 60 秒 | 300 秒 |
+| USB 供电 | 60 秒 | 不进入 |
+
+USB 供电时**只熄屏、不休眠**，这样 Wi-Fi、蓝牙与 CodexBridge 会一直在线。
+熄屏后触摸屏幕或按按键即可唤醒，唤醒后重新联网需要几秒。
+
+---
+
+## 5. 按键与手势速查
+
+### 物理按键
+
+| 按键 | 硬件 | 短按 | 长按（≥800 ms） |
+| --- | --- | --- | --- |
+| **A 键** | GPIO0（BOOT）按键 | 切换到下一个数据页 | 打开**设置**页 |
+| **B 键** | PWR 电源按键（TCA9554 EXIO4） | 熄屏（或进入屏保） | 打开**电源**页 |
+
+### 触摸手势
+
+| 手势 | 位置 | 效果 |
+| --- | --- | --- |
+| 向下滑 | 屏幕顶部边缘 | 打开**控制中心** |
+| 向上滑 | 控制中心 | 返回上一页 |
+| 向上/向下滑 | 设置页列表 | 滚动列表 |
+| 向右滑 | 任意功能页 | 返回主页面 |
+| 轻点 / 长按 | 小智页 | 触发触摸反馈表情 |
+| 任意触摸 | 熄屏状态 | 唤醒屏幕 |
+
+---
+
+## 6. 管理中心页面手册
+
+管理页面有两个标签页：**小智** 与 **设置**。
+
+### 6.1 小智
+
+| 卡片 | 内容 |
+| --- | --- |
+| **小智连接** | 启用开关；OTA / 服务地址；唤醒词；音色；MCP 工具调用开关与接入点地址 |
+| **首次配对** | 设备上报的设备码，以及跳转 `xiaozhi.me` 的按钮（配对完成后自动隐藏） |
+| **QQ 音乐** | 扫码登录一次，登录信息写入设备；设备之后自行搜索与播放，按账号会员权限 |
+| **工作原理** | 对话、表情、形象、Codex 数据各自的来源说明 |
+
+默认值：OTA 地址 `https://api.tenclass.net/xiaozhi/ota/`，唤醒词"你好小智"，音色 `default`。
+修改后必须点**保存小智设置**才会下发到设备。
+
+### 6.2 设置
+
+设置页分为两组。
+
+**Dotii 管理中心**
+
+| 卡片 | 内容 |
+| --- | --- |
+| **应用设置** | 本次在线时长、管理页地址（`http://127.0.0.1:8787`） |
+
+**Dotii**
+
+| 卡片 | 内容 |
+| --- | --- |
+| **屏幕与睡眠** | 显示角度；分别为**使用电池时**与**充电中**设置"无操作后熄屏"与"无操作后进入低功耗睡眠"，可选 10 秒～30 分钟或"永不" |
+| **蓝牙配网** | 扫描设备、填写 Wi-Fi 名称与密码、检查并修复蓝牙组件 |
+| **Dotii 固件** | 固件版本、大小、应用校验哈希；选择串口；烧录进度；重新扫描 |
+| **设备配对信息** | 设备地址与配对密钥（可复制），仅在连接新设备时使用 |
+
+屏幕与睡眠的默认值：电池 60 秒熄屏 / 300 秒睡眠；充电 60 秒熄屏、不睡眠。
+
+---
+
+## 7. 设备无线配对
+
+固件 1.1.9 起，设备支持**无需蓝牙令牌**的无线配对（CBDP `PAIRING` 0x1F）。
+
+### 首次配对
+
+1. 设备联网后持续广播 presence，管理中心设备列表会出现"**待批准**"。
+2. 在管理中心点"**批准**"。Bridge 会主动连接设备的 `8765` 端口。
+3. 设备在握手时请求配对，Bridge 下发令牌，设备保存到 NVS 后完成鉴权。
+
+批准之前，设备**不会**收到配对请求——它会保持广播，这是正常状态，不是故障。
+
+### 已有令牌的设备
+
+设备在 HELLO 中不携带配对请求，直接走标准 HMAC 鉴权，行为与旧固件完全一致。
+
+### 撤销与重新配对
+
+在管理中心撤销设备后，旧令牌立即失效。设备收到 `UNAUTHORIZED` 或 `TOKEN_ROTATED` 时会**自动清除本地令牌**，下一次握手重新进入配对流程；重新批准即可恢复。
+
+令牌安全约束：
+
+- 令牌只保存在设备 NVS，不写入日志、遥测或任何调试输出
+- 令牌长度 16–64 字节，按 UTF-8 原样使用
+- 明文局域网上首次下发依赖**本地管理员显式批准**
+
+---
+
+## 8. 更新与卸载
+
+### 更新管理中心（Windows）
+
+1. 从托盘彻底退出旧版管理中心与 CodexBridge。
+2. 安装新版管理中心；如包含固件更新，再执行一次"一键烧录"。
+
+### 更新固件
+
+在管理中心"Dotii 固件"卡片中重新烧录即可。**常规烧录不会擦除 NVS**，Wi-Fi 与令牌会保留。
+
+### 手动刷写（可选）
+
+Release 中的 [固件包](https://github.com/Cvencent/Dotii-Display/releases/tag/firmware-v1.1.9) 内含 `刷机说明.txt` 与 `SHA256SUMS.txt`。
+
+一键整包（全新安装，**会重写 NVS 与 storage**）：
 
 ```bash
-shasum -a 256 -c DotiiManagementCenter-macOS-arm64-1.1.3.dmg.sha256
+esptool --chip esp32s3 --port COM3 --baud 460800 write-flash 0x0 DotiiFirmware-1.1.9-full.bin
 ```
 
-结果应显示 `OK`；如果校验失败，请不要打开该 DMG。
+仅升级应用、保留配置：
 
-### 更新与卸载
+```bash
+esptool --chip esp32s3 --port COM3 --baud 460800 write-flash 0x10000 state_display.bin
+```
 
-更新前先从菜单栏退出 Dotii 管理中心，再用新版 App 替换“应用程序”中的旧版。运行配置保存在 `~/Library/Application Support/Dotii`，替换或删除 App 不会自动清除配置。
+### 卸载
 
-卸载时先退出应用，再将 App 移到废纸篓。如果不再需要原有配置，可以手动删除上述运行目录；其中可能包含 Wi-Fi 密码、小智服务地址和设备连接信息，请勿上传或分享。
+先退出应用，再运行卸载程序（或删除便携目录）。运行配置保存在：
 
-## 主要功能
+- 管理中心：`%LOCALAPPDATA%\StateDisplay`
+- CodexBridge：`%LOCALAPPDATA%\CodexBridge`
 
-- **小智 AI**：设备固件内原生运行小智语音助手，直接与配置的小智服务端建立 WebSocket 会话，不依赖电脑端中转。
-- **小智表情**：设备只保留一个与小智直连的全屏表情页面，随聆听、思考、回答、音乐播放和触摸自动切换表情，并自动轮换 4 个固件内置形象。
-- **Codex 状态**：由 CodexBridge 通用协议采集并广播额度、近 7 日 Token、额度重置、任务状态、计划进度和用户可见消息；多台设备共享已读状态。
-- **设备管理**：提供蓝牙配网、重置配网、显示设置、休眠设置、登录自启动和受保护的一键烧录。
+删除程序**不会**自动清除配置目录；其中可能包含 Wi-Fi 信息与设备连接信息，请勿分享。
 
-小智默认启用，首次连接时会通过小智官方 OTA 服务获取设备配对码；请在 `xiaozhi.me` 输入设备码完成绑定。Codex 能力仍按设备能力开关启用，未启用前不会读取或下发 Codex 数据。
+---
 
-## 形象与表情来源
+## 9. 常见问题
 
-Dotii 的原生表情引擎参考并移植自开源项目 [aora-bot](https://github.com/sam70361/aora-bot)（其 `mood-mates` 角色资料），内置 Dotii、云宝、亮亮和球球 4 个形象。历史版本中的独立形象切换页面已经移除，小智对话、音乐与 Codex 状态共用同一个页面，形象由固件在小智页自动轮换。
-
-本项目为个人开源固件项目，仅用于非商业用途。使用或二次分发时，请一并遵守 aora-bot 仓库的授权与署名要求；如 aora-bot 后续更新许可，请以原仓库为准。
-
-## 与 CodexBridge 的分工
-
-Dotii 固件内置一套通用设备协议客户端，任何实现同一协议的设备都可以接入 CodexBridge。CodexBridge 是独立的数据主机，负责采集 Codex 额度、近 7 日 Token、额度重置与任务状态，并按设备订阅的能力（如 `quota`）下发 `codex_status` 消息。
-
-- 小智对话、显示与配网由 Dotii 管理中心负责，写入设备本地配置；表情由固件本地状态机自动驱动。
-- Codex 数据不再由管理中心采集，也不会经过管理中心转发，而是由设备直接从 CodexBridge 读取。
-- 该协议保持通用，后续的 AI Passport 等设备同样可以按能力接入。
-- 传输层固定为 UDP `8764` 设备发现与 TCP `8765` 会话，消息为每行一条 UTF-8 JSON，由 CodexBridge 主动连接设备。
-
-## 常见问题
-
-大多数软件问题可以借助 Codex 等 AI 工具排查和解决；如果需要增加新功能，也可以借助 AI 完成开发。
+大多数软件问题可以借助 Codex 等 AI 工具排查；需要新功能也可以借助 AI 开发。
 
 <details>
 <summary><strong>管理页面没有自动打开</strong></summary>
@@ -102,7 +331,14 @@ Dotii 固件内置一套通用设备协议客户端，任何实现同一协议�
 </details>
 
 <details>
-<summary><strong>Codex 页面没有数据</strong></summary>
+<summary><strong>设备一直显示"待批准"</strong></summary>
+
+这是正常状态：设备已联网并广播 presence，只是还没有在管理中心批准。打开管理中心完成批准即可，批准后 Bridge 会主动连接设备。
+
+</details>
+
+<details>
+<summary><strong>Codex 页没有数据</strong></summary>
 
 先确认 CodexBridge 正在运行，并在托盘中为该设备启用所需能力。接口没有提供的数值会显示为 `--`。
 
@@ -111,21 +347,21 @@ Dotii 固件内置一套通用设备协议客户端，任何实现同一协议�
 <details>
 <summary><strong>设备会自动熄屏或休眠</strong></summary>
 
-这是固件的电源策略，可以在管理中心的“屏幕与睡眠”里分别设置“用电池”和“充电中”两套时间。默认值是：电池供电 60 秒熄屏、300 秒进入深度休眠；USB 供电只熄屏、不进入深度休眠，这样 Wi-Fi、蓝牙和 CodexBridge 会一直保持在线。进入深度休眠后触摸屏幕或按按键即可唤醒，唤醒后重新联网需要几秒。
+这是固件的电源策略，可以在管理中心的"屏幕与睡眠"里分别设置电池与充电两套时间。USB 供电只熄屏、不进入深度休眠，Wi-Fi 与 CodexBridge 会保持在线。进入深度休眠后触摸屏幕或按按键即可唤醒。
 
 </details>
 
 <details>
 <summary><strong>小智无法唤醒或没有回复</strong></summary>
 
-先在管理页“小智”中确认服务端地址、唤醒词与音色，并确保设备已连接 2.4 GHz Wi-Fi。表情由设备固件本地渲染，即使语音服务暂时不可用，触摸与状态表情依然会响应。
+先在"小智"页确认服务端地址、唤醒词与音色，并确保设备已连接 2.4 GHz Wi-Fi。表情由固件本地渲染，即使语音服务暂时不可用，触摸与状态表情依然会响应。
 
 </details>
 
 <details>
-<summary><strong>Codex 额度没有出现在设备上</strong></summary>
+<summary><strong>小智一直显示设备码 / 提示待激活</strong></summary>
 
-Codex 数据由 CodexBridge 提供。请在 CodexBridge 托盘中为这台 Dotii 启用 `quota` 能力，并确认设备已用配对密钥连接。接口没有提供的数值会显示为 `--`，不会自动推算。
+设备码需要在 [xiaozhi.me](https://xiaozhi.me/) 登录后手动绑定。绑定完成后设备会自动连接，状态条收起。若服务地址被改成了非 OTA 地址，请恢复默认 `https://api.tenclass.net/xiaozhi/ota/`。
 
 </details>
 
@@ -134,42 +370,46 @@ Codex 数据由 CodexBridge 提供。请在 CodexBridge 托盘中为这台 Dotii
 
 更换支持数据传输的 USB 线后重新扫描。若设备未进入下载模式，可按开发板说明使用 BOOT 按键后重试。程序只会向识别为 Dotii ESP32-S3 的设备开放烧录。
 
-macOS 用户还应在“系统设置 > 隐私与安全性 > 蓝牙”中确认已允许 Dotii 管理中心使用蓝牙。
+macOS 用户还应在"系统设置 > 隐私与安全性 > 蓝牙"中确认已允许管理中心使用蓝牙。
 
 </details>
 
 <details>
 <summary><strong>蓝牙配网提示配对失败</strong></summary>
 
-1.1.3 起 Windows 会先按“仅加密”等级与 Dotii 建立绑定，再写入加密配置特征。若系统里残留旧的 Dotii 配对，请在“设置 > 蓝牙”中删除后重新扫描再试；macOS 由系统在访问加密特征时自动配对，无需手动操作。
+Windows 会先按"仅加密"等级与设备建立绑定，再写入加密配置。若系统里残留旧的配对，请在"设置 > 蓝牙"中删除后重新扫描再试；macOS 由系统自动配对，无需手动操作。
 
 </details>
 
 <details>
 <summary><strong>更换路由器或电脑后无法连接</strong></summary>
 
-请长按 Dotii 右侧按钮进入“设置”，再长按“重置配网”1.2 秒。设备会清除 Wi-Fi、管理中心绑定和蓝牙配对后重启；随后在新电脑的管理中心重新扫描并配网，通常无需重新烧录固件。
-
-若系统仍保留旧配对，Windows 1.1.1 会尝试自动恢复；macOS 请在“系统设置 > 蓝牙”中忽略 Dotii 后重新扫描。
+长按 A 键进入**设置**，再在"重置配网"上长按 1.2 秒。设备会清除 Wi-Fi、管理中心绑定和蓝牙配对后重启；随后在新电脑上重新扫描并配网，通常无需重新烧录固件。
 
 </details>
 
 <details>
 <summary><strong>如何查找日志</strong></summary>
 
-Windows 的 CodexBridge 日志位于 `%LOCALAPPDATA%\CodexBridge`；Dotii 管理页日志位于 `%LOCALAPPDATA%\StateDisplay\bridge.log`。macOS 过渡版本日志仍位于 `~/Library/Application Support/Dotii/bridge.log`。分享日志前，请检查并移除不希望公开的本机信息。
+Windows：CodexBridge 日志在 `%LOCALAPPDATA%\CodexBridge`，管理中心日志在 `%LOCALAPPDATA%\StateDisplay\bridge.log`。分享日志前请检查并移除不希望公开的本机信息。
 
 </details>
 
-## 数据与安全
+---
 
-- 管理网页和管理 API 只允许本机访问；Dotii 读取数据时需要设备访问令牌。
-- Wi-Fi 密码、小智服务地址、设备令牌和运行配置保存在本机用户目录，不应上传到公开仓库。
+## 10. 数据与安全
+
+- 管理网页与管理 API **只允许本机访问**；设备读取数据需要访问令牌。
+- Wi-Fi 密码、小智服务地址、设备令牌与运行配置保存在本机用户目录，**不应上传到公开仓库**。
+- 蓝牙配网时 Wi-Fi 密码只用于本次加密配置，不保存在电脑端。
 - Codex 额度与用量由 CodexBridge 通过通用协议下发，设备只按自身订阅的能力读取，不接触其他账号数据。
-- 常规一键烧录不会擦除 NVS。请勿对未知设备、串口或固件执行烧录。
-- Windows 首次允许局域网访问时可能显示防火墙窗口。请允许 CodexBridge 与管理后台访问专用网络，并按实际使用的网络类型授权。
+- 常规一键烧录不会擦除 NVS；整包镜像会重写 NVS 与 storage。
+- 请勿对未知设备、串口或固件执行烧录。
+- Windows 首次允许局域网访问时可能显示防火墙窗口，请允许访问**专用网络**。
 
-## 开发与二次开发
+---
+
+## 11. 开发与二次开发
 
 普通用户不需要准备开发环境。准备修改源码时，请先选择对应文档：
 
@@ -177,11 +417,27 @@ Windows 的 CodexBridge 日志位于 `%LOCALAPPDATA%\CodexBridge`；Dotii 管理
 - [Windows 开发指南](docs/development/windows.md)：Windows 环境、托盘、蓝牙、串口、便携包与发布流程。
 - [macOS 开发指南](docs/development/macos.md)：macOS 菜单栏宿主、CoreBluetooth、串口、签名、公证与 DMG 构建。
 
-平台共用固件、后台业务、管理网页和设备协议。平台差异应保留在对应适配器、宿主与打包目录中，不应复制共用业务代码。
+平台共用固件、后台业务、管理网页与设备协议。平台差异应保留在对应适配器、宿主与打包目录中，不应复制共用业务代码。
 
-固件的内部 RAM 预算很紧：Wi-Fi、BLE 和 AMOLED 面板共用内部 DMA 内存。`sdkconfig.defaults` 因此使用低内存 Wi-Fi 缓冲剖面、让 LVGL 绘制缓冲与 mbedTLS 走 PSRAM，并在 BSP 中静态预留 12 行 DMA 条带。修改 Wi-Fi、蓝牙、LVGL 或 TLS 配置时请保留这些约束，否则设备可能在显示初始化阶段重启。
+### 测试
 
-## 社区贡献与扩展
+```bash
+# 管理中心（Python）
+pip install pytest requests playwright
+python -m pytest bridge/tests -q
+
+# 固件协议测试（ESP-IDF Unity，需要真机）
+cd test_apps/codex_bridge_protocol
+idf.py build flash monitor
+```
+
+### 内存约束（固件）
+
+固件的内部 RAM 预算很紧：Wi-Fi、BLE 与 AMOLED 面板共用内部 DMA 内存。`sdkconfig.defaults` 使用低内存 Wi-Fi 缓冲剖面、让 LVGL 绘制缓冲与 mbedTLS 走 PSRAM，并在 BSP 中静态预留 12 行 DMA 条带。修改 Wi-Fi、蓝牙、LVGL 或 TLS 配置时请保留这些约束，否则设备可能在显示初始化阶段重启。
+
+---
+
+## 12. 社区贡献与扩展
 
 感谢社区开发者为 Dotii 提供功能扩展与改进。本节列出的实现由贡献者提供；是否已合并及验证范围会单独说明，未合并的功能不属于本项目当前发布版本。
 
@@ -195,4 +451,10 @@ Windows 的 CodexBridge 日志位于 `%LOCALAPPDATA%\CodexBridge`；Dotii 管理
 
 **合并与验证状态**：该贡献尚未合并到本项目。维护者目前缺少独立验证条件，暂不合并，仅在此展示并提供参考链接。贡献者在 PR 中报告已完成 macOS 源码测试、固件构建和真机验证，同时明确说明 Windows 尚未实测。
 
-相关链接：[PR #1：新增 Z.ai 用量与 Claude Code 工作状态模块](https://github.com/ZeroOne000011/Dotii-Display/pull/1) · [贡献者仓库](https://github.com/wfzylcl878-creator/Dotii-Display) · [PR 对应实现版本](https://github.com/wfzylcl878-creator/Dotii-Display/tree/529d962aefd3747fc671c16152a1a4df79ec12cb)
+相关链接：[PR #1](https://github.com/ZeroOne000011/Dotii-Display/pull/1) · [贡献者仓库](https://github.com/wfzylcl878-creator/Dotii-Display) · [对应实现版本](https://github.com/wfzylcl878-creator/Dotii-Display/tree/529d962aefd3747fc671c16152a1a4df79ec12cb)
+
+---
+
+## 授权
+
+本项目为个人开源固件项目，仅供非商业用途。表情引擎参考并移植自 [aora-bot](https://github.com/sam70361/aora-bot)（`mood-mates` 角色资料）。使用或二次分发时，请一并遵守其授权与署名要求；如原仓库更新许可，请以原仓库为准。
