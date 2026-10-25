@@ -4,7 +4,7 @@ Dotii 是一套由 ESP32-S3 圆形 AMOLED 桌面屏、Dotii 管理中心与 Code
 
 ![Dotii 桌面交互屏产品渲染图](assets/dotii-product-render.png)
 
-**下载**：[管理中心 v1.1.9](https://github.com/Cvencent/Dotii-Display/releases/tag/management-center-v1.1.9) · [固件 1.1.9](https://github.com/Cvencent/Dotii-Display/releases/tag/firmware-v1.1.9) · [CodexBridge](https://github.com/Cvencent/CodexBridge/releases) · [MakerWorld 模型与打印文件](https://makerworld.com.cn/zh/models/2918764-dotii-zhuo-mian-jiao-hu-ping#profileId-3421401) · [开发指南](开发指南.md)
+**下载**：[管理中心 v1.1.9](https://github.com/Cvencent/Dotii-Display/releases/tag/management-center-v1.2.0) · [固件 1.1.9](https://github.com/Cvencent/Dotii-Display/releases/tag/firmware-v1.2.0) · [CodexBridge](https://github.com/Cvencent/CodexBridge/releases) · [MakerWorld 模型与打印文件](https://makerworld.com.cn/zh/models/2918764-dotii-zhuo-mian-jiao-hu-ping#profileId-3421401) · [开发指南](开发指南.md)
 
 ---
 
@@ -63,11 +63,11 @@ Dotii 由三个彼此独立的部分组成，可以分开升级：
 
 ### 3.1 安装 Dotii 管理中心（Windows）
 
-1. 从 [Releases](https://github.com/Cvencent/Dotii-Display/releases/tag/management-center-v1.1.9) 下载 `Dotii-Setup-1.1.9.exe`。
+1. 从 [Releases](https://github.com/Cvencent/Dotii-Display/releases/tag/management-center-v1.2.0) 下载 `Dotii-Setup-1.2.0.exe`。
 2. 双击安装。默认装在 `%LOCALAPPDATA%\Programs\Dotii Management Center`，并提供开始菜单、桌面快捷方式与卸载入口。
 3. 安装完成后从托盘或开始菜单打开。管理页地址为 `http://127.0.0.1:8787`，**只允许本机访问**。
 
-也可以使用 `DotiiManagementCenter-1.1.9-portable.zip` 便携版，解压即用。
+也可以使用 `DotiiManagementCenter-1.2.0-portable.zip` 便携版，解压即用。
 
 ### 3.2 烧录固件
 
@@ -93,7 +93,7 @@ Dotii 由三个彼此独立的部分组成，可以分开升级：
 
 ### 3.5 小智语音
 
-1. 管理中心 → **小智**，确认 OTA 地址（默认 `https://api.tenclass.net/xiaozhi/ota/`）、唤醒词与音色，点"保存小智设置"。
+1. 管理中心 → **小智**，确认 OTA 地址（默认 `https://api.tenclass.net/xiaozhi/ota/`）、唤醒词与音色，点"保存小智设置"。唤醒词最多填 **3 个**，直接输入中文即可，保存时会自动转成设备需要的拼音并下发。
 2. 设备联网后会向小智官方服务申请激活，**屏幕状态条会显示 6 位设备码**。
 3. 打开 [xiaozhi.me](https://xiaozhi.me/) 登录并输入设备码完成绑定。
 4. 绑定完成后设备自动连上语音服务，即可直接对话。
@@ -222,12 +222,12 @@ USB 供电时**只熄屏、不休眠**，这样 Wi-Fi、蓝牙与 CodexBridge �
 
 | 卡片 | 内容 |
 | --- | --- |
-| **小智连接** | 启用开关；OTA / 服务地址；唤醒词；音色；MCP 工具调用开关与接入点地址 |
+| **小智连接** | 启用开关；OTA / 服务地址；最多 3 个自定义唤醒词；音色；MCP 工具调用开关与接入点地址 |
 | **首次配对** | 设备上报的设备码，以及跳转 `xiaozhi.me` 的按钮（配对完成后自动隐藏） |
 | **QQ 音乐** | 扫码登录一次，登录信息写入设备；设备之后自行搜索与播放，按账号会员权限 |
 | **工作原理** | 对话、表情、形象、Codex 数据各自的来源说明 |
 
-默认值：OTA 地址 `https://api.tenclass.net/xiaozhi/ota/`，唤醒词"你好小智"，音色 `default`。
+默认值：OTA 地址 `https://api.tenclass.net/xiaozhi/ota/`，唤醒词"你好小智"（可再加 2 个，例如"小土豆"、"开灯"），音色 `default`。\n\n唤醒词规则：中文、字母、数字，单个最多 24 个字符，最多 3 个；重复词会自动去重。留空的输入框会被忽略。修改保存后设备会自动重新加载唤醒模型，无需重启。
 修改后必须点**保存小智设置**才会下发到设备。
 
 ### 6.2 设置
@@ -294,12 +294,12 @@ USB 供电时**只熄屏、不休眠**，这样 Wi-Fi、蓝牙与 CodexBridge �
 
 ### 手动刷写（可选）
 
-Release 中的 [固件包](https://github.com/Cvencent/Dotii-Display/releases/tag/firmware-v1.1.9) 内含 `刷机说明.txt` 与 `SHA256SUMS.txt`。
+Release 中的 [固件包](https://github.com/Cvencent/Dotii-Display/releases/tag/firmware-v1.2.0) 内含 `刷机说明.txt` 与 `SHA256SUMS.txt`。
 
 一键整包（全新安装，**会重写 NVS 与 storage**）：
 
 ```bash
-esptool --chip esp32s3 --port COM3 --baud 460800 write-flash 0x0 DotiiFirmware-1.1.9-full.bin
+esptool --chip esp32s3 --port COM3 --baud 460800 write-flash 0x0 DotiiFirmware-1.2.0-full.bin
 ```
 
 仅升级应用、保留配置：
@@ -354,7 +354,7 @@ esptool --chip esp32s3 --port COM3 --baud 460800 write-flash 0x10000 state_displ
 <details>
 <summary><strong>小智无法唤醒或没有回复</strong></summary>
 
-先在"小智"页确认服务端地址、唤醒词与音色，并确保设备已连接 2.4 GHz Wi-Fi。表情由固件本地渲染，即使语音服务暂时不可用，触摸与状态表情依然会响应。
+先在"小智"页确认服务端地址、唤醒词与音色，并确保设备已连接 2.4 GHz Wi-Fi。唤醒词建议 2–6 个汉字、发音清晰；改完保存后等设备完成模型重载（约 2–3 秒）再试。表情由固件本地渲染，即使语音服务暂时不可用，触摸与状态表情依然会响应。
 
 </details>
 

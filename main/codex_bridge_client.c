@@ -261,7 +261,11 @@ static uint16_t s_max_chunk_bytes = 384;
 static uint16_t s_heartbeat_seconds = CBDP_DEFAULT_HEARTBEAT_SECONDS;
 static uint32_t s_retransmit_timeout_ms = CBDP_DEFAULT_RETRANSMIT_MS;
 static uint8_t s_max_retries = CBDP_DEFAULT_MAX_RETRIES;
-static cbdp_pending_frame_t s_pending[CBDP_PENDING_MAX];
+/* Retransmit window. Each slot carries a full CBDP_TX_FRAME_MAX frame, so the
+   array is ~4.2 KB. It is only touched from the bridge tasks (never an ISR),
+   and the panel DMA strips and mbedTLS both compete for the same internal RAM,
+   so it is allocated from PSRAM at start instead of living in .bss. */
+static cbdp_pending_frame_t *s_pending;
 static bool s_snapshot_seen;
 static bool s_delta_seen;
 static bool s_seq0_warned;
@@ -602,7 +606,7 @@ static uint32_t next_tx_seq_locked(void)
 
 static void clear_pending_locked(void)
 {
-    memset(s_pending, 0, sizeof(s_pending));
+    if (s_pending != NULL) memset(s_pending, 0, sizeof(cbdp_pending_frame_t) * CBDP_PENDING_MAX);
 }
 
 static void acknowledge_pending_locked(uint32_t ack_seq)
@@ -2229,6 +2233,14 @@ esp_err_t codex_bridge_client_start(
 )
 {
     if (s_running) return ESP_OK;
+    if (s_pending == NULL) {
+        s_pending = heap_caps_calloc(CBDP_PENDING_MAX, sizeof(cbdp_pending_frame_t),
+                                     MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (s_pending == NULL) {
+            ESP_LOGE(TAG, "CBDP retransmit window allocation failed");
+            return ESP_ERR_NO_MEM;
+        }
+    }
     /* A device with no token must still start: it listens on 8765, keeps
        broadcasting UDP presence so the admin page can show it as pending, and
        requests pairing in its HELLO. Refusing to start here made the device

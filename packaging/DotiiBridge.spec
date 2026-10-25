@@ -28,6 +28,7 @@ datas = [
     (str(firmware_manifest), "firmware"),
     (str(ROOT / "CMakeLists.txt"), "."),
     *collect_data_files("esptool"),
+    *collect_data_files("pypinyin"),
 ]
 for relative_name in firmware_files.values():
     source = (firmware_root / str(relative_name)).resolve()
@@ -40,6 +41,7 @@ for relative_name in firmware_files.values():
     destination = Path("firmware") / relative.parent
     datas.append((str(source), str(destination)))
 hiddenimports = [
+    *collect_submodules("pypinyin"),
     *collect_submodules("bleak"),
     *collect_submodules("esptool"),
 ]

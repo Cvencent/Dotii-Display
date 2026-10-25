@@ -41,7 +41,7 @@ class ModuleOnDemandTests(unittest.TestCase):
         self.assertEqual(info["LSMinimumSystemVersion"], "13.0")
         self.assertIn("Dotii", info["NSBluetoothAlwaysUsageDescription"])
         self.assertIn("Dotii", info["NSLocalNetworkUsageDescription"])
-        self.assertEqual(info["CFBundleShortVersionString"], "1.1.9")
+        self.assertEqual(info["CFBundleShortVersionString"], "1.2.0")
         self.assertEqual(info["CFBundleIconName"], "AppIcon")
 
     def test_macos_brand_icons_are_complete_and_used_by_native_host(self):
@@ -106,6 +106,8 @@ class ModuleOnDemandTests(unittest.TestCase):
         defaults = validate_xiaozhi_config(None)
         self.assertTrue(defaults["enabled"])
         self.assertEqual(defaults["server_url"], "https://api.tenclass.net/xiaozhi/ota/")
+        self.assertEqual(defaults["wake_word"], "ni hao xiao zhi")
+        self.assertEqual(defaults["wake_words"], ["你好小智"])
         self.assertEqual(validate_xiaozhi_config({"server_url": "https://example.com"})["server_url"],
                          "https://example.com")
         with self.assertRaises(ValueError):
@@ -144,9 +146,25 @@ class ModuleOnDemandTests(unittest.TestCase):
         })
         self.assertEqual(saved["server_url"], "wss://example.test/xiaozhi")
         self.assertTrue(saved["enabled"])
-        self.assertEqual(saved["wake_word"], "嗨小智")
+        self.assertEqual(saved["wake_word"], "hai xiao zhi")
+        self.assertEqual(saved["wake_words"], ["嗨小智"])
         self.assertEqual(saved["voice"], "sweet")
         self.assertFalse(saved["mcp_enabled"])
+
+    def test_xiaozhi_accepts_three_chinese_wake_words_and_converts_to_pinyin(self):
+        saved = validate_xiaozhi_config({
+            "wake_words": ["你好小智", "小土豆", "开灯"],
+        })
+        self.assertEqual(saved["wake_words"], ["你好小智", "小土豆", "开灯"])
+        self.assertEqual(saved["wake_word"], "ni hao xiao zhi;xiao tu dou;kai deng")
+
+    def test_xiaozhi_rejects_more_than_three_wake_words(self):
+        with self.assertRaises(ValueError):
+            validate_xiaozhi_config({"wake_words": ["一", "二", "三", "四"]})
+
+    def test_xiaozhi_wake_word_input_rejects_punctuation(self):
+        with self.assertRaises(ValueError):
+            validate_xiaozhi_config({"wake_words": ["你好，小智"]})
 
     def test_removed_pages_are_deleted_from_the_backend(self):
         backend = (BRIDGE / "codex_bridge.py").read_text(encoding="utf-8")
@@ -219,6 +237,8 @@ class ModuleOnDemandTests(unittest.TestCase):
         script = (BRIDGE / "web" / "app.js").read_text(encoding="utf-8")
         self.assertIn('id="xiaozhi-form"', html)
         self.assertIn('id="xiaozhi-server-url"', html)
+        self.assertIn('id="xiaozhi-wake-word-1"', html)
+        self.assertIn('id="xiaozhi-wake-word-3"', html)
         self.assertIn("saveXiaozhi", script)
         self.assertIn("/api/v1/admin/xiaozhi", script)
         self.assertNotIn('data-panel="dotii"', html)

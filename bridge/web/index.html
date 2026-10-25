@@ -62,11 +62,14 @@
             </div>
             <div class="settings-grid xiaozhi-fields">
               <label><span>OTA / 服务地址</span><input id="xiaozhi-server-url" maxlength="192" autocomplete="off" placeholder="https://api.tenclass.net/xiaozhi/ota/"></label>
-              <label><span>唤醒词</span><input id="xiaozhi-wake-word" maxlength="32" autocomplete="off" placeholder="你好小智"></label>
+              <label><span>唤醒词 1</span><input id="xiaozhi-wake-word-1" maxlength="24" autocomplete="off" placeholder="例如：你好小智"></label>
+              <label><span>唤醒词 2</span><input id="xiaozhi-wake-word-2" maxlength="24" autocomplete="off" placeholder="例如：小土豆（可留空）"></label>
+              <label><span>唤醒词 3</span><input id="xiaozhi-wake-word-3" maxlength="24" autocomplete="off" placeholder="例如：开灯（可留空）"></label>
               <label><span>音色</span><input id="xiaozhi-voice" maxlength="32" autocomplete="off" placeholder="default"></label>
               <label class="check-row"><input id="xiaozhi-mcp-enabled" type="checkbox"><span>启用 MCP 工具调用</span></label>
               <label class="field"><span>MCP 接入点地址</span><input id="xiaozhi-mcp-url" type="text" placeholder="wss://api.xiaozhi.me/mcp/?token=..." autocomplete="off"></label>
             </div>
+            <p class="network-note"><strong>自定义唤醒词</strong><span>最多 3 个，输入中文即可；保存时自动转成设备需要的拼音并在设备上重新加载。留空的输入框会被忽略。</span></p>
             <p class="network-note"><strong>保持连接稳定</strong><span>设备内原生解析小智服务端下发的表情指令，无需电脑端中转。</span></p>
             <div class="form-actions">
               <button class="primary-button" type="submit">保存小智设置</button>

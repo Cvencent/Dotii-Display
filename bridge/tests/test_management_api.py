@@ -225,11 +225,20 @@ class ManagementApiTests(unittest.TestCase):
         self.assertTrue(payload["xiaozhi_config"]["enabled"])
 
         status, payload = self.json_body(
-            "POST", "/api/v1/admin/xiaozhi", payload={"wake_word": "你好小智"}
+            "POST",
+            "/api/v1/admin/xiaozhi",
+            payload={"wake_words": ["你好小智", "小土豆", "开灯"]},
         )
         self.assertEqual(status, 200, payload)
         self.assertEqual(
             payload["xiaozhi_config"]["server_url"], "wss://api.example.com/xiaozhi/v1/"
+        )
+        self.assertEqual(
+            payload["xiaozhi_config"]["wake_word"],
+            "ni hao xiao zhi;xiao tu dou;kai deng",
+        )
+        self.assertEqual(
+            payload["xiaozhi_config"]["wake_words"], ["你好小智", "小土豆", "开灯"]
         )
 
     def test_display_config_round_trips_and_validates(self):

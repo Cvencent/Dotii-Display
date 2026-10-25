@@ -180,6 +180,7 @@ static void fill_circle(canvas_t *cv, float cx, float cy, float r, rgb_t c, floa
     const int32_t y0 = (int32_t)floorf(cy - r - 1.0f);
     const int32_t y1 = (int32_t)ceilf(cy + r + 1.0f);
     const float r2 = r * r;
+    const float inv_2r = 1.0f / (2.0f * r);
     for (int32_t py = y0; py <= y1; ++py) {
         const float fy = (float)py + 0.5f - cy;
         for (int32_t px = x0; px <= x1; ++px) {
@@ -189,7 +190,7 @@ static void fill_circle(canvas_t *cv, float cx, float cy, float r, rgb_t c, floa
             /* (r^2-d^2)/(2r) == (r-d)*(r+d)/(2r) ~= (r-d), i.e. an exactly
                one-pixel-wide analytic coverage ramp. Dividing by 4r instead
                would stretch it over two pixels and read as a soft edge. */
-            const float cov = 0.5f + (r2 - d2) / (2.0f * r);
+            const float cov = 0.5f + (r2 - d2) * inv_2r;
             blend_px(cv, px, py, c, alpha * (cov > 1.0f ? 1.0f : (cov < 0.0f ? 0.0f : cov)));
         }
     }
@@ -206,13 +207,15 @@ static void fill_ellipse_rot(canvas_t *cv, float cx, float cy, float rx, float r
     const int32_t y0 = (int32_t)floorf(cy - ext);
     const int32_t y1 = (int32_t)ceilf(cy + ext);
     const float minr = minf2(rx, ry);
+    const float inv_rx = 1.0f / rx, inv_ry = 1.0f / ry;
     for (int32_t py = y0; py <= y1; ++py) {
         const float fy = (float)py + 0.5f - cy;
         for (int32_t px = x0; px <= x1; ++px) {
             const float fx = (float)px + 0.5f - cx;
             const float u = fx * cr - fy * sr;
             const float v = fx * sr + fy * cr;
-            const float q2 = (u / rx) * (u / rx) + (v / ry) * (v / ry);
+            const float ux = u * inv_rx, vy = v * inv_ry;
+            const float q2 = ux * ux + vy * vy;
             const float cov = clampf(0.5f + (1.0f - q2) * minr, 0.0f, 1.0f);
             if (cov > 0.0f) blend_px(cv, px, py, c, alpha * cov);
         }
@@ -1702,37 +1705,31 @@ static void draw_effects(canvas_t *cv, const xf_t *xf, const lay_t *L,
     }
 }
 
-/* ================= static background cache ================= */
-static uint16_t *s_bg = NULL;
-static int32_t s_bg_size = 0;
-static int s_bg_dim_q = -1;
-
-static void bg_build(int32_t size, float dim)
-{
-    const size_t bytes = (size_t)size * (size_t)size * sizeof(uint16_t);
-    if (s_bg == NULL || s_bg_size != size) {
-        heap_caps_free(s_bg);
-        s_bg = (uint16_t *)heap_caps_malloc(bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        if (s_bg == NULL) s_bg = (uint16_t *)heap_caps_malloc(bytes, MALLOC_CAP_8BIT);
-        if (s_bg == NULL) { s_bg_size = 0; return; }
-        s_bg_size = size;
-    }
-    (void)dim;
-    /* PURE BLACK, edge to edge - no ring of any kind.
-       History of this background, and why it is now literally just zeros:
-         1. A radial gradient (#2c2c35 -> #08080b) quantised into concentric
-            bands in RGB565 on the real panel.
-         2. Adding per-channel ordered dithering to hide those bands tinted them
-            red/green/blue, so the bands became *coloured* rings.
-         3. Flattening to black but keeping a thin C_EDGE (#2a2e39) outline left a
-            faint violet-blue halo hugging the panel rim, which is the artefact
-            the user reported last.
-       The panel is a round AMOLED: a black pixel is simply an unlit pixel, which
-       is exactly the clean look wanted here. Every non-zero value near the rim
-       risks another visible halo, so the whole canvas is written as black and the
-       facial features are the only thing ever painted on top. */
-    memset(s_bg, 0, bytes);
-}
+/* ================= background ================= */
+/*
+ * The face background is literally pure black, edge to edge, and it is written
+ * straight into the frame buffer by dotii_draw_render().
+ *
+ * History of this background, and why it is now nothing at all:
+ *   1. A radial gradient (#2c2c35 -> #08080b) quantised into concentric bands
+ *      in RGB565 on the real panel.
+ *   2. Adding per-channel ordered dithering to hide those bands tinted them
+ *      red/green/blue, so the bands became *coloured* rings.
+ *   3. Flattening to black but keeping a thin C_EDGE (#2a2e39) outline left a
+ *      faint violet-blue halo hugging the panel rim.
+ * The panel is a round AMOLED: a black pixel is simply an unlit pixel, which is
+ * exactly the clean look wanted here. Every non-zero value near the rim risks
+ * another visible halo, so the whole canvas is black and the facial features are
+ * the only thing ever painted on top.
+ *
+ * There used to be a cached 466x466 uint16_t buffer here, purely so the
+ * per-frame memset could be skipped. It held 434 KB of contiguous PSRAM, and
+ * once MultiNet (2.6 MB) is resident the largest free PSRAM block is only about
+ * 256 KB, so that allocation failed. The renderer then bailed out on the NULL
+ * cache and left the canvas holding uninitialised PSRAM, which the panel showed
+ * as an all-snow screen with one blurry eye. The buffer is owned by the caller
+ * and zeroed per frame, so the cache only ever duplicated memory.
+ */
 
 /* ================= content bounds ================= */
 static const float k_fx_bbox[DOTII_FX_COUNT][4] = {
@@ -1898,15 +1895,6 @@ void dotii_draw_render(uint16_t *fb, int32_t size, const dotii_expr_t *expr,
     const rgb_t accent = parse_hex_rgb(expr != NULL ? expr->accent : "#8fa6c4");
     const float dim = clampf(p->dim, 0.0f, 1.0f);
     const float alpha = 1.0f - dim * 0.55f;
-    const int dim_q = (int)(dim * 50.0f + 0.5f);
-
-    /* background cache (rebuild when the dim quantisation changes) */
-    if (s_bg == NULL || s_bg_size != size || s_bg_dim_q != dim_q) {
-        bg_build(size, (float)dim_q / 50.0f);
-        s_bg_dim_q = dim_q;
-    }
-    if (s_bg == NULL) return;
-
     /* head transform */
     const float hx = p->head_x, hy = p->head_y;
     const float rot = p->head_rot;

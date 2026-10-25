@@ -24,6 +24,7 @@ datas = [
     (str(firmware_manifest), "firmware"),
     (str(ROOT / "CMakeLists.txt"), "."),
     *collect_data_files("esptool"),
+    *collect_data_files("pypinyin"),
 ]
 for relative_name in firmware_files.values():
     source = (firmware_root / str(relative_name)).resolve()
@@ -37,7 +38,11 @@ a = Analysis(
     pathex=[str(BRIDGE)],
     binaries=[],
     datas=datas,
-    hiddenimports=[*collect_submodules("bleak"), *collect_submodules("esptool")],
+    hiddenimports=[
+        *collect_submodules("bleak"),
+        *collect_submodules("esptool"),
+        *collect_submodules("pypinyin"),
+    ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

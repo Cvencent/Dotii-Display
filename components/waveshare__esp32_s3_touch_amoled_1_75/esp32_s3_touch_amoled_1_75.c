@@ -44,7 +44,19 @@ static i2s_chan_handle_t i2s_tx_chan = NULL;
 static i2s_chan_handle_t i2s_rx_chan = NULL;
 static const audio_codec_data_if_t *i2s_data_if = NULL; /* Codec data interface */
 
+/* Minimum height of one QSPI transform strip, in pixels, and the capacity of
+   the shared strip buffer. Each strip is one synchronous panel-io transaction:
+   the sender waits for the colour-trans-done ISR before it may reuse the
+   buffer, so flush cost is dominated by the per-transaction envelope
+   (~150-210 us measured) rather than by the pixel bytes.
+   The buffer is 466*8*2 = 7.5 KB of internal DMA RAM. 16 rows measured faster
+   still but its 14.9 KB starved mbedTLS/AES, which then failed to allocate and
+   collapsed the panel to 1 fps; the CBDP retransmit window and the OTA scratch
+   buffer were moved to PSRAM to pay for these 8 rows. The flush code also
+   packs as many rows per strip as the rectangle width allows, so narrow dirty
+   rectangles (what face animation produces) use fewer transactions still. */
 #define LCD_TRANSFORM_TILE_SIZE 8
+#define LCD_TRANSFORM_TILE_PIXELS (BSP_LCD_H_RES * LCD_TRANSFORM_TILE_SIZE)
 #define LCD_TRANSFORM_PIXELS (BSP_LCD_H_RES * BSP_LCD_V_RES)
 #define LCD_TRANSFORM_CENTER_FP ((BSP_LCD_H_RES - 1) << 15)
 #define LCD_TRANSFORM_RADIUS2 ((BSP_LCD_H_RES - 1) * (BSP_LCD_H_RES - 1))
@@ -232,11 +244,37 @@ static void lcd_transform_render_area(int x_start, int y_start, int width, int h
     const int32_t center_fp = LCD_TRANSFORM_CENTER_FP;
     const int32_t cos_q16 = s_lcd_transform.cos_q16;
     const int32_t sin_q16 = s_lcd_transform.sin_q16;
-    /* At exactly 90 degrees the sampling grid lands on whole pixels, so the
-       bilinear filter degenerates to a copy. Take the direct path to keep the
-       50 FPS face animation cheap. */
     const bool exact_copy = cos_q16 == 0 && sin_q16 == 65536;
     size_t output_index = 0;
+
+    if (exact_copy) {
+        const int last = BSP_LCD_H_RES - 1;
+        /* At exactly 90 degrees the sampler collapses to source_x = physical_y
+           and source_y = (W-1) - physical_x, i.e. plain transpose+flip.
+           Walk the source contiguously: hold physical_x fixed and sweep
+           physical_y, so the reads in logical_fb[(last - x) * W + y] advance by
+           one element. The naive per-destination-row walk instead jumps a whole
+           row per pixel, so every read is a fresh PSRAM cache line -- measured
+           at ~189 ns/pixel, one miss each. The scatter into the destination
+           tile is strided, but the tile lives in internal RAM and stays cached. */
+        for (int physical_x = x_start; physical_x < x_start + width; ++physical_x) {
+            const uint16_t *source_column =
+                s_lcd_transform.logical_fb + (size_t)(last - physical_x) * BSP_LCD_H_RES;
+            const int physical_dx2 = physical_x * 2 - last;
+            for (int physical_y = y_start; physical_y < y_start + height; ++physical_y) {
+                const int physical_dy2 = physical_y * 2 - (BSP_LCD_V_RES - 1);
+                uint16_t color = 0;
+                if (physical_dx2 * physical_dx2 + physical_dy2 * physical_dy2 <=
+                    LCD_TRANSFORM_RADIUS2) {
+                    color = source_column[physical_y];
+                }
+                s_lcd_transform.dma_tile[(size_t)(physical_y - y_start) * (size_t)width +
+                                         (size_t)(physical_x - x_start)] =
+                    lcd_rgb565_to_wire(color);
+            }
+        }
+        return;
+    }
 
     for (int physical_y = y_start; physical_y < y_start + height; ++physical_y) {
         const int32_t dx_fp = (x_start << 16) - center_fp;
@@ -252,8 +290,7 @@ static void lcd_transform_render_area(int x_start, int y_start, int width, int h
             uint16_t color = 0;
             if (physical_dx2 * physical_dx2 + physical_dy2 * physical_dy2 <=
                 LCD_TRANSFORM_RADIUS2) {
-                color = exact_copy ? lcd_transform_sample_nearest(source_x_fp, source_y_fp)
-                                   : lcd_transform_sample_bilinear(source_x_fp, source_y_fp);
+                color = lcd_transform_sample_bilinear(source_x_fp, source_y_fp);
             }
             s_lcd_transform.dma_tile[output_index++] = lcd_rgb565_to_wire(color);
             source_x_fp += cos_q16;
@@ -401,11 +438,44 @@ static esp_err_t lcd_transform_flush_dirty(esp_lcd_panel_handle_t panel)
     if (y_end > BSP_LCD_V_RES) y_end = BSP_LCD_V_RES;
     if (x_start >= x_end || y_start >= y_end) return ESP_OK;
 
+    /* Split the dirty rectangle along its LONGER physical axis. Every strip
+       costs a full QSPI command + DMA + ISR round trip (~150-210 us here), so
+       the number of strips -- not the pixel count -- sets the flush time. A
+       typical face-animation dirty rect is wide and short in logical space,
+       which a 90 degree rotation turns into a tall and narrow physical rect;
+       slicing that into horizontal strips meant dozens of nearly-empty
+       transactions for a few hundred pixels. Taking vertical strips instead
+       collapses it to a handful. Endpoints stay even because the rectangle is
+       already 2-aligned and the step is LCD_TRANSFORM_TILE_SIZE (even). */
+    const int phys_w = x_end - x_start;
+    const int phys_h = y_end - y_start;
+    if (phys_h > phys_w) {
+        /* Tall rect: take full-height columns as wide as the buffer allows. */
+        int depth = LCD_TRANSFORM_TILE_PIXELS / phys_h;
+        if (depth < LCD_TRANSFORM_TILE_SIZE) depth = LCD_TRANSFORM_TILE_SIZE;
+        depth &= ~1; /* keep the 2-pixel CO5300 address alignment */
+        if (depth < LCD_TRANSFORM_TILE_SIZE) depth = LCD_TRANSFORM_TILE_SIZE;
+        for (int cursor = x_start; cursor < x_end;) {
+            const int size = x_end - cursor < depth ? x_end - cursor : depth;
+            const int tile_end = cursor + size;
+            lcd_transform_render_area(cursor, y_start, size, phys_h);
+            esp_err_t ret = lcd_transform_send_tile(panel, cursor, y_start, tile_end, y_end,
+                                                   tile_end < x_end);
+            if (ret != ESP_OK) return ret;
+            cursor = tile_end;
+        }
+        return ESP_OK;
+    }
+    /* Wide rect: rows per strip = what the buffer holds at this width, but at
+       least the minimum. */
+    int depth = LCD_TRANSFORM_TILE_PIXELS / phys_w;
+    if (depth < LCD_TRANSFORM_TILE_SIZE) depth = LCD_TRANSFORM_TILE_SIZE;
+    depth &= ~1;
+    if (depth < LCD_TRANSFORM_TILE_SIZE) depth = LCD_TRANSFORM_TILE_SIZE;
     for (int cursor = y_start; cursor < y_end;) {
-        const int size = y_end - cursor < LCD_TRANSFORM_TILE_SIZE ?
-                         y_end - cursor : LCD_TRANSFORM_TILE_SIZE;
+        const int size = y_end - cursor < depth ? y_end - cursor : depth;
         const int tile_end = cursor + size;
-        lcd_transform_render_area(x_start, cursor, x_end - x_start, size);
+        lcd_transform_render_area(x_start, cursor, phys_w, size);
         esp_err_t ret = lcd_transform_send_tile(panel, x_start, cursor, x_end, tile_end,
                                                 tile_end < y_end);
         if (ret != ESP_OK) return ret;
@@ -944,6 +1014,13 @@ esp_err_t bsp_display_new(const bsp_display_config_t *config, esp_lcd_panel_hand
 
     esp_lcd_panel_io_spi_config_t io_config = CO5300_PANEL_IO_QSPI_CONFIG(BSP_LCD_CS, NULL, NULL);
     io_config.trans_queue_depth = CONFIG_BSP_LCD_TRANS_QUEUE_DEPTH;
+    /* The component macro hard-codes 40 MHz, which caps the quad-mode link at
+       ~20 MB/s raw and measured ~9 MB/s once the per-tile envelope is included.
+       A full-screen transformed frame therefore spent ~30 ms just shifting
+       pixels, and the face animation ran at 8 fps. The CO5300 handles 80 MHz
+       QSPI on this board; doubling the clock halves the transfer time for no
+       RAM cost at all. */
+    io_config.pclk_hz = 80 * 1000 * 1000;
     co5300_vendor_config_t vendor_config = {
         .init_cmds = lcd_init_cmds,
         .init_cmds_size = sizeof(lcd_init_cmds) / sizeof(lcd_init_cmds[0]),

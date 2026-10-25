@@ -2,5 +2,9 @@
 nvs,      data, nvs,     0x9000,  0x6000,
 phy_init, data, phy,     0xf000,  0x1000,
 factory,  app,  factory, 0x10000, 0x500000,
-storage,  data, spiffs,  0x510000, 0xA00000,
-model,    data, spiffs,  0xF10000, 0xF0000,
+# storage stays registered as the BSP SPIFFS label but is unused by the
+# application; it is trimmed so the speech model partition can grow.
+storage,  data, spiffs,  0x510000, 0x100000,
+# WakeNet9 (284 KiB) and MultiNet5 quantised (2152 KiB) coexist so the device
+# can fall back to the fixed wake word when the custom list is unusable.
+model,    data, spiffs,  0x610000, 0x300000,

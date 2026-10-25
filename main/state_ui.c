@@ -1453,6 +1453,11 @@ static void xiaozhi_sync_config(void)
     strlcpy(config.wake_word,
             s_snapshot.xiaozhi_wake_word[0] ? s_snapshot.xiaozhi_wake_word : "你好小智",
             sizeof(config.wake_word));
+    /* The device registers the wake words through MultiNet, which takes the
+       whole ';' separated pinyin list. Without this the recogniser starts with
+       an empty vocabulary and falls back to WakeNet. */
+    strlcpy(config.wake_words, s_snapshot.xiaozhi_wake_word,
+            sizeof(config.wake_words));
     strlcpy(config.voice,
             s_snapshot.xiaozhi_voice[0] ? s_snapshot.xiaozhi_voice : "default",
             sizeof(config.voice));
@@ -1478,6 +1483,7 @@ static bool xiaozhi_config_differs(const xiaozhi_config_t *left, const xiaozhi_c
 {
     return strcmp(left->server_url, right->server_url) != 0 ||
            strcmp(left->wake_word, right->wake_word) != 0 ||
+           strcmp(left->wake_words, right->wake_words) != 0 ||
            strcmp(left->voice, right->voice) != 0 ||
            strcmp(left->mcp_url, right->mcp_url) != 0 ||
            left->mcp_enabled != right->mcp_enabled;
@@ -1486,9 +1492,12 @@ static bool xiaozhi_config_differs(const xiaozhi_config_t *left, const xiaozhi_c
 static void xiaozhi_supervisor_task(void *argument)
 {
     (void)argument;
+    /* One supervisor exists, so the working copy of the desired config is
+       static rather than a ~1 KB stack object on every 200 ms pass. */
+    static xiaozhi_config_t want_config;
     for (;;) {
         bool want_enabled = false;
-        xiaozhi_config_t want_config = {0};
+        memset(&want_config, 0, sizeof(want_config));
         if (s_xiaozhi_request_lock != NULL &&
             xSemaphoreTake(s_xiaozhi_request_lock, portMAX_DELAY) == pdTRUE) {
             want_enabled = s_xiaozhi_want_enabled;

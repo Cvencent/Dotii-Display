@@ -9,11 +9,13 @@ from the local computer.
 from __future__ import annotations
 
 import argparse
+import copy
 import ipaddress
 import json
 import logging
 import mimetypes
 import os
+import re
 import secrets
 import shutil
 import socket
@@ -26,6 +28,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
+
+from pypinyin import Style, lazy_pinyin
 
 from bluetooth_bridge import BluetoothBridge
 from codex_bridge_link import claim_codex_bridge_token
@@ -52,7 +56,10 @@ MODULE_DEFAULTS = {"xiaozhi": True}
 XIAOZHI_DEFAULTS = {
     "enabled": True,
     "server_url": "https://api.tenclass.net/xiaozhi/ota/",
-    "wake_word": "你好小智",
+    # Device-facing canonical pinyin list. `wake_words` below is the editable
+    # Chinese form shown by the management center.
+    "wake_word": "ni hao xiao zhi",
+    "wake_words": ["你好小智"],
     "voice": "default",
     "mcp_enabled": True,
     # Tool access point published by the xiaozhi console
@@ -60,9 +67,86 @@ XIAOZHI_DEFAULTS = {
     "mcp_url": "",
 }
 
+WAKE_WORD_MAX_COUNT = 3
+WAKE_WORD_INPUT_MAX = 24
+WAKE_WORD_PINYIN_MAX = 63
+_WAKE_WORD_INPUT_RE = re.compile(r"^[\u3400-\u9fffA-Za-z0-9 ]+$")
+_ASCII_PINYIN_RE = re.compile(r"^[a-z0-9 ]+$")
+
 
 def default_xiaozhi_config() -> dict[str, Any]:
-    return dict(XIAOZHI_DEFAULTS)
+    return copy.deepcopy(XIAOZHI_DEFAULTS)
+
+
+def _wake_word_to_pinyin(phrase: str, index: int) -> str:
+    phrase = " ".join(phrase.split())
+    if not phrase:
+        raise ValueError(f"xiaozhi.wake_words[{index}] must not be empty")
+    if len(phrase) > WAKE_WORD_INPUT_MAX:
+        raise ValueError(
+            f"xiaozhi.wake_words[{index}] must be at most {WAKE_WORD_INPUT_MAX} characters"
+        )
+    if not _WAKE_WORD_INPUT_RE.fullmatch(phrase):
+        raise ValueError(
+            f"xiaozhi.wake_words[{index}] may contain only Chinese, letters, digits and spaces"
+        )
+
+    lowered = phrase.lower()
+    if _ASCII_PINYIN_RE.fullmatch(lowered):
+        parts = lowered.split()
+    else:
+        rendered = " ".join(lazy_pinyin(lowered, style=Style.NORMAL, errors="default"))
+        parts = re.findall(r"[a-z0-9]+", rendered)
+    pinyin = " ".join(parts)
+    if not pinyin:
+        raise ValueError(f"xiaozhi.wake_words[{index}] cannot be converted to pinyin")
+    if len(pinyin) > WAKE_WORD_PINYIN_MAX:
+        raise ValueError(
+            f"xiaozhi.wake_words[{index}] is too long after pinyin conversion"
+        )
+    return pinyin
+
+
+def _validate_wake_words(payload: dict[str, Any], defaults: dict[str, Any]) -> tuple[list[str], str]:
+    raw_words = payload.get("wake_words")
+    if raw_words is None:
+        if "wake_word" not in payload:
+            raw_words = list(defaults["wake_words"])
+        else:
+            # Accept files and clients written before multi-word support. A
+            # legacy semicolon-separated `wake_word` is already canonical pinyin.
+            legacy = payload["wake_word"]
+            if not isinstance(legacy, str):
+                raise ValueError("xiaozhi.wake_word must be a string")
+            if ";" in legacy:
+                raw_words = [part.strip() for part in legacy.split(";") if part.strip()]
+            else:
+                raw_words = [legacy]
+    if not isinstance(raw_words, list):
+        raise ValueError("xiaozhi.wake_words must be an array")
+    if len(raw_words) > WAKE_WORD_MAX_COUNT:
+        raise ValueError(f"xiaozhi.wake_words supports at most {WAKE_WORD_MAX_COUNT} words")
+
+    words: list[str] = []
+    pinyin_words: list[str] = []
+    for index, value in enumerate(raw_words):
+        if not isinstance(value, str):
+            raise ValueError(f"xiaozhi.wake_words[{index}] must be a string")
+        phrase = " ".join(value.split())
+        if not phrase:
+            continue
+        pinyin = _wake_word_to_pinyin(phrase, index)
+        if pinyin in pinyin_words:
+            continue
+        words.append(phrase)
+        pinyin_words.append(pinyin)
+
+    if not words:
+        # The device keeps WakeNet as a safe fallback when the custom list is
+        # empty, but the management form always starts with one usable row.
+        words = list(defaults["wake_words"])
+        pinyin_words = [_wake_word_to_pinyin(words[0], 0)]
+    return words, ";".join(pinyin_words)
 
 
 def validate_xiaozhi_config(payload: Any) -> dict[str, Any]:
@@ -98,11 +182,12 @@ def validate_xiaozhi_config(payload: Any) -> dict[str, Any]:
     if parsed.scheme not in {"http", "https", "ws", "wss"} or not parsed.hostname:
         raise ValueError("xiaozhi.server_url must be an http(s):// or ws(s):// URL")
 
+    wake_words, wake_word = _validate_wake_words(payload, defaults)
     return {
         "enabled": enabled,
         "server_url": server_url,
-        "wake_word": bounded(payload.get("wake_word"), "wake_word", 32,
-                             defaults["wake_word"]) or defaults["wake_word"],
+        "wake_word": wake_word,
+        "wake_words": wake_words,
         "voice": bounded(payload.get("voice"), "voice", 32,
                          defaults["voice"]) or defaults["voice"],
         "mcp_enabled": mcp_enabled,

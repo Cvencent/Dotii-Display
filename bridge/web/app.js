@@ -277,11 +277,20 @@ async function logoutQq() {
   renderQqmusic(result);
 }
 
+function wakeWordInputs() {
+  return [1, 2, 3].map((index) => byId(`xiaozhi-wake-word-${index}`));
+}
+
 function renderXiaozhi(config = {}, enabled = true, bluetooth = {}) {
   if (arguments.length > 3) renderQqmusic(arguments[3] || {});
   if (!state.xiaozhiLoaded && !state.xiaozhiSaving) {
     byId("xiaozhi-server-url").value = config.server_url || "https://api.tenclass.net/xiaozhi/ota/";
-    byId("xiaozhi-wake-word").value = config.wake_word || "你好小智";
+    const wakeWords = Array.isArray(config.wake_words) && config.wake_words.length
+      ? config.wake_words
+      : [config.wake_word || "你好小智"];
+    wakeWordInputs().forEach((input, index) => {
+      input.value = wakeWords[index] || "";
+    });
     byId("xiaozhi-voice").value = config.voice || "default";
     byId("xiaozhi-mcp-enabled").checked = config.mcp_enabled !== false;
 byId("xiaozhi-mcp-url").value = config.mcp_url || "";
@@ -325,7 +334,7 @@ async function saveXiaozhi(event) {
       body: JSON.stringify({
         enabled: byId("xiaozhi-enabled").checked,
         server_url: byId("xiaozhi-server-url").value.trim(),
-        wake_word: byId("xiaozhi-wake-word").value.trim(),
+        wake_words: wakeWordInputs().map((input) => input.value.trim()).filter(Boolean),
         voice: byId("xiaozhi-voice").value.trim(),
         mcp_enabled: byId("xiaozhi-mcp-enabled").checked,
 mcp_url: byId("xiaozhi-mcp-url").value.trim(),
@@ -735,7 +744,9 @@ byId("screen-off-page").addEventListener("change", () => {
 byId("xiaozhi-enabled").addEventListener("change", (event) => updateModule("xiaozhi", event.target.checked));
 byId("xiaozhi-form").addEventListener("submit", saveXiaozhi);
 byId("xiaozhi-server-url").addEventListener("input", () => setText("xiaozhi-save-state", "有尚未保存的修改"));
-byId("xiaozhi-wake-word").addEventListener("input", () => setText("xiaozhi-save-state", "有尚未保存的修改"));
+wakeWordInputs().forEach((input) => {
+  input.addEventListener("input", () => setText("xiaozhi-save-state", "有尚未保存的修改"));
+});
 byId("xiaozhi-voice").addEventListener("input", () => setText("xiaozhi-save-state", "有尚未保存的修改"));
 byId("xiaozhi-mcp-enabled").addEventListener("change", () => setText("xiaozhi-save-state", "有尚未保存的修改"));
 byId("xiaozhi-mcp-url").addEventListener("input", () => setText("xiaozhi-save-state", "有尚未保存的修改"));
