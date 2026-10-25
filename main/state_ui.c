@@ -1453,11 +1453,6 @@ static void xiaozhi_sync_config(void)
     strlcpy(config.wake_word,
             s_snapshot.xiaozhi_wake_word[0] ? s_snapshot.xiaozhi_wake_word : "你好小智",
             sizeof(config.wake_word));
-    /* The device registers the wake words through MultiNet, which takes the
-       whole ';' separated pinyin list. Without this the recogniser starts with
-       an empty vocabulary and falls back to WakeNet. */
-    strlcpy(config.wake_words, s_snapshot.xiaozhi_wake_word,
-            sizeof(config.wake_words));
     strlcpy(config.voice,
             s_snapshot.xiaozhi_voice[0] ? s_snapshot.xiaozhi_voice : "default",
             sizeof(config.voice));
@@ -2438,7 +2433,7 @@ void state_ui_start(QueueHandle_t snapshot_queue)
     s_xiaozhi_request_lock = xSemaphoreCreateMutex();
     if (s_xiaozhi_request_lock == NULL) {
         ESP_LOGE(TAG, "Unable to create the xiaozhi request lock");
-    } else if (xTaskCreate(xiaozhi_supervisor_task, "xz_sup", 8192, NULL, 5, NULL) != pdPASS) {
+    } else if (xTaskCreate(xiaozhi_supervisor_task, "xz_sup", 4096, NULL, 5, NULL) != pdPASS) {
         ESP_LOGE(TAG, "Unable to create the xiaozhi supervisor task");
     }
     build_main();

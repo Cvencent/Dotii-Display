@@ -5,14 +5,6 @@
 #include <stdint.h>
 #include <stdatomic.h>
 
-/* Up to three user-defined wake words, each as space-separated pinyin. The
-   list itself is tiny because MultiNet keeps the vocabulary in RAM: only the
-   model binary is large, and that ships inside the firmware. */
-#define XIAOZHI_WAKE_WORD_MAX 3
-#define XIAOZHI_WAKE_WORD_EACH_BYTES 64
-#define XIAOZHI_WAKE_WORD_LIST_BYTES \
-    ((XIAOZHI_WAKE_WORD_EACH_BYTES * XIAOZHI_WAKE_WORD_MAX) + XIAOZHI_WAKE_WORD_MAX)
-
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -38,13 +30,7 @@ typedef enum {
 
 typedef struct {
     char server_url[192];
-    /* Fixed WakeNet fallback word; kept for the case where the custom list
-       below is empty or the MultiNet model cannot start. */
     char wake_word[32];
-    /* Up to XIAOZHI_WAKE_WORD_MAX user-defined wake words, pinyin separated by
-       ';'. MultiNet recognises command words, so these are injected at runtime
-       instead of needing one WakeNet model per word. */
-    char wake_words[XIAOZHI_WAKE_WORD_LIST_BYTES];
     char voice[32];
     bool mcp_enabled;
     /* Dedicated MCP access point published by the xiaozhi console
@@ -86,14 +72,8 @@ typedef struct {
     void *music_http;
     void *wake_task;
     void *wake_models;
-    /* MultiNet recogniser (user-defined words). */
     void *wake_data;
     void *wake_iface;
-    /* WakeNet recogniser (built-in phrase). Runs alongside MultiNet so the
-       device keeps a dependable wake word even when the custom list is empty
-       or the model cannot match. */
-    void *wake_wn_data;
-    void *wake_wn_iface;
     void *audio_encode;
     void *audio_decode;
     void *input_resampler;
@@ -115,10 +95,6 @@ typedef struct {
     volatile bool wake_resume_pending;
     volatile bool music_stop_requested;
     bool wake_ready;
-    /* True when the active recogniser is MultiNet (user-defined words) rather
-       than the built-in WakeNet phrase; the detect API differs. */
-    bool wake_multinet;
-    bool wake_wn_ready;
     xiaozhi_config_t config;
 } xiaozhi_client_t;
 

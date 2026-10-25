@@ -84,10 +84,7 @@ typedef struct {
     bool codex_enabled;
     bool xiaozhi_enabled;
     char xiaozhi_server_url[192];
-    /* Three pinyin wake phrases separated by ';'. Each phrase is up to 64
-       bytes, so a single 32-byte field truncated the list and the device fell
-       back to the built-in word. */
-    char xiaozhi_wake_word[196];
+    char xiaozhi_wake_word[33];
     char xiaozhi_voice[33];
     bool xiaozhi_mcp_enabled;
     char xiaozhi_mcp_url[512];

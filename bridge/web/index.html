@@ -62,13 +62,7 @@
             </div>
             <div class="settings-grid xiaozhi-fields">
               <label><span>OTA / 服务地址</span><input id="xiaozhi-server-url" maxlength="192" autocomplete="off" placeholder="https://api.tenclass.net/xiaozhi/ota/"></label>
-              <div class="field wake-word-field">
-                <span>唤醒词（最多 3 个）</span>
-                <input id="xiaozhi-wake-word-1" maxlength="16" autocomplete="off" placeholder="例如：你好小智">
-                <input id="xiaozhi-wake-word-2" maxlength="16" autocomplete="off" placeholder="例如：小土豆">
-                <input id="xiaozhi-wake-word-3" maxlength="16" autocomplete="off" placeholder="留空则忽略">
-                <small class="field-hint">自定义唤醒词由设备本地识别，保存后自动转换为拼音下发。留空的项不生效。</small>
-              </div>
+              <label><span>唤醒词</span><input id="xiaozhi-wake-word" maxlength="32" autocomplete="off" placeholder="你好小智"></label>
               <label><span>音色</span><input id="xiaozhi-voice" maxlength="32" autocomplete="off" placeholder="default"></label>
               <label class="check-row"><input id="xiaozhi-mcp-enabled" type="checkbox"><span>启用 MCP 工具调用</span></label>
               <label class="field"><span>MCP 接入点地址</span><input id="xiaozhi-mcp-url" type="text" placeholder="wss://api.xiaozhi.me/mcp/?token=..." autocomplete="off"></label>
