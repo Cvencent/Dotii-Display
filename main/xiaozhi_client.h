@@ -86,8 +86,14 @@ typedef struct {
     void *music_http;
     void *wake_task;
     void *wake_models;
+    /* MultiNet recogniser (user-defined words). */
     void *wake_data;
     void *wake_iface;
+    /* WakeNet recogniser (built-in phrase). Runs alongside MultiNet so the
+       device keeps a dependable wake word even when the custom list is empty
+       or the model cannot match. */
+    void *wake_wn_data;
+    void *wake_wn_iface;
     void *audio_encode;
     void *audio_decode;
     void *input_resampler;
@@ -112,6 +118,7 @@ typedef struct {
     /* True when the active recogniser is MultiNet (user-defined words) rather
        than the built-in WakeNet phrase; the detect API differs. */
     bool wake_multinet;
+    bool wake_wn_ready;
     xiaozhi_config_t config;
 } xiaozhi_client_t;
 

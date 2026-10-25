@@ -2188,6 +2188,9 @@ static bool wake_word_start_multinet(xiaozhi_client_t *client, srmodel_list_t *m
        esp_mn_commands_add() below fails with ESP_ERR_INVALID_STATE and the
        recogniser keeps an empty vocabulary, which is exactly the "nothing ever
        wakes it" symptom. */
+    /* The threshold must be set before the command list is committed; the
+       official implementation does it in this order. */
+    (void)iface->set_det_threshold(data, 0.20f);
     if (esp_mn_commands_alloc(iface, data) != ESP_OK) {
         ESP_LOGE(TAG, "MultiNet command list allocation failed");
         iface->destroy(data);
@@ -2212,14 +2215,14 @@ static bool wake_word_start_multinet(xiaozhi_client_t *client, srmodel_list_t *m
         ESP_LOGW(TAG, "MultiNet dropped %d unusable wake word(s)", errors->num);
     }
     esp_mn_commands_print();
+    ESP_LOGI(TAG, "MultiNet ready: rate=%d chunk=%d threshold=0.20",
+             iface->get_samp_rate(data), iface->get_samp_chunksize(data));
     if (iface->print_active_speech_commands != NULL) {
         iface->print_active_speech_commands(data);
     }
-    client->wake_models = models;
     client->wake_iface = (void *)iface;
     client->wake_data = data;
     client->wake_multinet = true;
-    client->wake_ready = true;
     ESP_LOGI(TAG, "MultiNet wake word ready: model=%s words=%d", model_name, word_count);
     for (int index = 0; index < word_count; ++index) {
         ESP_LOGI(TAG, "  wake word %d: '%s'", index + 1, words[index]);
@@ -2246,12 +2249,10 @@ static bool wake_word_start_wakenet(xiaozhi_client_t *client, srmodel_list_t *mo
     if (!iface->set_det_threshold(data, 0.50f, 1)) {
         ESP_LOGW(TAG, "wake threshold override failed");
     }
-    client->wake_models = models;
-    client->wake_iface = (void *)iface;
-    client->wake_data = data;
-    client->wake_multinet = false;
-    client->wake_ready = true;
-    ESP_LOGI(TAG, "wake word ready: %s", model_name != NULL ? model_name : "unknown");
+    client->wake_wn_iface = (void *)iface;
+    client->wake_wn_data = data;
+    client->wake_wn_ready = true;
+    ESP_LOGI(TAG, "WakeNet ready: %s", model_name != NULL ? model_name : "unknown");
     return true;
 }
 
@@ -2275,33 +2276,50 @@ static bool wake_word_start(xiaozhi_client_t *client)
         if (models != NULL) esp_srmodel_deinit(models);
         return false;
     }
-    /* Prefer the user's own words; fall back to the built-in WakeNet phrase so
-       a bad or empty list never leaves the device unable to be woken. */
-    if (wake_word_start_multinet(client, models)) return true;
-    ESP_LOGW(TAG, "MultiNet unavailable; falling back to WakeNet");
-    esp_srmodel_deinit(models);
-    return false;
+    /* Run both recognisers on the same microphone stream: WakeNet keeps the
+       built-in phrase dependable, MultiNet adds the user's own words. Either
+       one firing wakes the device, so a poor custom match can never take the
+       default phrase away. */
+    client->wake_models = models;
+    const bool mn_ok = wake_word_start_multinet(client, models);
+    if (!mn_ok) {
+        ESP_LOGW(TAG, "MultiNet unavailable; WakeNet only");
+    }
+    const bool wn_ok = wake_word_start_wakenet(client, models);
+    if (!wn_ok) {
+        ESP_LOGW(TAG, "WakeNet unavailable");
+    }
+    if (!mn_ok && !wn_ok) {
+        esp_srmodel_deinit(models);
+        client->wake_models = NULL;
+        return false;
+    }
+    client->wake_ready = true;
+    ESP_LOGI(TAG, "wake engines: multinet=%d wakenet=%d", (int)mn_ok, (int)wn_ok);
+    return true;
 }
 
 static void wake_word_stop(xiaozhi_client_t *client)
 {
     if (client == NULL) return;
     if (client->wake_data != NULL && client->wake_iface != NULL) {
-        if (client->wake_multinet) {
-            const esp_mn_iface_t *iface = (const esp_mn_iface_t *)client->wake_iface;
-            iface->destroy((model_iface_data_t *)client->wake_data);
-        } else {
-            const esp_wn_iface_t *iface = (const esp_wn_iface_t *)client->wake_iface;
-            iface->destroy((model_iface_data_t *)client->wake_data);
-        }
+        const esp_mn_iface_t *iface = (const esp_mn_iface_t *)client->wake_iface;
+        iface->destroy((model_iface_data_t *)client->wake_data);
     }
     if (client->wake_multinet) esp_mn_commands_free();
+    if (client->wake_wn_data != NULL && client->wake_wn_iface != NULL) {
+        const esp_wn_iface_t *iface = (const esp_wn_iface_t *)client->wake_wn_iface;
+        iface->destroy((model_iface_data_t *)client->wake_wn_data);
+    }
     if (client->wake_models != NULL) esp_srmodel_deinit((srmodel_list_t *)client->wake_models);
     client->wake_data = NULL;
     client->wake_iface = NULL;
+    client->wake_wn_data = NULL;
+    client->wake_wn_iface = NULL;
     client->wake_models = NULL;
     client->wake_ready = false;
     client->wake_multinet = false;
+    client->wake_wn_ready = false;
 }
 /* Short two-tone completion chime, synthesised at the codec output rate so
    no extra audio asset is needed. */
@@ -2929,19 +2947,25 @@ static void xiaozhi_detect_wake_word(xiaozhi_client_t *client)
     if (!xiaozhi_client_wake_detection_allowed(client)) return;
     if (!audio_init(client)) return;
 
-    /* WakeNet and MultiNet expose different ifaces and chunk accessors. */
+    /* Both recognisers run off the same chunk. MultiNet is preferred for the
+       chunk size; WakeNet uses the same 512-sample window at 16 kHz. */
     const esp_wn_iface_t *wn_iface = NULL;
     const esp_mn_iface_t *mn_iface = NULL;
-    model_iface_data_t *data = (model_iface_data_t *)client->wake_data;
-    if (client->wake_multinet) {
+    model_iface_data_t *mn_data = (model_iface_data_t *)client->wake_data;
+    model_iface_data_t *wn_data = (model_iface_data_t *)client->wake_wn_data;
+    if (client->wake_multinet && mn_data != NULL) {
         mn_iface = (const esp_mn_iface_t *)client->wake_iface;
-    } else {
-        wn_iface = (const esp_wn_iface_t *)client->wake_iface;
     }
-    if ((mn_iface == NULL && wn_iface == NULL) || data == NULL) return;
-    const int target_samples = client->wake_multinet
-        ? mn_iface->get_samp_chunksize(data)
-        : wn_iface->get_samp_chunksize(data);
+    if (client->wake_wn_ready && wn_data != NULL) {
+        wn_iface = (const esp_wn_iface_t *)client->wake_wn_iface;
+    }
+    if (mn_iface == NULL && wn_iface == NULL) return;
+    int target_samples = 0;
+    if (mn_iface != NULL) {
+        target_samples = mn_iface->get_samp_chunksize(mn_data);
+    } else {
+        target_samples = wn_iface->get_samp_chunksize(wn_data);
+    }
     if (target_samples <= 0 || target_samples > 4096) return;
 
     const int source_samples =
@@ -2975,22 +2999,25 @@ static void xiaozhi_detect_wake_word(xiaozhi_client_t *client)
                                     &output_samples) == ESP_AE_ERR_OK &&
             output_samples >= (uint32_t)target_samples) {
             bool detected = false;
-            if (client->wake_multinet) {
-                const esp_mn_state_t state = mn_iface->detect(data, chunk);
+            /* Both recognisers see the same samples. WakeNet is the dependable
+               built-in phrase; MultiNet adds whatever the user typed. */
+            if (client->wake_multinet && mn_iface != NULL) {
+                const esp_mn_state_t state = mn_iface->detect(mn_data, chunk);
                 if (state == ESP_MN_STATE_DETECTED) {
-                    esp_mn_results_t *results = mn_iface->get_results(data);
+                    esp_mn_results_t *results = mn_iface->get_results(mn_data);
                     if (results != NULL && results->num > 0) {
                         detected = true;
                         ESP_LOGI(TAG, "wake word detected: command_id=%d string=%s prob=%.3f",
                                  results->command_id[0], results->string,
                                  (double)results->prob[0]);
                     }
-                    mn_iface->clean(data);
+                    mn_iface->clean(mn_data);
                 } else if (state == ESP_MN_STATE_TIMEOUT) {
-                    mn_iface->clean(data);
+                    mn_iface->clean(mn_data);
                 }
-            } else {
-                const wakenet_state_t wn_state = wn_iface->detect(data, chunk);
+            }
+            if (wn_iface != NULL) {
+                const wakenet_state_t wn_state = wn_iface->detect(wn_data, chunk);
                 if (wn_state > 0) {
                     detected = true;
                     ESP_LOGI(TAG, "wake word detected: 你好小智");
