@@ -4,7 +4,7 @@ Dotii 是一套由 ESP32-S3 圆形 AMOLED 桌面屏、Dotii 管理中心与 Code
 
 ![Dotii 桌面交互屏产品渲染图](assets/dotii-product-render.png)
 
-**下载**：[管理中心 v1.1.9](https://github.com/Cvencent/Dotii-Display/releases/tag/management-center-v1.2.0) · [固件 1.1.9](https://github.com/Cvencent/Dotii-Display/releases/tag/firmware-v1.2.0) · [CodexBridge](https://github.com/Cvencent/CodexBridge/releases) · [MakerWorld 模型与打印文件](https://makerworld.com.cn/zh/models/2918764-dotii-zhuo-mian-jiao-hu-ping#profileId-3421401) · [开发指南](开发指南.md)
+**下载**：[管理中心 v1.1.9](https://github.com/Cvencent/Dotii-Display/releases/tag/management-center-v1.2.1) · [固件 1.1.9](https://github.com/Cvencent/Dotii-Display/releases/tag/firmware-v1.2.1) · [CodexBridge](https://github.com/Cvencent/CodexBridge/releases) · [MakerWorld 模型与打印文件](https://makerworld.com.cn/zh/models/2918764-dotii-zhuo-mian-jiao-hu-ping#profileId-3421401) · [开发指南](开发指南.md)
 
 ---
 
@@ -63,11 +63,11 @@ Dotii 由三个彼此独立的部分组成，可以分开升级：
 
 ### 3.1 安装 Dotii 管理中心（Windows）
 
-1. 从 [Releases](https://github.com/Cvencent/Dotii-Display/releases/tag/management-center-v1.2.0) 下载 `Dotii-Setup-1.2.0.exe`。
+1. 从 [Releases](https://github.com/Cvencent/Dotii-Display/releases/tag/management-center-v1.2.1) 下载 `Dotii-Setup-1.2.1.exe`。
 2. 双击安装。默认装在 `%LOCALAPPDATA%\Programs\Dotii Management Center`，并提供开始菜单、桌面快捷方式与卸载入口。
 3. 安装完成后从托盘或开始菜单打开。管理页地址为 `http://127.0.0.1:8787`，**只允许本机访问**。
 
-也可以使用 `DotiiManagementCenter-1.2.0-portable.zip` 便携版，解压即用。
+也可以使用 `DotiiManagementCenter-1.2.1-portable.zip` 便携版，解压即用。
 
 ### 3.2 烧录固件
 
@@ -294,12 +294,12 @@ USB 供电时**只熄屏、不休眠**，这样 Wi-Fi、蓝牙与 CodexBridge �
 
 ### 手动刷写（可选）
 
-Release 中的 [固件包](https://github.com/Cvencent/Dotii-Display/releases/tag/firmware-v1.2.0) 内含 `刷机说明.txt` 与 `SHA256SUMS.txt`。
+Release 中的 [固件包](https://github.com/Cvencent/Dotii-Display/releases/tag/firmware-v1.2.1) 内含 `刷机说明.txt` 与 `SHA256SUMS.txt`。
 
 一键整包（全新安装，**会重写 NVS 与 storage**）：
 
 ```bash
-esptool --chip esp32s3 --port COM3 --baud 460800 write-flash 0x0 DotiiFirmware-1.2.0-full.bin
+esptool --chip esp32s3 --port COM3 --baud 460800 write-flash 0x0 DotiiFirmware-1.2.1-full.bin
 ```
 
 仅升级应用、保留配置：
