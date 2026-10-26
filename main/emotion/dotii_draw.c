@@ -710,19 +710,6 @@ static void draw_eye_body(canvas_t *cv, const xf_t *xf, const dotii_pose_t *p,
        circle, so the per-pixel lid test can be skipped entirely. This is the
        common idle/blink-open case. */
     const bool lid_active = (bu > 0.02f) || (bd > 0.02f);
-    /* The iris/highlight discs and the eyelid cuts only affect a subset of the
-       sclera. Precomputing those spans lets the inner loop skip the bulk of the
-       per-pixel arithmetic for pixels where the result is identical to a plain
-       sclera store. The bounds below are the exact analytic envelopes (with a
-       half-pixel pad for the coverage ramp), so no visible pixel changes. */
-    const float iu_lo = minf2(ix - pr, hx - hr) - 1.0f;
-    const float iu_hi = maxf2(ix + pr, hx + hr) + 1.0f;
-    const float iv_lo = minf2(iy - pr, hy - hr) - 1.0f;
-    const float iv_hi = maxf2(iy + pr, hy + hr) + 1.0f;
-    /* cov_t/cov_b only bite below tCut+0.5 / above bCut-0.5; inside that band
-       both clamps evaluate to >= 1 and are pure overhead. */
-    const float lid_top_reach = tCut + 0.5f;
-    const float lid_bot_reach = bCut - 0.5f;
 
     /* ---- Fast path: fully open eye ----------------------------------------
        With the lids clear (bu and bd are both zero, which is the case whenever
@@ -780,11 +767,7 @@ static void draw_eye_body(canvas_t *cv, const xf_t *xf, const dotii_pose_t *p,
             const float q2 = qu * qu + qv * qv;
             float cov = clampf(0.5f + (1.0f - q2) * minr, 0.0f, 1.0f);
             if (cov <= 0.002f) continue;
-            const bool in_iris_span =
-                u >= iu_lo && u <= iu_hi && v >= iv_lo && v <= iv_hi;
-            const bool lid_here = lid_active &&
-                                  (v < lid_top_reach || v > lid_bot_reach);
-            if (lid_here) {
+            if (lid_active) {
                 const float t = clampf(0.5f + u * inv_2rxp, 0.0f, 1.0f);
                 const float bulb = 2.0f * t * (1.0f - t);
                 const float cov_t = clampf(0.5f + (v - (tCut - bulb * bu)), 0.0f, 1.0f);
@@ -801,7 +784,6 @@ static void draw_eye_body(canvas_t *cv, const xf_t *xf, const dotii_pose_t *p,
                sclera instead of cutting into it. */
             rgb_t col = C_WHITE;
             float a_fg = 0.0f;
-            if (in_iris_span) {
             const float dpx = u - ix, dpy = v - iy;
             const float dp2 = dpx * dpx + dpy * dpy;
             const float dhx = u - hx, dhy = v - hy;
@@ -826,7 +808,6 @@ static void draw_eye_body(canvas_t *cv, const xf_t *xf, const dotii_pose_t *p,
                 blend_px(cv, px, py, C_WHITE, alpha * cov);
                 blend_px(cv, px, py, col, alpha * cov * a_fg);
             }
-            } /* in_iris_span */
         }
     }
 }
