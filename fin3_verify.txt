@@ -1,0 +1,23 @@
+���С�� 1
+���С�� 2
+���С�� 3
+С���� 1
+С���� 2
+С���� 3
+���� 1
+���� 2
+���� 3
+I (59034) ESP32-S3-Touch-AMOLED-1.75: panel flush: 11 fps, avg 23895 us
+I (59891) dotii_render: face raster: 11 fps, avg 28492 us
+I (60048) ESP32-S3-Touch-AMOLED-1.75: panel flush: 11 fps, avg 24201 us
+I (60898) dotii_render: face raster: 11 fps, avg 28620 us
+I (61048) ESP32-S3-Touch-AMOLED-1.75: panel flush: 11 fps, avg 23590 us
+I (61968) dotii_render: face raster: 12 fps, avg 27703 us
+I (62111) ESP32-S3-Touch-AMOLED-1.75: panel flush: 12 fps, avg 23417 us
+I (63004) dotii_render: face raster: 12 fps, avg 26818 us
+I (63158) ESP32-S3-Touch-AMOLED-1.75: panel flush: 12 fps, avg 23587 us
+I (64044) dotii_render: face raster: 11 fps, avg 29018 us
+I (64206) ESP32-S3-Touch-AMOLED-1.75: panel flush: 11 fps, avg 25214 us
+I (65120) dotii_render: face raster: 12 fps, avg 27686 us
+I (65269) ESP32-S3-Touch-AMOLED-1.75: panel flush: 12 fps, avg 23881 us
+I (66188) dotii_render: face raster: 12 fps, avg 26997 us
