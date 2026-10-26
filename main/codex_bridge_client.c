@@ -1911,11 +1911,18 @@ static void note_bridge_source(const struct sockaddr_in *source)
     if (s_bridge_ip_known && s_bridge_ip == source_ip) return;
     s_bridge_ip = source_ip;
     s_bridge_ip_known = true;
-    ESP_LOGI(TAG, "bridge seen at %u.%u.%u.%u",
+    char learned[16];
+    snprintf(learned, sizeof(learned), "%u.%u.%u.%u",
              (unsigned)((source_ip >> 24) & 0xFFu),
              (unsigned)((source_ip >> 16) & 0xFFu),
              (unsigned)((source_ip >> 8) & 0xFFu),
              (unsigned)(source_ip & 0xFFu));
+    ESP_LOGI(TAG, "bridge seen at %s", learned);
+
+    /* Hand the address to connectivity. It stays a candidate until a
+       management request against it succeeds, so a multi-homed host cannot
+       re-point the device at a NIC that does not serve 8787. */
+    connectivity_note_bridge_ipv4(learned);
 }
 
 /* The Bridge publishes its authoritative task counters over UDP on the

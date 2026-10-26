@@ -27,6 +27,11 @@ esp_err_t device_config_store_qq_cookie(const char *cookie);
    learns the token over the LAN instead of through Bluetooth provisioning. */
 esp_err_t device_config_store_codex_token(const char *token);
 
+/* Persist only the management bridge URL. Used when the device learns the
+   Bridge's current address from a CBDP datagram, so a DHCP change does not
+   require re-provisioning. */
+esp_err_t device_config_store_bridge_url(const char *url);
+
 /* Forget the CodexBridge token (revoked or rotated by the host). The next
    CBDP HELLO then carries pairing_state=request again. */
 esp_err_t device_config_clear_codex_token(void);

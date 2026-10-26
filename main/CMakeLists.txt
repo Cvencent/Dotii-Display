@@ -4,6 +4,7 @@ idf_component_register(
         "app_state.c"
         "connectivity.c"
         "codex_bridge_client.c"
+        "bridge_url.c"
         "codex_bridge_protocol.c"
         "codex_bridge_projection.c"
         "codex_read_tracker.c"

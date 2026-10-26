@@ -1,5 +1,7 @@
 #include "connectivity.h"
 
+#include "bridge_url.h"
+
 #include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -35,6 +37,7 @@ static const char *TAG = "connectivity";
 static EventGroupHandle_t s_events;
 static bool s_wifi_connected;
 static bool s_bridge_online;
+static char s_candidate_bridge_url[256];
 static bool s_codex_was_online;
 static char s_ip[24] = "--";
 static char s_bridge_note[48] = "正在启动";
@@ -81,24 +84,24 @@ static esp_err_t http_event_handler(esp_http_client_event_t *event)
     return ESP_OK;
 }
 
-static bool fetch_snapshot(codex_snapshot_t *management)
+static bool fetch_snapshot(const char *url, codex_snapshot_t *management)
 {
     const device_config_values_t *device_config = device_config_get();
-    if (strlen(device_config->bridge_url) == 0) return false;
+    if (url == NULL || url[0] == '\0') return false;
 
     char *body = heap_caps_calloc(1, HTTP_BODY_INITIAL_CAPACITY,
                                   MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (body == NULL) return false;
     http_body_t response = {.body = body, .capacity = HTTP_BODY_INITIAL_CAPACITY};
     esp_http_client_config_t config = {
-        .url = device_config->bridge_url,
+        .url = url,
         .event_handler = http_event_handler,
         .user_data = &response,
         .timeout_ms = 10000,
         .buffer_size = 1024,
         .crt_bundle_attach = esp_crt_bundle_attach,
     };
-    ESP_LOGI(TAG, "fetching management snapshot: %s", device_config->bridge_url);
+    ESP_LOGI(TAG, "fetching management snapshot: %s", url);
     esp_http_client_handle_t client = esp_http_client_init(&config);
     if (client == NULL) {
         heap_caps_free(response.body);
@@ -285,7 +288,24 @@ static void bridge_task(void *argument)
            changes never reached the device. */
         if (management_requested &&
             ((bits & WIFI_CONNECTED_BIT) || s_wifi_connected)) {
-            if (fetch_snapshot(&s_management_snapshot)) {
+            const char *active_url = device_config_get()->bridge_url;
+            bool fetched = fetch_snapshot(active_url, &s_management_snapshot);
+            /* A DHCP change leaves the persisted URL at an address the Bridge
+               no longer owns. Try the address CBDP reported; only a request
+               that actually succeeds may become the new persisted URL. */
+            if (!fetched && s_candidate_bridge_url[0] != '\0' &&
+                strcmp(s_candidate_bridge_url, active_url) != 0 &&
+                fetch_snapshot(s_candidate_bridge_url, &s_management_snapshot)) {
+                esp_err_t stored = device_config_store_bridge_url(s_candidate_bridge_url);
+                if (stored == ESP_OK) {
+                    ESP_LOGI(TAG, "bridge url promoted to %s", s_candidate_bridge_url);
+                } else {
+                    ESP_LOGW(TAG, "unable to persist bridge url: %s",
+                             esp_err_to_name(stored));
+                }
+                fetched = true;
+            }
+            if (fetched) {
                 if (s_state_lock != NULL) xSemaphoreTake(s_state_lock, portMAX_DELAY);
                 management_snapshot_apply(&s_work_snapshot, &s_management_snapshot);
                 if (!s_bridge_online) ESP_LOGI(TAG, "Bridge snapshot received");
@@ -420,6 +440,20 @@ void connectivity_start(void)
     ESP_LOGI(TAG, "Starting Wi-Fi station");
     wifi_start();
     ESP_LOGI(TAG, "Connectivity services started");
+}
+
+void connectivity_note_bridge_ipv4(const char *ipv4)
+{
+    if (ipv4 == NULL || ipv4[0] == '\0') return;
+    char rewritten[sizeof(s_candidate_bridge_url)];
+    if (!bridge_url_replace_ipv4_host(device_config_get()->bridge_url, ipv4,
+                                      rewritten, sizeof(rewritten))) {
+        /* A hostname or non-IPv4 URL keeps its own resolution path. */
+        return;
+    }
+    if (strcmp(rewritten, s_candidate_bridge_url) == 0) return;
+    strlcpy(s_candidate_bridge_url, rewritten, sizeof(s_candidate_bridge_url));
+    ESP_LOGI(TAG, "bridge address candidate: %s", rewritten);
 }
 
 void connectivity_request_refresh(void)

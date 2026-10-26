@@ -106,6 +106,23 @@ esp_err_t device_config_store_codex_token(const char *token)
     return error;
 }
 
+esp_err_t device_config_store_bridge_url(const char *url)
+{
+    if (url == NULL || url[0] == '\0') return ESP_ERR_INVALID_ARG;
+    const size_t length = strlen(url);
+    if (length >= sizeof(s_config.bridge_url)) return ESP_ERR_INVALID_SIZE;
+    nvs_handle_t handle;
+    esp_err_t error = nvs_open(NAMESPACE, NVS_READWRITE, &handle);
+    if (error != ESP_OK) return error;
+    error = nvs_set_str(handle, "bridge_url", url);
+    if (error == ESP_OK) error = nvs_commit(handle);
+    nvs_close(handle);
+    if (error == ESP_OK) {
+        strlcpy(s_config.bridge_url, url, sizeof(s_config.bridge_url));
+    }
+    return error;
+}
+
 esp_err_t device_config_clear_codex_token(void)
 {
     nvs_handle_t handle;

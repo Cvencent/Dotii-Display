@@ -512,6 +512,7 @@ void app_main(void)
     ESP_ERROR_CHECK(esp_event_loop_create_default());
     esp_netif_create_default_wifi_sta();
     UNITY_BEGIN();
+    unity_run_tests_by_tag("[bridge_url]", false);
     unity_run_tests_by_tag("[cbdp_codec]", false);
     unity_run_tests_by_tag("[cbdp_auth]", false);
     unity_run_tests_by_tag("[cbdp_pairing]", false);

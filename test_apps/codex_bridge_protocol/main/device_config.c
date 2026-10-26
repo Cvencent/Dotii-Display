@@ -42,6 +42,16 @@ esp_err_t device_config_store_codex_token(const char *token)
     return ESP_OK;
 }
 
+/* Production rewrites the persisted bridge URL when the CBDP datagram
+   reveals a new host address; the stub records it in memory. */
+esp_err_t device_config_store_bridge_url(const char *url)
+{
+    if (url == NULL || url[0] == '\0') return ESP_ERR_INVALID_ARG;
+    if (strlen(url) >= sizeof(s_config.bridge_url)) return ESP_ERR_INVALID_SIZE;
+    memcpy(s_config.bridge_url, url, strlen(url) + 1);
+    return ESP_OK;
+}
+
 esp_err_t device_config_clear_codex_token(void)
 {
     memset(s_config.codex_bridge_token, 0, sizeof(s_config.codex_bridge_token));
