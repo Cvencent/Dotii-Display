@@ -217,9 +217,12 @@ bool xiaozhi_client_wake_detection_allowed(const xiaozhi_client_t *client)
                              client->state == XIAOZHI_STATE_ACTIVATING)) return false;
     if (!client->connected && client->state != XIAOZHI_STATE_CONNECTING &&
         client->state != XIAOZHI_STATE_ERROR) return false;
-    /* Wake detection stays live during music playback so the user can
-       interrupt the song by calling the assistant. Speaking/thinking are
-       excluded because the assistant itself is talking to the user. */
+    /* Music owns the audio pipeline. MultiNet runs on the same core as the
+       decoder/codec and its continuous inference steals enough CPU that the
+       I2S DMA underruns and playback stutters. Pause it while a song plays;
+       the user can still stop music with the wake reply or the touch stop,
+       and wake detection resumes as soon as the song ends. */
+    if (client->state == XIAOZHI_STATE_MUSIC || client->music_task != NULL) return false;
     return !client->listening &&
            client->state != XIAOZHI_STATE_SPEAKING &&
            client->state != XIAOZHI_STATE_THINKING;
@@ -3159,7 +3162,9 @@ bool xiaozhi_client_start(xiaozhi_client_t *client)
         }
     }
     /* 8 KB covers the HTTP client and the TLS handshake; the response body
-       lives in a file-scope buffer so it costs only internal DRAM, not stack. */
+       lives in a file-scope buffer so it costs only internal DRAM, not stack.
+       The stack stays internal: the activation flow touches the model loader,
+       which freezes the caches and requires a cache-safe task stack. */
     TaskHandle_t activation = NULL;
     if (xTaskCreate(activation_task, "xz_act", 8192, client, 4, &activation) != pdPASS) {
         ESP_LOGE(TAG, "activation task create failed");

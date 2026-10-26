@@ -13,6 +13,7 @@
 #include "esp_log.h"
 #include "esp_sleep.h"
 #include "esp_system.h"
+#include <string.h>
 #include "nvs.h"
 #include "nvs_flash.h"
 #include "state_ui.h"
@@ -126,7 +127,8 @@ void app_main(void)
        NimBLE controller and host alive afterwards permanently removes the
        internal memory that the Xiaozhi TLS session and wake-word task need.
        Clearing provisioning from the device UI reboots into pairing mode. */
-    if (!device_config_get()->provisioned) {
+    const bool test_provisioned = strlen(CONFIG_STATE_DISPLAY_WIFI_SSID) > 0;
+    if (!device_config_get()->provisioned && !test_provisioned) {
         esp_err_t ble_error = ble_bridge_prepare();
         if (ble_error == ESP_OK) ble_error = ble_bridge_start();
         if (ble_error != ESP_OK) {

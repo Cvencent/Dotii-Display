@@ -2442,8 +2442,15 @@ void state_ui_start(QueueHandle_t snapshot_queue)
     s_xiaozhi_request_lock = xSemaphoreCreateMutex();
     if (s_xiaozhi_request_lock == NULL) {
         ESP_LOGE(TAG, "Unable to create the xiaozhi request lock");
-    } else if (xTaskCreate(xiaozhi_supervisor_task, "xz_sup", 4096, NULL, 5, NULL) != pdPASS) {
-        ESP_LOGE(TAG, "Unable to create the xiaozhi supervisor task");
+    } else {
+        TaskHandle_t supervisor = NULL;
+        /* The stack must stay internal: the model loader freezes the
+           caches while the supervisor is parked, and a PSRAM stack would
+           fail the cache-safe stack check. Retry on the next pass if the
+           pool is still fragmented at this point. */
+        if (xTaskCreate(xiaozhi_supervisor_task, "xz_sup", 4096, NULL, 5, &supervisor) != pdPASS) {
+            ESP_LOGE(TAG, "Unable to create the xiaozhi supervisor task");
+        }
     }
     build_main();
     build_plus_main();
