@@ -1463,12 +1463,15 @@ static const char *xiaozhi_touch_reaction_id(const lv_point_t *point)
     }
     s_xiaozhi_touch_last_ms = now;
 
-    /* A burst of taps anywhere turns into affection. Single touches pick the
-       reaction from the touched face region instead. */
-    if (s_xiaozhi_touch_streak >= 4) return "13"; /* love: petting burst */
-    if (s_xiaozhi_touch_streak >= 2) return "12"; /* excited: playing more */
+    const xiaozhi_touch_region_t region = xiaozhi_touch_region(point);
+    ESP_LOGI(TAG, "touch region=%d streak=%u", (int)region,
+             (unsigned)s_xiaozhi_touch_streak);
+    /* Every tap maps to its own reaction first. Streak escalation only kicks
+       in for repeated taps in the *same* face region, so petting one spot
+       grows affection without making all locations look identical. */
+    if (s_xiaozhi_touch_streak >= 4) return "13"; /* love: repeat petting */
 
-    switch (xiaozhi_touch_region(point)) {
+    switch (region) {
     case XIAOZHI_TOUCH_REGION_FOREHEAD: return "26"; /* greeting: pat head */
     case XIAOZHI_TOUCH_REGION_CHIN:     return "24"; /* tired: chin scratch */
     case XIAOZHI_TOUCH_REGION_LEFT:     return "14"; /* shy: left cheek */
