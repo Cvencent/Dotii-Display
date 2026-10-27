@@ -1280,7 +1280,10 @@ static void build_xiaozhi(void)
     lv_obj_set_size(face, SCREEN_SIZE, SCREEN_SIZE);
     lv_obj_center(face);
     lv_obj_remove_flag(face, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_remove_flag(face, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(face, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(face, xiaozhi_touch_event, LV_EVENT_SHORT_CLICKED, NULL);
+    lv_obj_add_event_cb(face, xiaozhi_touch_event, LV_EVENT_LONG_PRESSED, NULL);
+    lv_obj_add_event_cb(face, xiaozhi_touch_event, LV_EVENT_RELEASED, NULL);
     dotii_render_attach(&s_xiaozhi_render, face, SCREEN_SIZE);
     /* Keep the selected character palette visible. A previous pure-black body
        override made every character look identical on the Xiaozhi page. */
@@ -1902,6 +1905,8 @@ static void xiaozhi_touch_event(lv_event_t *event)
         }
         s_xiaozhi_touch_started = lv_tick_get();
         if (s_xiaozhi_touch_started == 0) s_xiaozhi_touch_started = 1;
+        ESP_LOGI(TAG, "face touch: x=%d y=%d",
+                 s_xiaozhi_touch_point.x, s_xiaozhi_touch_point.y);
         render_xiaozhi_expression();
     }
 }
