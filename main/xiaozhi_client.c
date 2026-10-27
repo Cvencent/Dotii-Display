@@ -927,6 +927,24 @@ static void mcp_reply_by_id(xiaozhi_client_t *client, const char *id_json,
     cJSON_Delete(envelope);
 }
 
+static void mcp_search_task(void *argument);
+static void music_search_dispatch(xiaozhi_client_t *client, const char *query)
+{
+    xiaozhi_client_cancel_pending_music(client);
+    ESP_LOGI(TAG, "music search dispatch: %s", query);
+    mcp_search_job_t *job = heap_caps_calloc(1, sizeof(*job),
+                                             MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (job == NULL) return;
+    job->client = client;
+    copy_bounded(job->query, sizeof(job->query), query);
+    job->id_json[0] = '\0';
+    if (xTaskCreatePinnedToCoreWithCaps(mcp_search_task, "mcp_search", 12288, job, 3,
+                                        NULL, 0,
+                                        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {
+        heap_caps_free(job);
+    }
+}
+
 static void mcp_search_task(void *argument)
 {
     mcp_search_job_t *job = (mcp_search_job_t *)argument;
@@ -1266,6 +1284,23 @@ bool xiaozhi_client_handle_text(xiaozhi_client_t *client, const char *json)
             client->user_text_revision++;
             copy_bounded(client->last_text, sizeof(client->last_text), text->valuestring);
             changed = true;
+            /* The cloud LLM sometimes chats without calling search_music, even
+               though the MCP tool description tells it to. Music commands are
+               stable enough to dispatch locally, so playback does not depend on
+               the model remembering the tool. */
+#if CONFIG_XIAOZHI_ENABLE
+            const char *song_text = text->valuestring;
+            const char *play_marker = strstr(song_text, "播放");
+            if (play_marker != NULL) {
+                song_text = play_marker + strlen("播放");
+                while (*song_text == ' ') ++song_text;
+                if (*song_text != '\0') {
+                    client->listening = false;
+                    client->state = XIAOZHI_STATE_THINKING;
+                    music_search_dispatch(client, song_text);
+                }
+            }
+#endif
         }
     } else if (type_value != NULL && strcmp(type_value, "llm") == 0) {
         const cJSON *text = cJSON_GetObjectItemCaseSensitive(root, "text");
