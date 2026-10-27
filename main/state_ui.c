@@ -1415,14 +1415,40 @@ static bool xiaozhi_touch_active(void)
            lv_tick_elaps(s_xiaozhi_touch_started) < XIAOZHI_TOUCH_HOLD_MS;
 }
 
-/* A touch is a social event: the face reacts to how the user plays with it,
-   not just to the fact that a touch happened. Short taps and repeated taps
-   grow into friendlier expressions. */
+/* A touch is a social event: the face reacts to *where* and *how often* the
+   user plays with it. Region hits and a fast tap burst both influence the
+   expression, so petting different parts of the face feels alive. */
 static uint8_t s_xiaozhi_touch_streak;
 static uint32_t s_xiaozhi_touch_last_ms;
+static lv_point_t s_xiaozhi_touch_point;
 #define XIAOZHI_TOUCH_STREAK_WINDOW_MS 1600u
 
-static const char *xiaozhi_touch_reaction_id(void)
+typedef enum {
+    XIAOZHI_TOUCH_REGION_CHEEK,
+    XIAOZHI_TOUCH_REGION_FOREHEAD,
+    XIAOZHI_TOUCH_REGION_CHIN,
+    XIAOZHI_TOUCH_REGION_LEFT,
+    XIAOZHI_TOUCH_REGION_RIGHT,
+    XIAOZHI_TOUCH_REGION_MAX,
+} xiaozhi_touch_region_t;
+
+static xiaozhi_touch_region_t xiaozhi_touch_region(const lv_point_t *point)
+{
+    if (point == NULL) return XIAOZHI_TOUCH_REGION_CHEEK;
+    /* The canvas is a 466x466 round face; use quadrant boundaries plus a
+       forehead/chin vertical split to map a tap onto a face feature. */
+    const int cx = SCREEN_SIZE / 2;
+    const int cy = SCREEN_SIZE / 2;
+    const int dx = point->x - cx;
+    const int dy = point->y - cy;
+    if (dy < -SCREEN_SIZE / 6) return XIAOZHI_TOUCH_REGION_FOREHEAD;
+    if (dy > SCREEN_SIZE / 6) return XIAOZHI_TOUCH_REGION_CHIN;
+    if (dx < -SCREEN_SIZE / 6) return XIAOZHI_TOUCH_REGION_LEFT;
+    if (dx > SCREEN_SIZE / 6) return XIAOZHI_TOUCH_REGION_RIGHT;
+    return XIAOZHI_TOUCH_REGION_CHEEK;
+}
+
+static const char *xiaozhi_touch_reaction_id(const lv_point_t *point)
 {
     if (!xiaozhi_touch_active()) return NULL;
     const uint32_t now = lv_tick_get();
@@ -1434,9 +1460,19 @@ static const char *xiaozhi_touch_reaction_id(void)
     }
     s_xiaozhi_touch_last_ms = now;
 
-    if (s_xiaozhi_touch_streak >= 4) return "13"; /* love after a petting burst */
-    if (s_xiaozhi_touch_streak >= 2) return "10"; /* happy on repeat touches */
-    return "14";                                   /* shy for the first tap */
+    /* A burst of taps anywhere turns into affection. Single touches pick the
+       reaction from the touched face region instead. */
+    if (s_xiaozhi_touch_streak >= 4) return "13"; /* love: petting burst */
+    if (s_xiaozhi_touch_streak >= 2) return "12"; /* excited: playing more */
+
+    switch (xiaozhi_touch_region(point)) {
+    case XIAOZHI_TOUCH_REGION_FOREHEAD: return "26"; /* greeting: pat head */
+    case XIAOZHI_TOUCH_REGION_CHIN:     return "24"; /* tired: chin scratch */
+    case XIAOZHI_TOUCH_REGION_LEFT:     return "14"; /* shy: left cheek */
+    case XIAOZHI_TOUCH_REGION_RIGHT:    return "20"; /* surprised: right cheek */
+    case XIAOZHI_TOUCH_REGION_CHEEK:
+    default:                            return "10"; /* happy: face center */
+    }
 }
 
 
@@ -1466,7 +1502,7 @@ static const char *touch_emotion_id(void)
     /* Long-press uses hold-to-talk and must not be mistaken for a face touch;
        only short taps map to an affection reaction. */
     if (s_xiaozhi_touch_listening) return NULL;
-    return xiaozhi_touch_reaction_id();
+    return xiaozhi_touch_reaction_id(&s_xiaozhi_touch_point);
 }
 
 static void xiaozhi_engine_ensure(void)
@@ -1858,6 +1894,12 @@ static void xiaozhi_touch_event(lv_event_t *event)
     } else if (code == LV_EVENT_RELEASED) {
         xiaozhi_listen_release();
     } else if (code == LV_EVENT_SHORT_CLICKED) {
+        lv_indev_t *input = lv_indev_active();
+        if (input != NULL) {
+            lv_indev_get_point(input, &s_xiaozhi_touch_point);
+        } else {
+            s_xiaozhi_touch_point = s_press_point;
+        }
         s_xiaozhi_touch_started = lv_tick_get();
         if (s_xiaozhi_touch_started == 0) s_xiaozhi_touch_started = 1;
         render_xiaozhi_expression();
