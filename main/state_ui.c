@@ -1438,12 +1438,14 @@ typedef enum {
 static xiaozhi_touch_region_t xiaozhi_touch_region(const lv_point_t *point)
 {
     if (point == NULL) return XIAOZHI_TOUCH_REGION_CHEEK;
-    /* The canvas is a 466x466 round face; use quadrant boundaries plus a
-       forehead/chin vertical split to map a tap onto a face feature. */
+    /* The canvas is a 466x466 round face mounted with a 90-degree panel
+       transform. LVGL reports coordinates after the transform, so map them
+       directly onto the displayed face. */
     const int cx = SCREEN_SIZE / 2;
     const int cy = SCREEN_SIZE / 2;
     const int dx = point->x - cx;
     const int dy = point->y - cy;
+    ESP_LOGI(TAG, "touch offset dx=%d dy=%d", dx, dy);
     if (dy < -SCREEN_SIZE / 6) return XIAOZHI_TOUCH_REGION_FOREHEAD;
     if (dy > SCREEN_SIZE / 6) return XIAOZHI_TOUCH_REGION_CHIN;
     if (dx < -SCREEN_SIZE / 6) return XIAOZHI_TOUCH_REGION_LEFT;
@@ -1891,7 +1893,15 @@ static void xiaozhi_listen_release(void)
 static void xiaozhi_touch_event(lv_event_t *event)
 {
     const lv_event_code_t code = lv_event_get_code(event);
-    if (code == LV_EVENT_PRESSED || code == LV_EVENT_LONG_PRESSED ||
+    if (code == LV_EVENT_PRESSED) {
+        xiaozhi_face_activity();
+        lv_indev_t *pressed = lv_indev_active();
+        if (pressed != NULL) {
+            lv_indev_get_point(pressed, &s_xiaozhi_touch_point);
+        } else {
+            s_xiaozhi_touch_point = s_press_point;
+        }
+    } else if (code == LV_EVENT_LONG_PRESSED ||
         code == LV_EVENT_RELEASED || code == LV_EVENT_SHORT_CLICKED) {
         xiaozhi_face_activity();
     }
@@ -1900,15 +1910,9 @@ static void xiaozhi_touch_event(lv_event_t *event)
     } else if (code == LV_EVENT_RELEASED) {
         xiaozhi_listen_release();
     } else if (code == LV_EVENT_SHORT_CLICKED) {
-        lv_indev_t *input = lv_indev_active();
-        if (input != NULL) {
-            lv_indev_get_point(input, &s_xiaozhi_touch_point);
-        } else {
-            s_xiaozhi_touch_point = s_press_point;
-        }
         s_xiaozhi_touch_started = lv_tick_get();
         if (s_xiaozhi_touch_started == 0) s_xiaozhi_touch_started = 1;
-        ESP_LOGI(TAG, "face touch: x=%d y=%d",
+        ESP_LOGI(TAG, "face touch raw: x=%d y=%d",
                  s_xiaozhi_touch_point.x, s_xiaozhi_touch_point.y);
         render_xiaozhi_expression();
     }
