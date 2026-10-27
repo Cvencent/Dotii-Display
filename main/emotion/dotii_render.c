@@ -28,6 +28,11 @@ bool dotii_render_attach(dotii_render_t *render, lv_obj_t *parent, int size)
         ESP_LOGE(TAG, "canvas allocation failed (%u bytes)", (unsigned)bytes);
         return false;
     }
+    /* PSRAM is reused between boots, so the freshly allocated canvas may
+       still hold arbitrary bytes. Clear it once: if any entry path ever
+       misses the full pre-render, the worst case becomes a black screen
+       instead of a snow pattern. */
+    memset(buf, 0, bytes);
 
     lv_obj_t *canvas = lv_canvas_create(parent);
     if (canvas == NULL) {

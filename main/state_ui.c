@@ -451,9 +451,19 @@ static void load_screen_commit(void *user_data)
     }
 
     if (s_pending_transition == TRANSITION_DIRECT) {
+        /* Rasterise the whole face into the PSRAM canvas *before* the screen
+           is first flushed. While the page is hidden the canvas is only
+           repainted inside the previous visible frame's dirty rectangle,
+           so the very first flush after switching from the Codex page would
+           otherwise show uninitialised or stale pixels as a snow flash.
+           The full raster costs a few tens of milliseconds, but showing a
+           correct frame late is better than showing garbage immediately. */
+        if (screen == s_xiaozhi_page) {
+            s_xiaozhi_face_needs_full = true;
+            render_xiaozhi_expression();
+        }
         lv_screen_load(screen);
         lv_obj_invalidate(screen);
-        if (screen == s_xiaozhi_page) s_xiaozhi_face_needs_full = true;
         lv_refr_now(lv_obj_get_display(screen));
         s_screen_load_pending = false;
         if (s_voice_wake_transition_pending && screen == s_xiaozhi_page) {
@@ -463,7 +473,12 @@ static void load_screen_commit(void *user_data)
         return;
     }
 
-    if (screen == s_xiaozhi_page) s_xiaozhi_face_needs_full = true;
+    if (screen == s_xiaozhi_page) {
+        /* Same reason as the direct branch: fill the canvas before the
+           first frame of the animation is submitted. */
+        s_xiaozhi_face_needs_full = true;
+        render_xiaozhi_expression();
+    }
     lv_screen_load_anim(screen,
                         s_pending_transition == TRANSITION_CONTROL_DOWN ? LV_SCREEN_LOAD_ANIM_OVER_BOTTOM :
                         s_pending_transition == TRANSITION_CONTROL_UP ? LV_SCREEN_LOAD_ANIM_OUT_TOP :
