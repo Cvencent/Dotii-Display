@@ -70,7 +70,14 @@ static const char *TAG = "xiaozhi";
 static bool xiaozhi_start_music(xiaozhi_client_t *client);
 /* Declared early: configure() may need to tear the recogniser down when the
    wake-word list changes. */
+#if CONFIG_XIAOZHI_ENABLE
 static void wake_word_stop(xiaozhi_client_t *client);
+#else
+static void wake_word_stop(xiaozhi_client_t *client)
+{
+    (void)client;
+}
+#endif
 static bool send_listen_mode(xiaozhi_client_t *client, bool start, const char *mode);
 static void send_text(xiaozhi_client_t *client, const char *text);
 
@@ -166,6 +173,16 @@ void xiaozhi_pcm_amplify(int16_t *samples, size_t sample_count, uint16_t multipl
     }
 }
 
+void xiaozhi_pcm_fade_out(int16_t *samples, size_t sample_count)
+{
+    if (samples == NULL || sample_count == 0) return;
+    const int32_t divisor = sample_count > 1 ? (int32_t)sample_count - 1 : 1;
+    for (size_t i = 0; i < sample_count; ++i) {
+        const int32_t remaining = (int32_t)sample_count - (int32_t)i - 1;
+        samples[i] = (int16_t)(((int32_t)samples[i] * remaining) / divisor);
+    }
+}
+
 void xiaozhi_pcm_downmix_stereo(int16_t *samples, size_t frame_count)
 {
     if (samples == NULL || frame_count == 0) return;
@@ -217,12 +234,9 @@ bool xiaozhi_client_wake_detection_allowed(const xiaozhi_client_t *client)
                              client->state == XIAOZHI_STATE_ACTIVATING)) return false;
     if (!client->connected && client->state != XIAOZHI_STATE_CONNECTING &&
         client->state != XIAOZHI_STATE_ERROR) return false;
-    /* Music owns the audio pipeline. MultiNet runs on the same core as the
-       decoder/codec and its continuous inference steals enough CPU that the
-       I2S DMA underruns and playback stutters. Pause it while a song plays;
-       the user can still stop music with the wake reply or the touch stop,
-       and wake detection resumes as soon as the song ends. */
-    if (client->state == XIAOZHI_STATE_MUSIC || client->music_task != NULL) return false;
+    /* Music remains interruptible. The detector switches to WakeNet while a
+       song is active so the expensive MultiNet pass cannot starve the decoder
+       and I2S DMA. */
     return !client->listening &&
            client->state != XIAOZHI_STATE_SPEAKING &&
            client->state != XIAOZHI_STATE_THINKING;
@@ -573,6 +587,7 @@ void xiaozhi_client_init(xiaozhi_client_t *client)
     atomic_init(&client->wake_reply_pending, false);
     atomic_init(&client->wake_reply_playing, false);
     atomic_init(&client->music_task_started, false);
+    atomic_init(&client->music_fade_requested, false);
     atomic_init(&client->task_chime_pending, false);
     atomic_init(&client->task_chime_failed, false);
     client->state = XIAOZHI_STATE_DISABLED;
@@ -1644,6 +1659,7 @@ static bool xiaozhi_start_music(xiaozhi_client_t *client)
         return false;
     }
     client->music_stop_requested = false;
+    atomic_store_explicit(&client->music_fade_requested, false, memory_order_release);
     atomic_store_explicit(&client->music_task_started, false, memory_order_release);
     TaskHandle_t handle = NULL;
     /* Pin to core 0. The LVGL worker renders the face on core 1 and each
@@ -1742,6 +1758,14 @@ static bool music_emit(xiaozhi_client_t *client, const int16_t *samples, size_t 
         }
     }
     return true;
+}
+
+static bool music_fade_out_and_flush(xiaozhi_client_t *client)
+{
+    if (s_write_length > 0) {
+        xiaozhi_pcm_fade_out(s_write_buf, s_write_length);
+    }
+    return music_flush_codec(client);
 }
 
 static bool music_write_pcm(xiaozhi_client_t *client,
@@ -1866,13 +1890,13 @@ static void music_task(void *argument)
     int resampler_rate = 0;
     uint8_t *input = NULL;
     uint8_t *output = NULL;
-    /* Four HTTP reads worth of headroom: with only one read buffered, a
-       network hiccup drained the I2S DMA and produced the slow, clicking
-       playback. */
-    size_t input_capacity = 32768;
+    /* Keep several seconds of compressed input buffered. The 80 ms internal
+       DMA ring is the hard real-time margin; this larger PSRAM staging area
+       absorbs Wi-Fi and decoder jitter between codec writes. */
+    size_t input_capacity = 65536;
     size_t input_length = 0;
     size_t input_offset = 0;
-    size_t output_capacity = 32768;
+    size_t output_capacity = 65536;
     bool eos = false;
     bool success = false;
     /* Bytes of PCM actually handed to the speaker; used to decide whether a
@@ -1887,6 +1911,9 @@ static void music_task(void *argument)
     input = heap_caps_malloc(input_capacity, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     output = heap_caps_malloc(output_capacity, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (input == NULL || output == NULL) goto cleanup;
+    ESP_LOGI(TAG, "music buffers: input=%u output=%u psram_free=%u",
+             (unsigned)input_capacity, (unsigned)output_capacity,
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
 
     const device_config_values_t *mcfg = device_config_get();
     /* Keep this read buffer small: esp_http_client allocates it from internal
@@ -1894,7 +1921,7 @@ static void music_task(void *argument)
        for audio lives in PSRAM (input_capacity below). */
     esp_http_client_config_t http_config = {
         .url = url,
-        .timeout_ms = 5000,
+        .timeout_ms = 1500,
         .buffer_size = 2048,
         .crt_bundle_attach = esp_crt_bundle_attach,
     };
@@ -1973,6 +2000,13 @@ static void music_task(void *argument)
     int read_errors = 0;
     uint32_t stat_bytes_in = 0, stat_pcm_out = 0, stat_since = now_ms();
     while (client->running && !client->music_stop_requested) {
+        if (atomic_exchange_explicit(&client->music_fade_requested, false,
+                                     memory_order_acq_rel)) {
+            ESP_LOGI(TAG, "music fade-out requested");
+            (void)music_fade_out_and_flush(client);
+            client->music_stop_requested = true;
+            break;
+        }
         /* Read only when the buffer is half empty. Refilling on every pass
            interleaved a blocking network read with every decode step. */
         if (input_length < input_capacity / 2 && !eos) {
@@ -2297,17 +2331,14 @@ static bool wake_word_start(xiaozhi_client_t *client)
         if (models != NULL) esp_srmodel_deinit(models);
         return false;
     }
-    /* Run both recognisers on the same microphone stream: WakeNet keeps the
-       built-in phrase dependable, MultiNet adds the user's own words. Either
-       one firing wakes the device, so a poor custom match can never take the
-       default phrase away. */
+    /* Load one recogniser engine at a time. MultiNet is the normal idle engine
+       because it supports arbitrary user phrases; the microphone task swaps to
+       WakeNet only while music plays to keep inference cost low. */
     client->wake_models = models;
     const bool mn_ok = wake_word_start_multinet(client, models, wake_words);
-    if (!mn_ok) {
-        ESP_LOGW(TAG, "MultiNet unavailable; WakeNet only");
-    }
     bool wn_ok = false;
     if (!mn_ok) {
+        ESP_LOGW(TAG, "MultiNet unavailable; WakeNet only");
         wn_ok = wake_word_start_wakenet(client, models);
         if (!wn_ok) ESP_LOGW(TAG, "WakeNet unavailable");
     }
@@ -2321,29 +2352,97 @@ static bool wake_word_start(xiaozhi_client_t *client)
     return true;
 }
 
-static void wake_word_stop(xiaozhi_client_t *client)
+static void wake_engine_drop_multinet(xiaozhi_client_t *client)
 {
-    if (client == NULL) return;
-    /* model_destroy() also releases the command root bound through
-       esp_mn_commands_alloc(). Calling esp_mn_commands_free() here would clear
-       it twice and leaves the command API uninitialized during model restart. */
     if (client->wake_data != NULL && client->wake_iface != NULL) {
         const esp_mn_iface_t *iface = (const esp_mn_iface_t *)client->wake_iface;
+        /* Clear the global command table first. It keeps pointers into the
+           model; destroying the model first leaves a dangling root and the
+           next esp_mn_commands_alloc() walks freed memory. */
+        (void)esp_mn_commands_free();
         iface->destroy((model_iface_data_t *)client->wake_data);
     }
+    client->wake_data = NULL;
+    client->wake_iface = NULL;
+    client->wake_multinet = false;
+}
+
+static void wake_engine_drop_wakenet(xiaozhi_client_t *client)
+{
     if (client->wake_wn_data != NULL && client->wake_wn_iface != NULL) {
         const esp_wn_iface_t *iface = (const esp_wn_iface_t *)client->wake_wn_iface;
         iface->destroy((model_iface_data_t *)client->wake_wn_data);
     }
-    if (client->wake_models != NULL) esp_srmodel_deinit((srmodel_list_t *)client->wake_models);
-    client->wake_data = NULL;
-    client->wake_iface = NULL;
     client->wake_wn_data = NULL;
     client->wake_wn_iface = NULL;
+    client->wake_wn_ready = false;
+}
+
+static void wake_word_stop(xiaozhi_client_t *client)
+{
+    if (client == NULL) return;
+    wake_engine_drop_multinet(client);
+    wake_engine_drop_wakenet(client);
+    if (client->wake_models != NULL) esp_srmodel_deinit((srmodel_list_t *)client->wake_models);
     client->wake_models = NULL;
     client->wake_ready = false;
-    client->wake_multinet = false;
-    client->wake_wn_ready = false;
+}
+
+static void wake_words_current(xiaozhi_client_t *client, char *out, size_t capacity)
+{
+    strlcpy(out, client->config.wake_words, capacity);
+    if (out[0] == '\0') load_wake_words(out, capacity);
+}
+
+static bool wake_engine_use_wakenet(xiaozhi_client_t *client)
+{
+    if (client->wake_wn_ready) return true;
+    wake_engine_drop_multinet(client);
+    client->wake_ready = false;
+
+    srmodel_list_t *models = (srmodel_list_t *)client->wake_models;
+    if (models != NULL && wake_word_start_wakenet(client, models)) {
+        client->wake_ready = true;
+        client->wake_music_fallback = false;
+        ESP_LOGI(TAG, "wake engine switched to WakeNet for music");
+        return true;
+    }
+
+    /* If the low-cost model cannot start, restore MultiNet so voice wake
+       remains functional even though it uses more CPU. */
+    char wake_words[XIAOZHI_WAKE_WORD_LIST_BYTES];
+    wake_words_current(client, wake_words, sizeof(wake_words));
+    const bool mn_ok = models != NULL &&
+        wake_word_start_multinet(client, models, wake_words);
+    client->wake_ready = mn_ok;
+    client->wake_music_fallback = true;
+    ESP_LOGW(TAG, "WakeNet switch failed; music keeps MultiNet wake fallback");
+    return mn_ok;
+}
+
+static bool wake_engine_use_multinet(xiaozhi_client_t *client)
+{
+    if (client->wake_multinet) {
+        client->wake_music_fallback = false;
+        return true;
+    }
+    wake_engine_drop_wakenet(client);
+    client->wake_ready = false;
+
+    char wake_words[XIAOZHI_WAKE_WORD_LIST_BYTES];
+    wake_words_current(client, wake_words, sizeof(wake_words));
+    srmodel_list_t *models = (srmodel_list_t *)client->wake_models;
+    if (models != NULL && wake_word_start_multinet(client, models, wake_words)) {
+        client->wake_ready = true;
+        client->wake_music_fallback = false;
+        ESP_LOGI(TAG, "wake engine restored to MultiNet");
+        return true;
+    }
+
+    const bool wn_ok = models != NULL && wake_word_start_wakenet(client, models);
+    client->wake_ready = wn_ok;
+    ESP_LOGW(TAG, "MultiNet restore failed; keeping WakeNet");
+    return wn_ok;
 }
 /* Short two-tone completion chime, synthesised at the codec output rate so
    no extra audio asset is needed. */
@@ -2684,6 +2783,20 @@ static bool play_wake_reply(xiaozhi_client_t *client)
     }
     return ok;
 }
+static int16_t *playback_pcm_reserve(int16_t **buffer, size_t *capacity,
+                                   size_t samples)
+{
+    if (samples == 0) return NULL;
+    if (*capacity < samples) {
+        int16_t *grown = heap_caps_realloc(*buffer, samples * sizeof(int16_t),
+                                           MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (grown == NULL) return NULL;
+        *buffer = grown;
+        *capacity = samples;
+    }
+    return *buffer;
+}
+
 static void playback_task(void *argument)
 {
     xiaozhi_client_t *client = (xiaozhi_client_t *)argument;
@@ -2700,18 +2813,25 @@ static void playback_task(void *argument)
 
         const bool wake_reply_pending =
             atomic_load_explicit(&client->wake_reply_pending, memory_order_acquire);
-        if (wake_reply_pending && audio_init(client) &&
+        if (wake_reply_pending && client->music_task == NULL && audio_init(client) &&
             xiaozhi_client_take_wake_reply(client)) {
             (void)play_wake_reply(client);
         }
 
         audio_packet_t packet = {0};
-        const TickType_t queue_wait = wake_reply_pending ? pdMS_TO_TICKS(20) : pdMS_TO_TICKS(500);
+        /* Keep this short so a wake reply deferred by music starts promptly
+           after the music worker retires. */
+        const TickType_t queue_wait = pdMS_TO_TICKS(20);
         if (xQueueReceive(s_audio_queue, &packet, queue_wait) != pdTRUE) continue;
         if (packet.data == NULL) continue;
         if (audio_init(client) && ensure_decoder(client, client->server_sample_rate)) {
+            static int16_t *s_play_pcm;
+            static size_t s_play_pcm_capacity;
+            static int16_t *s_play_resampled;
+            static size_t s_play_resampled_capacity;
             int frame_samples = client->server_sample_rate * XIAOZHI_FRAME_MS / 1000;
-            int16_t *pcm = malloc((size_t)frame_samples * sizeof(int16_t));
+            int16_t *pcm = playback_pcm_reserve(&s_play_pcm, &s_play_pcm_capacity,
+                                                (size_t)frame_samples);
             if (pcm != NULL) {
                 esp_audio_dec_in_raw_t raw = {
                     .buffer = packet.data,
@@ -2731,7 +2851,9 @@ static void playback_task(void *argument)
                         uint32_t max_samples = 0;
                         esp_ae_rate_cvt_get_max_out_sample_num(client->output_resampler,
                                                                (uint32_t)decoded_samples, &max_samples);
-                        int16_t *resampled = malloc((size_t)max_samples * sizeof(int16_t));
+                        int16_t *resampled = playback_pcm_reserve(
+                            &s_play_resampled, &s_play_resampled_capacity,
+                            (size_t)max_samples);
                         if (resampled != NULL) {
                             uint32_t produced = max_samples;
                             if (esp_ae_rate_cvt_process(client->output_resampler, (esp_ae_sample_t)pcm,
@@ -2740,13 +2862,11 @@ static void playback_task(void *argument)
                                 esp_codec_dev_write((esp_codec_dev_handle_t)client->speaker, resampled,
                                                     (int)(produced * sizeof(int16_t)));
                             }
-                            free(resampled);
                         }
                     } else {
                         esp_codec_dev_write((esp_codec_dev_handle_t)client->speaker, pcm, out.decoded_size);
                     }
                 }
-                free(pcm);
             }
         }
         free(packet.data);
@@ -2776,6 +2896,22 @@ static void microphone_task(void *argument)
         if (!audio_init(client)) {
             vTaskDelay(pdMS_TO_TICKS(20));
             continue;
+        }
+        /* The worker starts before the supervisor finishes loading the model
+           list. Do not touch recogniser state until wake_word_start() has
+           published wake_models. */
+        if (client->wake_ready && client->wake_models != NULL) {
+            const bool music_active = client->state == XIAOZHI_STATE_MUSIC ||
+                                      client->music_task != NULL;
+            if (music_active && !client->wake_wn_ready &&
+                !client->wake_music_fallback) {
+                (void)wake_engine_use_wakenet(client);
+            } else if (!music_active && !client->listening &&
+                       client->state != XIAOZHI_STATE_SPEAKING &&
+                       client->state != XIAOZHI_STATE_THINKING &&
+                       !client->wake_multinet) {
+                (void)wake_engine_use_multinet(client);
+            }
         }
         /* Do not upload the device's own wake acknowledgement as speech. */
         if (atomic_load_explicit(&client->wake_reply_pending, memory_order_acquire) ||
@@ -2966,13 +3102,37 @@ bool xiaozhi_client_send_abort(xiaozhi_client_t *client)
     return ok;
 }
 
+static int16_t *s_wake_chunk;
+static size_t s_wake_chunk_capacity;
+static int16_t *s_wake_source;
+static size_t s_wake_source_capacity;
+
+static bool wake_buffers_reserve(size_t source_samples, size_t chunk_samples)
+{
+    if (s_wake_source_capacity < source_samples) {
+        int16_t *grown = heap_caps_realloc(s_wake_source,
+                                           source_samples * 2 * sizeof(int16_t),
+                                           MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (grown == NULL) return false;
+        s_wake_source = grown;
+        s_wake_source_capacity = source_samples;
+    }
+    if (s_wake_chunk_capacity < chunk_samples) {
+        int16_t *grown = heap_caps_realloc(s_wake_chunk,
+                                           chunk_samples * sizeof(int16_t),
+                                           MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (grown == NULL) return false;
+        s_wake_chunk = grown;
+        s_wake_chunk_capacity = chunk_samples;
+    }
+    return true;
+}
+
 static void xiaozhi_detect_wake_word(xiaozhi_client_t *client)
 {
     if (!xiaozhi_client_wake_detection_allowed(client)) return;
     if (!audio_init(client)) return;
 
-    /* Both recognisers run off the same chunk. MultiNet is preferred for the
-       chunk size; WakeNet uses the same 512-sample window at 16 kHz. */
     const esp_wn_iface_t *wn_iface = NULL;
     const esp_mn_iface_t *mn_iface = NULL;
     model_iface_data_t *mn_data = (model_iface_data_t *)client->wake_data;
@@ -2983,6 +3143,8 @@ static void xiaozhi_detect_wake_word(xiaozhi_client_t *client)
     if (client->wake_wn_ready && wn_data != NULL) {
         wn_iface = (const esp_wn_iface_t *)client->wake_wn_iface;
     }
+
+
     if (mn_iface == NULL && wn_iface == NULL) return;
     int target_samples = 0;
     if (mn_iface != NULL) {
@@ -3002,31 +3164,28 @@ static void xiaozhi_detect_wake_word(xiaozhi_client_t *client)
         max_output_samples < (uint32_t)target_samples) {
         return;
     }
-    int16_t *chunk = malloc((size_t)max_output_samples * sizeof(int16_t));
-    int16_t *source = malloc((size_t)source_samples * 2 * sizeof(int16_t));
-    if (chunk == NULL || source == NULL) {
-        free(chunk);
-        free(source);
+    if (!wake_buffers_reserve((size_t)source_samples,
+                              (size_t)max_output_samples)) {
+        ESP_LOGW(TAG, "wake buffers unavailable");
         return;
     }
 
     const int read = esp_codec_dev_read((esp_codec_dev_handle_t)client->microphone,
-                                        source,
+                                        s_wake_source,
                                         source_samples * 2 * (int)sizeof(int16_t));
     if (read == ESP_CODEC_DEV_OK) {
-        xiaozhi_pcm_downmix_stereo(source, (size_t)source_samples);
-        xiaozhi_pcm_amplify(source, (size_t)source_samples, XIAOZHI_INPUT_GAIN);
+        xiaozhi_pcm_downmix_stereo(s_wake_source, (size_t)source_samples);
+        xiaozhi_pcm_amplify(s_wake_source, (size_t)source_samples, XIAOZHI_INPUT_GAIN);
         uint32_t output_samples = max_output_samples;
         if (esp_ae_rate_cvt_process(client->input_resampler,
-                                    (esp_ae_sample_t)source, (uint32_t)source_samples,
-                                    (esp_ae_sample_t)chunk,
+                                    (esp_ae_sample_t)s_wake_source,
+                                    (uint32_t)source_samples,
+                                    (esp_ae_sample_t)s_wake_chunk,
                                     &output_samples) == ESP_AE_ERR_OK &&
             output_samples >= (uint32_t)target_samples) {
             bool detected = false;
-            /* Both recognisers see the same samples. WakeNet is the dependable
-               built-in phrase; MultiNet adds whatever the user typed. */
-            if (client->wake_multinet && mn_iface != NULL) {
-                const esp_mn_state_t state = mn_iface->detect(mn_data, chunk);
+            if (mn_iface != NULL) {
+                const esp_mn_state_t state = mn_iface->detect(mn_data, s_wake_chunk);
                 if (state == ESP_MN_STATE_DETECTED) {
                     esp_mn_results_t *results = mn_iface->get_results(mn_data);
                     if (results != NULL && results->num > 0) {
@@ -3041,22 +3200,38 @@ static void xiaozhi_detect_wake_word(xiaozhi_client_t *client)
                 }
             }
             if (wn_iface != NULL) {
-                const wakenet_state_t wn_state = wn_iface->detect(wn_data, chunk);
+                const wakenet_state_t wn_state = wn_iface->detect(wn_data, s_wake_chunk);
                 if (wn_state > 0) {
                     detected = true;
                     ESP_LOGI(TAG, "wake word detected: 你好小智");
                 }
             }
             if (detected) {
-                /* Interrupting a song: stop local playback (and any queued
-                   song), then talk. */
-                if (client->state == XIAOZHI_STATE_MUSIC || client->music_task != NULL) {
-                    client->music_stop_requested = true;
+                const bool interrupting_music =
+                    client->state == XIAOZHI_STATE_MUSIC || client->music_task != NULL;
+                if (interrupting_music) {
                     client->pending_music_ready = false;
-                    client->state = XIAOZHI_STATE_IDLE;
-                    ESP_LOGI(TAG, "wake during music: playback stopped");
+                    atomic_store_explicit(&client->music_fade_requested, true,
+                                          memory_order_release);
+                    esp_http_client_handle_t music_http =
+                        (esp_http_client_handle_t)client->music_http;
+                    if (music_http != NULL) esp_http_client_close(music_http);
+                    ESP_LOGI(TAG, "wake during music: fading out playback");
                 }
                 xiaozhi_client_notify_wake_word(client);
+                if (interrupting_music) {
+                    const uint32_t deadline = now_ms() + 250u;
+                    while (client->music_task != NULL &&
+                           (int32_t)(deadline - now_ms()) > 0) {
+                        vTaskDelay(pdMS_TO_TICKS(5));
+                    }
+                    if (client->music_task != NULL) {
+                        client->music_stop_requested = true;
+                        ESP_LOGW(TAG, "music worker did not retire before listen");
+                    } else {
+                        ESP_LOGI(TAG, "music stopped before conversation");
+                    }
+                }
                 if (client->connected && client->session_id[0] != '\0' &&
                     send_listen_mode(client, true, "auto")) {
                     ESP_LOGI(TAG, "auto listening started");
@@ -3067,8 +3242,6 @@ static void xiaozhi_detect_wake_word(xiaozhi_client_t *client)
             }
         }
     }
-    free(chunk);
-    free(source);
 }
 
 static void xiaozhi_start_wake_task(xiaozhi_client_t *client)

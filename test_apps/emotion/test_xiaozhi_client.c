@@ -253,6 +253,19 @@ static void test_pcm_stereo_downmix_keeps_in_phase_speech(void)
     assert(samples[3] == INT16_MIN);
 }
 
+static void test_pcm_fade_out_reaches_silence(void)
+{
+    int16_t samples[] = { 900, -900, 600, -600 };
+    xiaozhi_pcm_fade_out(samples, 4);
+    assert(samples[0] == 900);
+    assert(samples[1] == -600);
+    assert(samples[2] == 200);
+    assert(samples[3] == 0);
+
+    int16_t untouched = 321;
+    xiaozhi_pcm_fade_out(&untouched, 1);
+    assert(untouched == 0);
+}
 static void test_wake_event_is_consumed_once(void)
 {
     xiaozhi_client_t client;
@@ -480,6 +493,7 @@ int main(void)
     test_hello_and_bad_input();
     test_output_volume_clamps_to_supported_range();
     test_pcm_amplifier_scales_and_saturates();
+    test_pcm_fade_out_reaches_silence();
     test_pcm_stereo_downmix_keeps_in_phase_speech();
     test_wake_event_is_consumed_once();
     test_wake_reply_is_consumed_once();

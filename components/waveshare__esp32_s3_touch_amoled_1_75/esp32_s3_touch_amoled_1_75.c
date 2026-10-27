@@ -740,13 +740,11 @@ esp_err_t bsp_audio_init(const i2s_std_config_t *i2s_config)
        frames each) no longer fits once the Xiaozhi client and its websocket
        are running, which made every audio init fail. Four descriptors still
        give the pair about 40 ms of slack at 24 kHz. */
-    /* 6 x 240 frames = 60 ms at 24 kHz mono. Measured playback showed the
-       decoder/writer loop stalling 24-78 ms between codec writes (network read
-       plus decode), so the old 40 ms ring ran dry and the music stuttered.
-       The ring must cover that gap. NOTE: these descriptors come from internal
-       DMA RAM, which the TLS handshake also needs - verify free heap after any
-       change here. */
-    chan_cfg.dma_desc_num = 6;
+    /* 8 x 240 frames = 80 ms at 24 kHz mono. This ring is allocated from
+       internal DMA RAM by the I2S driver, never from PSRAM. The extra depth
+       covers short decoder/network stalls while WakeNet remains active during
+       music; keep TLS heartbeats in mind when changing it again. */
+    chan_cfg.dma_desc_num = 8;
     chan_cfg.dma_frame_num = 240;
     BSP_ERROR_CHECK_RETURN_ERR(i2s_new_channel(&chan_cfg, &i2s_tx_chan, &i2s_rx_chan));
 

@@ -114,11 +114,13 @@ typedef struct {
     volatile bool listening;
     volatile bool wake_resume_pending;
     volatile bool music_stop_requested;
+    atomic_bool music_fade_requested;
     bool wake_ready;
     /* True when the active recogniser is MultiNet (user-defined words) rather
        than the built-in WakeNet phrase; the detect API differs. */
     bool wake_multinet;
     bool wake_wn_ready;
+    bool wake_music_fallback;
     xiaozhi_config_t config;
 } xiaozhi_client_t;
 
@@ -200,6 +202,9 @@ bool xiaozhi_client_take_wake_resume(xiaozhi_client_t *client);
 /* Apply a fixed linear gain in place. Full-scale samples are clipped to the
    signed 16-bit range so the same block can feed wake word and uplink Opus. */
 void xiaozhi_pcm_amplify(int16_t *samples, size_t sample_count, uint16_t multiplier);
+
+/* Fade a mono PCM block to silence for an interruptible music stop. */
+void xiaozhi_pcm_fade_out(int16_t *samples, size_t sample_count);
 
 /* Average interleaved left/right microphone samples in place. */
 void xiaozhi_pcm_downmix_stereo(int16_t *samples, size_t frame_count);
