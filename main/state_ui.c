@@ -1415,6 +1415,30 @@ static bool xiaozhi_touch_active(void)
            lv_tick_elaps(s_xiaozhi_touch_started) < XIAOZHI_TOUCH_HOLD_MS;
 }
 
+/* A touch is a social event: the face reacts to how the user plays with it,
+   not just to the fact that a touch happened. Short taps and repeated taps
+   grow into friendlier expressions. */
+static uint8_t s_xiaozhi_touch_streak;
+static uint32_t s_xiaozhi_touch_last_ms;
+#define XIAOZHI_TOUCH_STREAK_WINDOW_MS 1600u
+
+static const char *xiaozhi_touch_reaction_id(void)
+{
+    if (!xiaozhi_touch_active()) return NULL;
+    const uint32_t now = lv_tick_get();
+    if (s_xiaozhi_touch_last_ms != 0 &&
+        (uint32_t)(now - s_xiaozhi_touch_last_ms) <= XIAOZHI_TOUCH_STREAK_WINDOW_MS) {
+        if (s_xiaozhi_touch_streak < 255) s_xiaozhi_touch_streak++;
+    } else {
+        s_xiaozhi_touch_streak = 1;
+    }
+    s_xiaozhi_touch_last_ms = now;
+
+    if (s_xiaozhi_touch_streak >= 4) return "13"; /* love after a petting burst */
+    if (s_xiaozhi_touch_streak >= 2) return "10"; /* happy on repeat touches */
+    return "14";                                   /* shy for the first tap */
+}
+
 
 
 
@@ -1439,10 +1463,10 @@ static const char *business_emotion_id(void)
 
 static const char *touch_emotion_id(void)
 {
-    if (!xiaozhi_touch_active()) {
-        return NULL;
-    }
-    return "26"; /* greeting 打招呼 */
+    /* Long-press uses hold-to-talk and must not be mistaken for a face touch;
+       only short taps map to an affection reaction. */
+    if (s_xiaozhi_touch_listening) return NULL;
+    return xiaozhi_touch_reaction_id();
 }
 
 static void xiaozhi_engine_ensure(void)
