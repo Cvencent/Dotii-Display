@@ -2277,7 +2277,11 @@ static bool wake_word_start_multinet(xiaozhi_client_t *client, srmodel_list_t *m
        wakes it" symptom. */
     /* The threshold must be set before the command list is committed; the
        official implementation does it in this order. */
-    (void)iface->set_det_threshold(data, 0.20f);
+    /* MultiNet is a general command-word engine, so it produces lower
+       confidence for short wake phrases than a purpose-built WakeNet model.
+       0.10 balances recall against false triggers; 0.20 was too aggressive and
+       required several attempts before "你好小智" was accepted. */
+    (void)iface->set_det_threshold(data, 0.10f);
     if (esp_mn_commands_alloc(iface, data) != ESP_OK) {
         ESP_LOGE(TAG, "MultiNet command list allocation failed");
         iface->destroy(data);
@@ -2302,7 +2306,7 @@ static bool wake_word_start_multinet(xiaozhi_client_t *client, srmodel_list_t *m
         ESP_LOGW(TAG, "MultiNet dropped %d unusable wake word(s)", errors->num);
     }
     esp_mn_commands_print();
-    ESP_LOGI(TAG, "MultiNet ready: rate=%d chunk=%d threshold=0.20",
+    ESP_LOGI(TAG, "MultiNet ready: rate=%d chunk=%d threshold=0.10",
              iface->get_samp_rate(data), iface->get_samp_chunksize(data));
     if (iface->print_active_speech_commands != NULL) {
         iface->print_active_speech_commands(data);
