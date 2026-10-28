@@ -940,6 +940,10 @@ static void mcp_reply_by_id(xiaozhi_client_t *client, const char *id_json,
 static void mcp_search_task(void *argument);
 static void mcp_playlist_task(void *argument);
 
+/* Guards against the local STT fallback and the cloud MCP tool call firing at
+   the same time and opening two concurrent TLS requests. */
+static atomic_bool s_playlist_request_busy;
+
 /* Detects playlist-style requests ("播放我喜欢的音乐", "放我的歌单") and returns
    the playlist name the user asked for, or NULL when this is a normal song
    search/normal chat. */
@@ -959,21 +963,41 @@ static const char *music_playlist_query(const char *text)
     return NULL;
 }
 
-static void music_playlist_dispatch(xiaozhi_client_t *client, const char *playlist)
+static bool music_playlist_dispatch_id(xiaozhi_client_t *client, const char *playlist,
+                                       const char *id_json)
 {
+    /* The cloud model usually calls the play_playlist tool right after the STT
+       text arrives, so the local fallback and the tool call raced and started
+       two concurrent TLS requests. One in-flight playlist request is enough. */
+    if (atomic_exchange_explicit(&s_playlist_request_busy, true,
+                                 memory_order_acq_rel)) {
+        ESP_LOGI(TAG, "playlist request already in flight; ignoring duplicate");
+        return false;
+    }
     xiaozhi_client_cancel_pending_music(client);
     ESP_LOGI(TAG, "music playlist dispatch: %s", playlist);
     mcp_search_job_t *job = heap_caps_calloc(1, sizeof(*job),
                                              MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (job == NULL) return;
+    if (job == NULL) {
+        atomic_store_explicit(&s_playlist_request_busy, false, memory_order_release);
+        return false;
+    }
     job->client = client;
     copy_bounded(job->query, sizeof(job->query), playlist);
-    job->id_json[0] = '\0';
+    copy_bounded(job->id_json, sizeof(job->id_json), id_json != NULL ? id_json : "");
     if (xTaskCreatePinnedToCoreWithCaps(mcp_playlist_task, "mcp_list", 10240, job, 3,
                                         NULL, 0,
                                         MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {
         heap_caps_free(job);
+        atomic_store_explicit(&s_playlist_request_busy, false, memory_order_release);
+        return false;
     }
+    return true;
+}
+
+static void music_playlist_dispatch(xiaozhi_client_t *client, const char *playlist)
+{
+    (void)music_playlist_dispatch_id(client, playlist, NULL);
 }
 
 static void music_search_dispatch(xiaozhi_client_t *client, const char *query)
@@ -1010,6 +1034,7 @@ static void mcp_playlist_task(void *argument)
         mcp_reply_by_id(job->client, job->id_json,
             "无法读取歌单。请确认 QQ 音乐已在管理中心登录。", true);
         heap_caps_free(job);
+        atomic_store_explicit(&s_playlist_request_busy, false, memory_order_release);
         vTaskDelete(NULL);
         return;
     }
@@ -1026,6 +1051,7 @@ static void mcp_playlist_task(void *argument)
         mcp_reply_by_id(job->client, job->id_json,
             "歌单里没有可播放的歌曲。", true);
         heap_caps_free(job);
+        atomic_store_explicit(&s_playlist_request_busy, false, memory_order_release);
         vTaskDelete(NULL);
         return;
     }
@@ -1036,6 +1062,7 @@ static void mcp_playlist_task(void *argument)
         mcp_reply_by_id(job->client, job->id_json,
             "歌单里的歌曲暂时无法播放。", true);
         heap_caps_free(job);
+        atomic_store_explicit(&s_playlist_request_busy, false, memory_order_release);
         vTaskDelete(NULL);
         return;
     }
@@ -1057,6 +1084,7 @@ static void mcp_playlist_task(void *argument)
              label_name, songs[chosen].title);
     mcp_reply_by_id(job->client, job->id_json, reply, false);
     heap_caps_free(job);
+    atomic_store_explicit(&s_playlist_request_busy, false, memory_order_release);
     vTaskDelete(NULL);
 }
 
@@ -1205,29 +1233,20 @@ static void mcp_tool_call(xiaozhi_client_t *client, cJSON *root)
     if (strcmp(name->valuestring, "play_playlist") == 0) {
         const char *wanted = cJSON_IsString(query) && query->valuestring[0] != '\0'
             ? query->valuestring : "我喜欢";
-        xiaozhi_client_cancel_pending_music(client);
         ESP_LOGI(TAG, "mcp play_playlist=%s (async)", wanted);
-        mcp_search_job_t *job = heap_caps_calloc(1, sizeof(*job),
-                                                 MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        if (job == NULL) {
-            mcp_reply_tool_text(client, root, "out of memory", true);
-            return;
-        }
-        job->client = client;
-        copy_bounded(job->query, sizeof(job->query), wanted);
+        char id_json[64] = {0};
         const cJSON *id = cJSON_GetObjectItemCaseSensitive(root, "id");
         if (id != NULL) {
             char *id_text = cJSON_PrintUnformatted((cJSON *)id);
             if (id_text != NULL) {
-                copy_bounded(job->id_json, sizeof(job->id_json), id_text);
+                copy_bounded(id_json, sizeof(id_json), id_text);
                 cJSON_free(id_text);
             }
         }
-        if (xTaskCreatePinnedToCoreWithCaps(
-                mcp_playlist_task, "mcp_list", 10240, job, 3, NULL, 0,
-                MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {
-            heap_caps_free(job);
-            mcp_reply_tool_text(client, root, "playlist task failed", true);
+        if (!music_playlist_dispatch_id(client, wanted, id_json)) {
+            /* The local STT fallback already started this exact request. */
+            mcp_reply_tool_text(client, root, "playlist request already started", false);
+            return;
         }
         return;
     }
@@ -1556,8 +1575,14 @@ typedef struct {
 static StaticQueue_t s_audio_queue_struct;
 EXT_RAM_BSS_ATTR static uint8_t
     s_audio_queue_storage[XIAOZHI_AUDIO_QUEUE_DEPTH * sizeof(audio_packet_t)]
-    __attribute__((aligned(4)));
+    __attribute__((aligned(16)));
 static QueueHandle_t s_audio_queue;
+/* Scratch frame for the websocket RX path. Kept in PSRAM because the
+   websocket task stack is only 4 KB; only one websocket task exists. */
+EXT_RAM_BSS_ATTR static audio_packet_t s_ws_packet;
+/* Separate scratch slot for dropping the oldest frame; kept out of the
+   websocket task's 4 KB stack. */
+EXT_RAM_BSS_ATTR static audio_packet_t s_ws_discard;
 static uint32_t s_audio_init_tick;
 static uint32_t s_speaker_init_tick;
 static char s_rx_buffer[2048];
@@ -1834,17 +1859,21 @@ static void ws_event_handler(void *handler_arg, esp_event_base_t base, int32_t e
                     ESP_LOGI(TAG, "dropped TTS audio while music is playing");
                 }
             } else {
-                audio_packet_t packet = {0};
                 size_t length = (size_t)data->data_len;
-                if (length > sizeof(packet.data)) length = sizeof(packet.data);
-                packet.length = length;
-                memcpy(packet.data, data->data_ptr, length);
+                if (length > sizeof(s_ws_packet.data)) {
+                    length = sizeof(s_ws_packet.data);
+                }
+                /* s_ws_packet lives in PSRAM on purpose: the websocket task
+                   stack is only 4 KB, and a 648-byte packet struct declared as
+                   a local overflowed it (the panic users saw). There is one
+                   websocket task, so one scratch packet is safe. */
+                s_ws_packet.length = length;
+                memcpy(s_ws_packet.data, data->data_ptr, length);
                 /* Non-blocking: if the consumer is behind, dropping the oldest
                    frame is better than blocking the websocket RX task. */
-                if (xQueueSend(s_audio_queue, &packet, 0) != pdTRUE) {
-                    audio_packet_t dropped = {0};
-                    (void)xQueueReceive(s_audio_queue, &dropped, 0);
-                    (void)xQueueSend(s_audio_queue, &packet, 0);
+                if (xQueueSend(s_audio_queue, &s_ws_packet, 0) != pdTRUE) {
+                    (void)xQueueReceive(s_audio_queue, &s_ws_discard, 0);
+                    (void)xQueueSend(s_audio_queue, &s_ws_packet, 0);
                 }
             }
         }
@@ -3666,8 +3695,10 @@ void xiaozhi_client_stop(xiaozhi_client_t *client)
     }
 
     if (s_audio_queue != NULL) {
-        audio_packet_t packet = {0};
-        while (xQueueReceive(s_audio_queue, &packet, 0) == pdTRUE) { }
+        /* Drain into the shared PSRAM scratch instead of a 648-byte local:
+           xiaozhi_client_stop() runs on the caller's task, whose stack cannot
+           spare a frame that large. */
+        while (xQueueReceive(s_audio_queue, &s_ws_packet, 0) == pdTRUE) { }
     }
 
     wake_word_stop(client);
