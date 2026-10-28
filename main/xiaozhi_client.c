@@ -51,6 +51,7 @@
 #include "wake_reply_audio.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
 #endif
 
@@ -820,6 +821,11 @@ static cJSON *string_and_integer_properties(const char *sname, const char *sdesc
     return props;
 }
 
+/* The external tool helpers are defined further below; the tools/list reply
+   is assembled before them. */
+static void mcp_ext_refetch(xiaozhi_client_t *client);
+static void mcp_ext_append_tools(cJSON *tools_array);
+
 static void mcp_tools_list(xiaozhi_client_t *client, cJSON *root)
 {
     cJSON *result = cJSON_CreateObject();
@@ -862,6 +868,10 @@ static void mcp_tools_list(xiaozhi_client_t *client, cJSON *root)
         if (music != NULL) cJSON_AddItemToArray(tools, music);
         if (playlist != NULL) cJSON_AddItemToArray(tools, playlist);
     }
+    /* Management-center proxied MCP tools ride along; the refetch keeps the
+       cache fresh and the fetch completion pings the cloud to re-list. */
+    mcp_ext_refetch(client);
+    mcp_ext_append_tools(tools);
     mcp_reply(client, root, result);
 }
 
@@ -935,6 +945,372 @@ static void mcp_reply_by_id(xiaozhi_client_t *client, const char *id_json,
         cJSON_free(text_out);
     }
     cJSON_Delete(envelope);
+}
+
+/* ---- External MCP tools (management-center proxied) ----------------------
+   The management center lets the user register external MCP servers (remote
+   HTTP or local stdio). The device pulls the merged tool table from it and
+   advertises those tools to the Xiaozhi service; a tools/call for one of them
+   is relayed back over HTTP so the PC side performs the actual MCP
+   conversation. */
+
+#define MCP_EXT_TOOLS_JSON_MAX (32 * 1024)
+#define MCP_EXT_REFRESH_MS (10u * 60u * 1000u)
+#define MCP_EXT_CALL_ARGS_MAX 1024
+#define MCP_EXT_REPLY_MAX 4096
+
+static SemaphoreHandle_t s_mcp_ext_lock;
+static char *s_mcp_ext_tools;            /* raw tools JSON owned by the cache */
+static uint32_t s_mcp_ext_revision;      /* revision the cache was built from */
+static uint32_t s_mcp_ext_wanted_revision;
+static uint32_t s_mcp_ext_stamp_ms;
+static bool s_mcp_ext_fetching;
+
+static void mcp_ext_fetch_task(void *argument);
+static void mcp_ext_call_task(void *argument);
+
+/* Cached tool data is shared between the websocket task, the snapshot task
+   and the workers, so the mutex must exist before any of them run. Creating
+   it here keeps creation on the supervisor thread only. */
+static void mcp_ext_init(void)
+{
+    if (s_mcp_ext_lock == NULL) {
+        s_mcp_ext_lock = xSemaphoreCreateMutex();
+    }
+}
+
+/* bridge_url is stored as ".../api/v1/snapshot"; reuse its origin + prefix
+   exactly like the QQ music client does. */
+static bool mcp_ext_endpoint(char *out, size_t size, const char *path)
+{
+    const device_config_values_t *cfg = device_config_get();
+    if (cfg->bridge_url[0] == '\0') return false;
+    const char *marker = strstr(cfg->bridge_url, "/api/v1/");
+    size_t base = marker != NULL ? (size_t)(marker - cfg->bridge_url)
+                                 : strlen(cfg->bridge_url);
+    int written = snprintf(out, size, "%.*s%s", (int)base, cfg->bridge_url, path);
+    return written > 0 && (size_t)written < size;
+}
+
+typedef struct {
+    char *body;
+    size_t capacity;
+    size_t length;
+    bool overflow;
+} mcp_ext_http_body_t;
+
+static esp_err_t mcp_ext_http_event(esp_http_client_event_t *event)
+{
+    mcp_ext_http_body_t *response = (mcp_ext_http_body_t *)event->user_data;
+    if (event->event_id != HTTP_EVENT_ON_DATA || response == NULL ||
+        response->body == NULL || event->data_len <= 0) {
+        return ESP_OK;
+    }
+    size_t required = response->length + (size_t)event->data_len + 1;
+    if (required > response->capacity) {
+        /* The cap stops a misbehaving bridge from draining PSRAM. */
+        if (required > MCP_EXT_TOOLS_JSON_MAX + 4096) {
+            response->overflow = true;
+            return ESP_OK;
+        }
+        size_t capacity = response->capacity;
+        while (capacity < required) capacity *= 2;
+        char *expanded = heap_caps_realloc(response->body, capacity,
+                                           MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (expanded == NULL) {
+            response->overflow = true;
+            return ESP_OK;
+        }
+        response->body = expanded;
+        response->capacity = capacity;
+    }
+    memcpy(response->body + response->length, event->data, (size_t)event->data_len);
+    response->length += (size_t)event->data_len;
+    response->body[response->length] = '\0';
+    return ESP_OK;
+}
+
+/* One HTTP request to the management center: GET when body is NULL, POST
+   otherwise. The caller frees the returned PSRAM buffer with heap_caps_free. */
+static bool mcp_ext_http(const char *path, const char *body, char **out_text)
+{
+    char url[256];
+    if (!mcp_ext_endpoint(url, sizeof(url), path)) return false;
+    const device_config_values_t *cfg = device_config_get();
+
+    mcp_ext_http_body_t response = {0};
+    response.body = heap_caps_calloc(1, 2048, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    response.capacity = 2048;
+    if (response.body == NULL) return false;
+
+    esp_http_client_config_t config = {
+        .url = url,
+        .event_handler = mcp_ext_http_event,
+        .user_data = &response,
+        .timeout_ms = 20000,
+        .buffer_size = 1024,
+        .crt_bundle_attach = esp_crt_bundle_attach,
+    };
+    esp_http_client_handle_t client = esp_http_client_init(&config);
+    if (client == NULL) {
+        heap_caps_free(response.body);
+        return false;
+    }
+    esp_http_client_set_method(client, body != NULL ? HTTP_METHOD_POST : HTTP_METHOD_GET);
+    esp_http_client_set_header(client, "Accept", "application/json");
+    if (cfg->bridge_token[0] != '\0') {
+        esp_http_client_set_header(client, "X-Bridge-Token", cfg->bridge_token);
+    }
+    if (body != NULL) {
+        esp_http_client_set_header(client, "Content-Type", "application/json");
+        esp_http_client_set_post_field(client, body, (int)strlen(body));
+    }
+
+    esp_err_t error = esp_http_client_perform(client);
+    int status = esp_http_client_get_status_code(client);
+    esp_http_client_cleanup(client);
+    if (error != ESP_OK || status != 200 || response.overflow ||
+        response.length == 0) {
+        ESP_LOGW(TAG, "mcp ext request %s failed: %s HTTP %d%s", path,
+                 esp_err_to_name(error), status,
+                 response.overflow ? " (overflow)" : "");
+        heap_caps_free(response.body);
+        return false;
+    }
+    *out_text = response.body;
+    return true;
+}
+
+/* MCP notifications/tools/list_changed: after the tool table lands, the cloud
+   re-issues tools/list. Without this, a session that listed tools before the
+   first fetch completed would never see them. */
+static void mcp_ext_send_list_changed(xiaozhi_client_t *client)
+{
+    cJSON *payload = cJSON_CreateObject();
+    if (payload == NULL) return;
+    cJSON_AddStringToObject(payload, "jsonrpc", "2.0");
+    cJSON_AddStringToObject(payload, "method", "notifications/tools/list_changed");
+    cJSON *out = payload;
+    if (s_mcp_reply_enveloped) {
+        cJSON *envelope = cJSON_CreateObject();
+        if (envelope == NULL) {
+            cJSON_Delete(payload);
+            return;
+        }
+        if (client->session_id[0] != '\0') {
+            cJSON_AddStringToObject(envelope, "session_id", client->session_id);
+        }
+        cJSON_AddStringToObject(envelope, "type", "mcp");
+        cJSON_AddItemToObject(envelope, "payload", payload);
+        out = envelope;
+    }
+    char *text = cJSON_PrintUnformatted(out);
+    if (text != NULL) {
+        ESP_LOGI(TAG, "mcp tools list changed -> cloud");
+        send_text(client, text);
+        cJSON_free(text);
+    }
+    cJSON_Delete(out);
+}
+
+static void mcp_ext_fetch_task(void *argument)
+{
+    xiaozhi_client_t *client = (xiaozhi_client_t *)argument;
+    char *text = NULL;
+    bool changed = false;
+    if (mcp_ext_http("/api/v1/device/mcp/tools", NULL, &text)) {
+        cJSON *root = cJSON_Parse(text);
+        const cJSON *tools = root != NULL
+            ? cJSON_GetObjectItemCaseSensitive(root, "tools") : NULL;
+        if (cJSON_IsArray(tools)) {
+            uint32_t revision = 0;
+            const cJSON *rev = cJSON_GetObjectItemCaseSensitive(root, "revision");
+            if (cJSON_IsNumber(rev)) revision = (uint32_t)rev->valuedouble;
+            if (xSemaphoreTake(s_mcp_ext_lock, pdMS_TO_TICKS(1000)) == pdTRUE) {
+                size_t keep = strlen(text) + 1;
+                heap_caps_free(s_mcp_ext_tools);
+                s_mcp_ext_tools = heap_caps_malloc(keep, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+                if (s_mcp_ext_tools != NULL) {
+                    memcpy(s_mcp_ext_tools, text, keep);
+                    s_mcp_ext_revision = revision;
+                    s_mcp_ext_stamp_ms = now_ms();
+                    changed = true;
+                    ESP_LOGI(TAG, "mcp tools updated: revision=%u bytes=%u",
+                             (unsigned)revision, (unsigned)keep);
+                }
+                xSemaphoreGive(s_mcp_ext_lock);
+            }
+        }
+        if (root != NULL) cJSON_Delete(root);
+    }
+    if (text != NULL) heap_caps_free(text);
+    if (xSemaphoreTake(s_mcp_ext_lock, pdMS_TO_TICKS(1000)) == pdTRUE) {
+        s_mcp_ext_fetching = false;
+        xSemaphoreGive(s_mcp_ext_lock);
+    }
+    if (changed) mcp_ext_send_list_changed(client);
+    vTaskDelete(NULL);
+}
+
+/* Fire-and-forget refresh: spawn the worker when the cache is missing, stale
+   or behind the snapshot revision. Never blocks the caller. */
+static void mcp_ext_refetch(xiaozhi_client_t *client)
+{
+    if (s_mcp_ext_lock == NULL) return;
+    const device_config_values_t *cfg = device_config_get();
+    if (cfg->bridge_url[0] == '\0' || cfg->bridge_token[0] == '\0') return;
+
+    bool spawn = false;
+    if (xSemaphoreTake(s_mcp_ext_lock, pdMS_TO_TICKS(100)) == pdTRUE) {
+        spawn = !s_mcp_ext_fetching &&
+                (s_mcp_ext_tools == NULL ||
+                 s_mcp_ext_revision != s_mcp_ext_wanted_revision ||
+                 (uint32_t)(now_ms() - s_mcp_ext_stamp_ms) > MCP_EXT_REFRESH_MS);
+        if (spawn) s_mcp_ext_fetching = true;
+        xSemaphoreGive(s_mcp_ext_lock);
+    }
+    if (!spawn) return;
+    if (xTaskCreatePinnedToCoreWithCaps(mcp_ext_fetch_task, "mcp_fetch", 10240,
+                                        client, 3, NULL, 0,
+                                        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {
+        if (xSemaphoreTake(s_mcp_ext_lock, pdMS_TO_TICKS(100)) == pdTRUE) {
+            s_mcp_ext_fetching = false;
+            xSemaphoreGive(s_mcp_ext_lock);
+        }
+    }
+}
+
+/* Merge the cached external tools into a tools/list reply. The reply is built
+   on the websocket task, so the parse happens quickly under the lock and the
+   copies are appended afterwards. */
+static void mcp_ext_append_tools(cJSON *tools_array)
+{
+    if (s_mcp_ext_lock == NULL) return;
+    if (xSemaphoreTake(s_mcp_ext_lock, pdMS_TO_TICKS(500)) != pdTRUE) return;
+    cJSON *root = s_mcp_ext_tools != NULL ? cJSON_Parse(s_mcp_ext_tools) : NULL;
+    xSemaphoreGive(s_mcp_ext_lock);
+    if (root == NULL) return;
+    const cJSON *tools = cJSON_GetObjectItemCaseSensitive(root, "tools");
+    const cJSON *tool = NULL;
+    cJSON_ArrayForEach(tool, tools) {
+        const cJSON *name = cJSON_GetObjectItemCaseSensitive(tool, "name");
+        if (!cJSON_IsString(name) || name->valuestring[0] == '\0') continue;
+        /* Built-in music tools always win on the unlikely name clash. */
+        if (strcmp(name->valuestring, "search_music") == 0 ||
+            strcmp(name->valuestring, "play_music") == 0 ||
+            strcmp(name->valuestring, "music") == 0 ||
+            strcmp(name->valuestring, "play_playlist") == 0) {
+            continue;
+        }
+        cJSON *copy = cJSON_Duplicate(tool, 1);
+        if (copy == NULL) break;
+        cJSON_AddItemToArray(tools_array, copy);
+    }
+    cJSON_Delete(root);
+}
+
+static bool mcp_ext_tool_known(const char *name)
+{
+    if (s_mcp_ext_lock == NULL || s_mcp_ext_tools == NULL) return false;
+    if (xSemaphoreTake(s_mcp_ext_lock, pdMS_TO_TICKS(500)) != pdTRUE) return false;
+    cJSON *root = cJSON_Parse(s_mcp_ext_tools);
+    xSemaphoreGive(s_mcp_ext_lock);
+    if (root == NULL) return false;
+    bool known = false;
+    const cJSON *tools = cJSON_GetObjectItemCaseSensitive(root, "tools");
+    const cJSON *tool = NULL;
+    cJSON_ArrayForEach(tool, tools) {
+        const cJSON *candidate = cJSON_GetObjectItemCaseSensitive(tool, "name");
+        if (cJSON_IsString(candidate) && strcmp(candidate->valuestring, name) == 0) {
+            known = true;
+            break;
+        }
+    }
+    cJSON_Delete(root);
+    return known;
+}
+
+typedef struct {
+    xiaozhi_client_t *client;
+    char name[96];
+    char arguments[MCP_EXT_CALL_ARGS_MAX];
+    char id_json[64];
+} mcp_ext_call_job_t;
+
+static void mcp_ext_call_task(void *argument)
+{
+    mcp_ext_call_job_t *job = (mcp_ext_call_job_t *)argument;
+    char *reply = heap_caps_malloc(MCP_EXT_REPLY_MAX, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    bool is_error = true;
+    if (reply == NULL) {
+        mcp_reply_by_id(job->client, job->id_json, "out of memory", true);
+        heap_caps_free(job);
+        vTaskDelete(NULL);
+        return;
+    }
+
+    cJSON *request = cJSON_CreateObject();
+    if (request != NULL) {
+        cJSON_AddStringToObject(request, "name", job->name);
+        if (job->arguments[0] != '\0') {
+            cJSON *args = cJSON_Parse(job->arguments);
+            if (args != NULL) cJSON_AddItemToObject(request, "arguments", args);
+        } else {
+            cJSON_AddItemToObject(request, "arguments", cJSON_CreateObject());
+        }
+        char *body = cJSON_PrintUnformatted(request);
+        cJSON_Delete(request);
+        if (body != NULL) {
+            char *response = NULL;
+            if (mcp_ext_http("/api/v1/device/mcp/call", body, &response)) {
+                cJSON *root = cJSON_Parse(response);
+                const cJSON *ok = root != NULL
+                    ? cJSON_GetObjectItemCaseSensitive(root, "ok") : NULL;
+                const cJSON *text = root != NULL
+                    ? cJSON_GetObjectItemCaseSensitive(root, "text") : NULL;
+                const cJSON *error = root != NULL
+                    ? cJSON_GetObjectItemCaseSensitive(root, "error") : NULL;
+                if (cJSON_IsTrue(ok) && cJSON_IsString(text)) {
+                    snprintf(reply, MCP_EXT_REPLY_MAX, "%s", text->valuestring);
+                    const cJSON *flag = cJSON_GetObjectItemCaseSensitive(root, "is_error");
+                    is_error = cJSON_IsBool(flag) ? cJSON_IsTrue(flag) : false;
+                } else if (cJSON_IsString(error)) {
+                    snprintf(reply, MCP_EXT_REPLY_MAX, "工具调用失败: %s",
+                             error->valuestring);
+                } else {
+                    snprintf(reply, MCP_EXT_REPLY_MAX, "管理中心返回了无法解析的应答");
+                }
+                if (root != NULL) cJSON_Delete(root);
+                heap_caps_free(response);
+            } else {
+                snprintf(reply, MCP_EXT_REPLY_MAX, "无法连接管理中心，请确认电脑上的 Dotii 管理中心正在运行");
+            }
+            cJSON_free(body);
+        } else {
+            snprintf(reply, MCP_EXT_REPLY_MAX, "out of memory");
+        }
+    } else {
+        snprintf(reply, MCP_EXT_REPLY_MAX, "out of memory");
+    }
+
+    mcp_reply_by_id(job->client, job->id_json, reply, is_error);
+    heap_caps_free(reply);
+    heap_caps_free(job);
+    vTaskDelete(NULL);
+}
+
+void xiaozhi_client_set_mcp_revision(xiaozhi_client_t *client, uint32_t revision)
+{
+    (void)client;
+    if (s_mcp_ext_lock == NULL) return;
+    if (xSemaphoreTake(s_mcp_ext_lock, pdMS_TO_TICKS(100)) != pdTRUE) return;
+    if (revision != s_mcp_ext_wanted_revision) {
+        s_mcp_ext_wanted_revision = revision;
+        /* Forcing the stamp to 0 makes the next refetch check spawn a worker
+           immediately instead of waiting out the TTL. */
+        s_mcp_ext_stamp_ms = 0;
+    }
+    xSemaphoreGive(s_mcp_ext_lock);
 }
 
 static void mcp_search_task(void *argument);
@@ -1303,6 +1679,46 @@ static void mcp_tool_call(xiaozhi_client_t *client, cJSON *root)
         return;
     }
 
+    /* Tools registered by the management center are relayed over HTTP. */
+    if (mcp_ext_tool_known(name->valuestring)) {
+        mcp_ext_call_job_t *job = heap_caps_calloc(1, sizeof(*job),
+                                                   MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (job == NULL) {
+            mcp_reply_tool_text(client, root, "out of memory", true);
+            return;
+        }
+        job->client = client;
+        copy_bounded(job->name, sizeof(job->name), name->valuestring);
+        if (cJSON_IsObject(args)) {
+            char *args_text = cJSON_PrintUnformatted((cJSON *)args);
+            if (args_text != NULL) {
+                if (strlen(args_text) >= sizeof(job->arguments)) {
+                    cJSON_free(args_text);
+                    heap_caps_free(job);
+                    mcp_reply_tool_text(client, root, "arguments too large", true);
+                    return;
+                }
+                copy_bounded(job->arguments, sizeof(job->arguments), args_text);
+                cJSON_free(args_text);
+            }
+        }
+        const cJSON *id = cJSON_GetObjectItemCaseSensitive(root, "id");
+        if (id != NULL) {
+            char *id_text = cJSON_PrintUnformatted((cJSON *)id);
+            if (id_text != NULL) {
+                copy_bounded(job->id_json, sizeof(job->id_json), id_text);
+                cJSON_free(id_text);
+            }
+        }
+        if (xTaskCreatePinnedToCoreWithCaps(mcp_ext_call_task, "mcp_call", 12288, job, 3,
+                                            NULL, 0,
+                                            MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {
+            heap_caps_free(job);
+            mcp_reply_tool_text(client, root, "tool call task failed", true);
+        }
+        return;
+    }
+
     mcp_reply_tool_text(client, root, "unknown tool", true);
 }
 
@@ -1314,6 +1730,10 @@ static void mcp_tools_list(xiaozhi_client_t *client, cJSON *root)
 static void mcp_tool_call(xiaozhi_client_t *client, cJSON *root)
 {
     (void)client; (void)root;
+}
+static void mcp_ext_refetch(xiaozhi_client_t *client)
+{
+    (void)client;
 }
 #endif
 
@@ -1331,6 +1751,9 @@ static bool xiaozhi_handle_mcp(xiaozhi_client_t *client, cJSON *root)
         cJSON_AddStringToObject(info, "name", "dotii-face");
         cJSON_AddStringToObject(info, "version", "1.1.9");
         mcp_reply(client, root, result);
+        /* The cloud issues tools/list right after; start pulling the external
+           tool table now so the first list already contains them. */
+        mcp_ext_refetch(client);
         return true;
     }
     if (strcmp(method->valuestring, "tools/list") == 0) {
@@ -3595,6 +4018,7 @@ static void wake_task(void *argument)
 bool xiaozhi_client_start(xiaozhi_client_t *client)
 {
     if (client == NULL || client->running) return false;
+    mcp_ext_init();
     if (client->activation_task != NULL || client->playback_task != NULL ||
         client->microphone_task != NULL || client->music_task != NULL ||
         client->wake_task != NULL) {
@@ -3721,6 +4145,11 @@ bool xiaozhi_client_send_listen(xiaozhi_client_t *client, bool start)
 bool xiaozhi_client_send_abort(xiaozhi_client_t *client)
 {
     (void)client; return false;
+}
+
+void xiaozhi_client_set_mcp_revision(xiaozhi_client_t *client, uint32_t revision)
+{
+    (void)client; (void)revision;
 }
 
 bool xiaozhi_client_start(xiaozhi_client_t *client)

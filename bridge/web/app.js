@@ -5,6 +5,8 @@ const state = {
   moduleSaving: {},
   xiaozhiLoaded: false,
   xiaozhiSaving: false,
+  mcpLoaded: false,
+  mcpSaving: false,
   displayDirty: false,
   displaySaving: false,
   firmwarePortsSignature: "",
@@ -354,6 +356,207 @@ mcp_url: byId("xiaozhi-mcp-url").value.trim(),
   }
 }
 
+function mcpBuildRow(server = {}) {
+  const row = document.createElement("div");
+  row.className = "mcp-server-row";
+  if (server.id) row.dataset.serverId = String(server.id);
+
+  const head = document.createElement("div");
+  head.className = "mcp-row-head";
+  const enabled = document.createElement("input");
+  enabled.type = "checkbox";
+  enabled.className = "mcp-row-enabled";
+  enabled.checked = server.enabled !== false;
+  enabled.title = "启用该服务器";
+  const name = document.createElement("input");
+  name.className = "mcp-name";
+  name.maxLength = 32;
+  name.placeholder = "服务器名称，例如 天气服务";
+  name.value = server.name || "";
+  const transport = document.createElement("select");
+  transport.className = "mcp-transport";
+  transport.append(new Option("HTTP 服务", "http"), new Option("本机程序 (stdio)", "stdio"));
+  transport.value = server.transport === "stdio" ? "stdio" : "http";
+  const remove = document.createElement("button");
+  remove.type = "button";
+  remove.className = "ghost-button mcp-remove";
+  remove.textContent = "删除";
+  head.append(enabled, name, transport, remove);
+  row.append(head);
+
+  const httpBox = document.createElement("div");
+  httpBox.className = "mcp-row-http";
+  const url = document.createElement("input");
+  url.className = "mcp-url";
+  url.maxLength = 512;
+  url.placeholder = "https://example.com/mcp";
+  url.value = server.url || "";
+  const headers = document.createElement("textarea");
+  headers.className = "mcp-headers";
+  headers.rows = 2;
+  headers.placeholder = "请求头，每行一条 Key: Value（可留空）";
+  headers.value = Object.entries(server.headers || {}).map(([k, v]) => `${k}: ${v}`).join("\n");
+  httpBox.append(url, headers);
+  row.append(httpBox);
+
+  const stdioBox = document.createElement("div");
+  stdioBox.className = "mcp-row-stdio";
+  const command = document.createElement("input");
+  command.className = "mcp-command";
+  command.maxLength = 256;
+  command.placeholder = "命令，例如 npx 或 uvx";
+  command.value = server.command || "";
+  const args = document.createElement("textarea");
+  args.className = "mcp-args";
+  args.rows = 2;
+  args.placeholder = "参数，每行一个，例如：\n-y\nmcp-server-xxx";
+  args.value = (server.args || []).join("\n");
+  const env = document.createElement("textarea");
+  env.className = "mcp-env";
+  env.rows = 2;
+  env.placeholder = "环境变量，每行一条 KEY=value（可留空）";
+  env.value = Object.entries(server.env || {}).map(([k, v]) => `${k}=${v}`).join("\n");
+  stdioBox.append(command, args, env);
+  row.append(stdioBox);
+
+  const syncTransport = () => {
+    httpBox.hidden = transport.value !== "http";
+    stdioBox.hidden = transport.value !== "stdio";
+  };
+  transport.addEventListener("change", syncTransport);
+  syncTransport();
+  return row;
+}
+
+const mcpColonPairs = (text) => Object.fromEntries(text.split("\n")
+  .map((line) => line.trim()).filter(Boolean).map((line) => {
+    const cut = line.indexOf(":");
+    return cut > 0 ? [line.slice(0, cut).trim(), line.slice(cut + 1).trim()] : null;
+  }).filter(Boolean));
+const mcpEqPairs = (text) => Object.fromEntries(text.split("\n")
+  .map((line) => line.trim()).filter(Boolean).map((line) => {
+    const cut = line.indexOf("=");
+    return cut > 0 ? [line.slice(0, cut).trim(), line.slice(cut + 1).trim()] : null;
+  }).filter(Boolean));
+
+function collectMcpConfig() {
+  const servers = [];
+  byId("mcp-server-list").querySelectorAll(".mcp-server-row").forEach((row) => {
+    const transport = row.querySelector(".mcp-transport").value;
+    const server = {
+      name: row.querySelector(".mcp-name").value.trim(),
+      transport,
+      enabled: row.querySelector(".mcp-row-enabled").checked,
+    };
+    if (row.dataset.serverId) server.id = Number(row.dataset.serverId);
+    if (transport === "http") {
+      server.url = row.querySelector(".mcp-url").value.trim();
+      server.headers = mcpColonPairs(row.querySelector(".mcp-headers").value);
+    } else {
+      server.command = row.querySelector(".mcp-command").value.trim();
+      server.args = row.querySelector(".mcp-args").value.split("\n").map((part) => part.trim()).filter(Boolean);
+      server.env = mcpEqPairs(row.querySelector(".mcp-env").value);
+    }
+    servers.push(server);
+  });
+  return { enabled: byId("mcp-enabled").checked, servers };
+}
+
+function renderMcp(config) {
+  const enabled = config?.enabled !== false;
+  const servers = Array.isArray(config?.servers) ? config.servers : [];
+  byId("mcp-enabled").checked = enabled;
+  setText("mcp-nav-state", enabled ? (servers.length ? `${servers.length} 个服务器` : "未配置") : "已停用");
+  if (state.mcpLoaded || state.mcpSaving) return;
+  const list = byId("mcp-server-list");
+  list.replaceChildren();
+  servers.forEach((server) => list.appendChild(mcpBuildRow(server)));
+  byId("mcp-empty-note").hidden = servers.length > 0;
+  setText("mcp-save-state", "尚未修改");
+  state.mcpLoaded = true;
+}
+
+async function saveMcp(event) {
+  event.preventDefault();
+  if (state.mcpSaving) return;
+  state.mcpSaving = true;
+  setText("mcp-save-state", "正在保存");
+  try {
+    const response = await fetch("/api/v1/admin/mcp", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(collectMcpConfig()),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || "MCP 设置保存失败");
+    state.mcpLoaded = false;
+    setText("mcp-save-state", "已保存，设备会自动更新工具表");
+    showToast("MCP 设置已保存");
+  } catch (error) {
+    setText("mcp-save-state", "保存失败");
+    showToast(error.message || "MCP 设置保存失败");
+  } finally {
+    state.mcpSaving = false;
+    await refreshOverview();
+  }
+}
+
+function mcpToolsBlock(server) {
+  const block = document.createElement("div");
+  block.className = "mcp-tools-block";
+  const head = document.createElement("div");
+  head.className = "mcp-tools-head";
+  const name = document.createElement("strong");
+  name.textContent = server.name;
+  const meta = document.createElement("span");
+  meta.className = "mcp-tools-meta";
+  meta.textContent = server.enabled
+    ? (server.error ? "检测失败" : `${server.tools.length} 个工具`)
+    : "已停用";
+  head.append(name, meta);
+  block.append(head);
+  if (server.error) {
+    const problem = document.createElement("p");
+    problem.className = "mcp-tools-error";
+    problem.textContent = server.error;
+    block.append(problem);
+    return block;
+  }
+  const list = document.createElement("ul");
+  list.className = "mcp-tools-list";
+  if (!server.tools.length) {
+    const item = document.createElement("li");
+    item.textContent = "没有发现工具";
+    list.append(item);
+  }
+  server.tools.forEach((tool) => {
+    const item = document.createElement("li");
+    const toolName = document.createElement("strong");
+    toolName.textContent = tool.name;
+    const desc = document.createElement("span");
+    desc.textContent = tool.description || "";
+    item.append(toolName, desc);
+    list.append(item);
+  });
+  block.append(list);
+  return block;
+}
+
+async function probeMcpTools() {
+  setText("mcp-save-state", "正在检测工具…");
+  try {
+    const response = await fetch("/api/v1/admin/mcp/tools", { cache: "no-store" });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || "检测失败");
+    byId("mcp-tools-card").hidden = false;
+    byId("mcp-tools-output").replaceChildren(...result.servers.map(mcpToolsBlock));
+    setText("mcp-save-state", "检测完成");
+  } catch (error) {
+    setText("mcp-save-state", "检测失败");
+    showToast(error.message || "检测工具列表失败");
+  }
+}
+
 function setBridgeState(bridge) {
   const indicator = byId("bridge-state");
   const bridgeOnline = bridge.online !== false;
@@ -503,6 +706,7 @@ function renderOverview(overview) {
   renderBluetooth(overview.bluetooth || {});
   renderFirmware(overview.firmware || {});
   renderXiaozhi(overview.xiaozhi_config || {}, xiaozhiEnabled, overview.bluetooth || {}, overview.qqmusic || {});
+  renderMcp(overview.mcp_config || {});
   const displayConfig = overview.display_config || snapshot.display || {};
   if (!state.displayDirty && !state.displaySaving) {
     const angle = Math.max(80, Math.min(100, Number(displayConfig.docked_rotation_tenths || 900) / 10));
@@ -750,6 +954,23 @@ wakeWordInputs().forEach((input) => {
 byId("xiaozhi-voice").addEventListener("input", () => setText("xiaozhi-save-state", "有尚未保存的修改"));
 byId("xiaozhi-mcp-enabled").addEventListener("change", () => setText("xiaozhi-save-state", "有尚未保存的修改"));
 byId("xiaozhi-mcp-url").addEventListener("input", () => setText("xiaozhi-save-state", "有尚未保存的修改"));
+byId("mcp-form").addEventListener("submit", saveMcp);
+byId("mcp-probe").addEventListener("click", probeMcpTools);
+byId("mcp-enabled").addEventListener("change", () => setText("mcp-save-state", "有尚未保存的修改"));
+byId("mcp-add-server").addEventListener("click", () => {
+  byId("mcp-server-list").appendChild(mcpBuildRow());
+  byId("mcp-empty-note").hidden = true;
+  setText("mcp-save-state", "有尚未保存的修改");
+});
+byId("mcp-server-list").addEventListener("click", (event) => {
+  const button = event.target.closest(".mcp-remove");
+  if (!button) return;
+  button.closest(".mcp-server-row").remove();
+  byId("mcp-empty-note").hidden = byId("mcp-server-list").children.length > 0;
+  setText("mcp-save-state", "有尚未保存的修改");
+});
+byId("mcp-server-list").addEventListener("input", () => setText("mcp-save-state", "有尚未保存的修改"));
+byId("mcp-server-list").addEventListener("change", () => setText("mcp-save-state", "有尚未保存的修改"));
 byId("bluetooth-install").addEventListener("click", installBluetooth);
 byId("bluetooth-scan").addEventListener("click", scanBluetooth);
 byId("bluetooth-configure").addEventListener("click", configureBluetooth);

@@ -34,6 +34,8 @@ from pypinyin import Style, lazy_pinyin
 from bluetooth_bridge import BluetoothBridge
 from codex_bridge_link import claim_codex_bridge_token
 from firmware_flasher import FirmwareFlasher
+import mcp_client
+from mcp_client import McpError
 import requests
 from qqmusic import QQMusicAccount, QQMusicNotLoggedIn
 from platforms import current_platform
@@ -193,6 +195,153 @@ def validate_xiaozhi_config(payload: Any) -> dict[str, Any]:
         "mcp_enabled": mcp_enabled,
         "mcp_url": mcp_url,
     }
+
+
+MCP_DEFAULTS = {"enabled": True, "revision": 0, "servers": []}
+MCP_MAX_SERVERS = 8
+MCP_SERVER_NAME_MAX = 32
+MCP_URL_MAX = 512
+MCP_HEADER_COUNT_MAX = 4
+MCP_HEADER_KEY_MAX = 64
+MCP_HEADER_VALUE_MAX = 256
+MCP_ENV_PAIR_MAX = 8
+MCP_ARG_COUNT_MAX = 8
+MCP_ARG_LEN_MAX = 256
+MCP_COMMAND_MAX = 256
+# Device-facing merged tool list limits: the ESP32 parses this JSON in PSRAM,
+# so the totals stay comfortably under its ~32 KB fetch budget.
+MCP_DEVICE_TOOL_LIMIT = 20
+MCP_TOOLS_PER_SERVER_LIMIT = 16
+MCP_DEVICE_DESCRIPTION_MAX = 256
+MCP_SCHEMA_JSON_MAX = 1200
+MCP_DEVICE_TOOLS_JSON_MAX = 28 * 1024
+MCP_RESULT_TEXT_MAX = 4000
+
+
+def default_mcp_config() -> dict[str, Any]:
+    return copy.deepcopy(MCP_DEFAULTS)
+
+
+def validate_mcp_config(payload: Any) -> dict[str, Any]:
+    if payload is None:
+        payload = {}
+    if not isinstance(payload, dict):
+        raise ValueError("mcp config must be an object")
+
+    enabled = payload.get("enabled", MCP_DEFAULTS["enabled"])
+    if not isinstance(enabled, bool):
+        raise ValueError("mcp.enabled must be a boolean")
+    revision = payload.get("revision", 0)
+    if not isinstance(revision, int) or isinstance(revision, bool) or revision < 0:
+        raise ValueError("mcp.revision must be a non-negative integer")
+
+    raw_servers = payload.get("servers", [])
+    if not isinstance(raw_servers, list):
+        raise ValueError("mcp.servers must be an array")
+    if len(raw_servers) > MCP_MAX_SERVERS:
+        raise ValueError(f"mcp.servers supports at most {MCP_MAX_SERVERS} entries")
+
+    servers: list[dict[str, Any]] = []
+    seen_ids: set[int] = set()
+    seen_names: set[str] = set()
+    next_id = 1
+    for index, raw in enumerate(raw_servers):
+        if not isinstance(raw, dict):
+            raise ValueError(f"mcp.servers[{index}] must be an object")
+        server_id = raw.get("id", next_id)
+        if isinstance(server_id, bool) or not isinstance(server_id, int) \
+                or not 1 <= server_id <= 99:
+            raise ValueError(f"mcp.servers[{index}].id must be an integer in 1..99")
+        if server_id in seen_ids:
+            raise ValueError(f"mcp.servers[{index}].id {server_id} is duplicated")
+        seen_ids.add(server_id)
+        next_id = max(next_id, server_id + 1)
+
+        name = raw.get("name")
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError(f"mcp.servers[{index}].name must not be empty")
+        name = name.strip()[:MCP_SERVER_NAME_MAX]
+        if name in seen_names:
+            raise ValueError(f"mcp.servers[{index}].name {name} is duplicated")
+        seen_names.add(name)
+
+        transport = raw.get("transport", "http")
+        if transport not in {"http", "stdio"}:
+            raise ValueError(f"mcp.servers[{index}].transport must be http or stdio")
+        server_enabled = raw.get("enabled", True)
+        if not isinstance(server_enabled, bool):
+            raise ValueError(f"mcp.servers[{index}].enabled must be a boolean")
+
+        server: dict[str, Any] = {
+            "id": server_id,
+            "name": name,
+            "transport": transport,
+            "enabled": server_enabled,
+        }
+
+        if transport == "http":
+            url = raw.get("url", "")
+            if not isinstance(url, str):
+                raise ValueError(f"mcp.servers[{index}].url must be a string")
+            url = url.strip()[:MCP_URL_MAX]
+            parsed = urlparse(url)
+            if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+                raise ValueError(f"mcp.servers[{index}].url must be an http(s):// URL")
+            server["url"] = url
+            headers_raw = raw.get("headers", {})
+            if not isinstance(headers_raw, dict):
+                raise ValueError(f"mcp.servers[{index}].headers must be an object")
+            headers: dict[str, str] = {}
+            for key, value in headers_raw.items():
+                if not isinstance(key, str) or not isinstance(value, str):
+                    raise ValueError(f"mcp.servers[{index}].headers must map strings to strings")
+                key = key.strip()[:MCP_HEADER_KEY_MAX]
+                if not key:
+                    raise ValueError(f"mcp.servers[{index}].headers keys must not be empty")
+                if len(headers) >= MCP_HEADER_COUNT_MAX:
+                    raise ValueError(f"mcp.servers[{index}].headers supports at most "
+                                     f"{MCP_HEADER_COUNT_MAX} entries")
+                headers[key] = value[:MCP_HEADER_VALUE_MAX]
+            if headers:
+                server["headers"] = headers
+        else:
+            command = raw.get("command", "")
+            if not isinstance(command, str) or not command.strip():
+                raise ValueError(f"mcp.servers[{index}].command must not be empty")
+            server["command"] = command.strip()[:MCP_COMMAND_MAX]
+            args_raw = raw.get("args", [])
+            if not isinstance(args_raw, list) or len(args_raw) > MCP_ARG_COUNT_MAX:
+                raise ValueError(f"mcp.servers[{index}].args must be an array of at most "
+                                 f"{MCP_ARG_COUNT_MAX} strings")
+            args = []
+            for arg in args_raw:
+                if not isinstance(arg, str):
+                    raise ValueError(f"mcp.servers[{index}].args must contain strings")
+                args.append(arg[:MCP_ARG_LEN_MAX])
+            if args:
+                server["args"] = args
+            env_raw = raw.get("env", {})
+            if not isinstance(env_raw, dict) or len(env_raw) > MCP_ENV_PAIR_MAX:
+                raise ValueError(f"mcp.servers[{index}].env must be an object of at most "
+                                 f"{MCP_ENV_PAIR_MAX} entries")
+            env = {}
+            for key, value in env_raw.items():
+                if not isinstance(key, str) or not isinstance(value, str):
+                    raise ValueError(f"mcp.servers[{index}].env must map strings to strings")
+                env[key[:MCP_HEADER_KEY_MAX]] = value[:MCP_HEADER_VALUE_MAX]
+            if env:
+                server["env"] = env
+
+        servers.append(server)
+
+    return {"enabled": enabled, "revision": revision, "servers": servers}
+
+
+def bridge_mcp_tool_name(server_id: int, tool_name: str) -> str:
+    """Device-facing tool name: MCP names must stay ASCII-safe and unique
+    across servers, so every external tool is prefixed with its server id."""
+    cleaned = re.sub(r"[^A-Za-z0-9_-]", "_", tool_name)[:48].strip("_") or "tool"
+    return f"mcp{server_id}_{cleaned}"[:64]
 
 
 # The standalone Dotii page is gone. The firmware owns the live expression and
@@ -599,6 +748,126 @@ class DisplayConfigStore:
         return validated
 
 
+class McpConfigStore:
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        self.lock = threading.RLock()
+
+    def read(self) -> dict[str, Any]:
+        with self.lock:
+            if not self.path.is_file():
+                return default_mcp_config()
+            return validate_mcp_config(json.loads(self.path.read_text(encoding="utf-8")))
+
+    def write(self, config: dict[str, Any]) -> dict[str, Any]:
+        validated = validate_mcp_config(config)
+        with self.lock:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            handle, temporary_name = tempfile.mkstemp(prefix="mcp-", suffix=".json", dir=self.path.parent)
+            try:
+                with os.fdopen(handle, "w", encoding="utf-8") as stream:
+                    json.dump(validated, stream, ensure_ascii=False, indent=2)
+                    stream.write("\n")
+                os.replace(temporary_name, self.path)
+            finally:
+                if os.path.exists(temporary_name):
+                    os.unlink(temporary_name)
+        return validated
+
+
+class McpToolCache:
+    """Lazily probed per-server MCP tool lists with stale-on-error fallback.
+
+    The device pulls its tool table over HTTP, so probes must never fan out
+    serially: every enabled server is queried in its own thread instead.
+    """
+
+    def __init__(self, store: McpConfigStore, ttl: float = 600.0) -> None:
+        self.store = store
+        self.ttl = ttl
+        self.lock = threading.RLock()
+        self.entries: dict[int, dict[str, Any]] = {}
+
+    def invalidate(self) -> None:
+        with self.lock:
+            self.entries.clear()
+
+    def _probe_one(self, server: dict[str, Any]) -> dict[str, Any]:
+        try:
+            tools = mcp_client.probe_tools(server)
+            entry = {"tools": tools, "error": None, "fetched": time.monotonic()}
+        except Exception as error:  # noqa: BLE001 - surfaced to the UI verbatim
+            entry = {"tools": [], "error": str(error), "fetched": time.monotonic()}
+        with self.lock:
+            self.entries[server["id"]] = entry
+        return entry
+
+    def get(self, server: dict[str, Any]) -> dict[str, Any]:
+        with self.lock:
+            entry = self.entries.get(server["id"])
+            fresh = entry is not None and (time.monotonic() - entry["fetched"]) < self.ttl
+        if fresh:
+            return entry
+        return self._probe_one(server)
+
+    def refresh(self, force: bool = False) -> list[dict[str, Any]]:
+        servers = [s for s in self.store.read()["servers"] if s.get("enabled", True)]
+        now = time.monotonic()
+        with self.lock:
+            targets = [s for s in servers
+                       if force or s["id"] not in self.entries
+                       or (now - self.entries[s["id"]]["fetched"]) >= self.ttl]
+        if targets:
+            workers = []
+            for server in targets:
+                worker = threading.Thread(target=self._probe_one, args=(server,),
+                                          daemon=True, name=f"mcp-probe-{server['id']}")
+                worker.start()
+                workers.append(worker)
+            for worker in workers:
+                worker.join(mcp_client.PROBE_TIMEOUT_S + 5)
+        return [self.get(s) for s in servers]
+
+
+def device_mcp_tools(config: dict[str, Any], cache: McpToolCache) -> list[dict[str, Any]]:
+    """Merge every enabled server's tools into device-facing entries.
+
+    Entries carry the internal ``server_id`` / ``tool`` routing fields; the
+    device-facing serializer strips them.
+    """
+    tools: list[dict[str, Any]] = []
+    for server in config.get("servers", []):
+        if not server.get("enabled", True):
+            continue
+        entry = cache.get(server)
+        for tool in entry["tools"][:MCP_TOOLS_PER_SERVER_LIMIT]:
+            if len(tools) >= MCP_DEVICE_TOOL_LIMIT:
+                return tools
+            schema = tool.get("inputSchema") or {"type": "object"}
+            if len(json.dumps(schema, ensure_ascii=False)) > MCP_SCHEMA_JSON_MAX:
+                schema = {"type": "object"}
+            description = f"[MCP:{server['name']}] {tool['description']}"
+            tools.append({
+                "name": bridge_mcp_tool_name(server["id"], tool["name"]),
+                "description": description[:MCP_DEVICE_DESCRIPTION_MAX],
+                "inputSchema": schema,
+                "server_id": server["id"],
+                "tool": tool["name"],
+            })
+    return tools
+
+
+def route_device_tool(config: dict[str, Any], cache: McpToolCache,
+                      bridge_name: str) -> tuple[dict[str, Any], str] | None:
+    """Map a device-facing tool name back to (server, original tool name)."""
+    for tool in device_mcp_tools(config, cache):
+        if tool["name"] == bridge_name:
+            for server in config["servers"]:
+                if server["id"] == tool["server_id"]:
+                    return server, tool["tool"]
+    return None
+
+
 class RuntimeStatus:
     """Non-Codex runtime metadata exposed in the management overview."""
 
@@ -713,6 +982,7 @@ class BridgeHandler(BaseHTTPRequestHandler):
             "snapshot": snapshot,
             "display_config": self.bridge.display.read(),
             "xiaozhi_config": self.bridge.xiaozhi.read(),
+            "mcp_config": self.bridge.mcp.read(),
             "bluetooth": self.bridge.bluetooth.snapshot(),
             "firmware": self.bridge.firmware.snapshot(),
             "qqmusic": self.bridge.qqmusic.status(),
@@ -785,6 +1055,62 @@ class BridgeHandler(BaseHTTPRequestHandler):
                 return
             try:
                 self._send_json(HTTPStatus.OK, self._overview())
+            except (OSError, ValueError, json.JSONDecodeError) as error:
+                self._send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": str(error)})
+        elif path == "/api/v1/admin/mcp":
+            if self._deny_nonlocal():
+                return
+            self._send_json(HTTPStatus.OK, {"ok": True, "mcp_config": self.bridge.mcp.read()})
+        elif path == "/api/v1/admin/mcp/tools":
+            if self._deny_nonlocal():
+                return
+            try:
+                config = self.bridge.mcp.read()
+                wanted = parse_qs(urlparse(self.path).query).get("id", [None])[0]
+                results = []
+                if wanted is not None:
+                    server = next((s for s in config["servers"] if str(s["id"]) == wanted), None)
+                    if server is None:
+                        self._send_json(HTTPStatus.NOT_FOUND, {"error": "no such MCP server"})
+                        return
+                    entry = self.bridge.mcp_tools._probe_one(server)
+                    servers = [(server, entry)]
+                else:
+                    self.bridge.mcp_tools.refresh(force=True)
+                    servers = [(s, self.bridge.mcp_tools.get(s))
+                               for s in config["servers"]]
+                for server, entry in servers:
+                    results.append({
+                        "id": server["id"],
+                        "name": server["name"],
+                        "transport": server["transport"],
+                        "enabled": server.get("enabled", True),
+                        "error": entry["error"],
+                        "tools": [{"name": t["name"], "description": t["description"]}
+                                  for t in entry["tools"]],
+                    })
+                self._send_json(HTTPStatus.OK, {"ok": True, "servers": results})
+            except (OSError, ValueError, json.JSONDecodeError) as error:
+                self._send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": str(error)})
+        elif path == "/api/v1/device/mcp/tools":
+            if not self._authorized():
+                self._send_json(HTTPStatus.UNAUTHORIZED, {"error": "invalid bridge token"})
+                return
+            try:
+                config = self.bridge.mcp.read()
+                self.bridge.mcp_tools.refresh()
+                tools = device_mcp_tools(config, self.bridge.mcp_tools)
+                payload_tools = [{k: tool[k] for k in ("name", "description", "inputSchema")}
+                                 for tool in tools]
+                body = json.dumps({"ok": True, "revision": config.get("revision", 0),
+                                   "tools": payload_tools}, ensure_ascii=False)
+                # The device fetches into a bounded PSRAM buffer; drop the tail
+                # rather than risking a truncated JSON document there.
+                while len(body.encode("utf-8")) > MCP_DEVICE_TOOLS_JSON_MAX and payload_tools:
+                    payload_tools.pop()
+                    body = json.dumps({"ok": True, "revision": config.get("revision", 0),
+                                       "tools": payload_tools}, ensure_ascii=False)
+                self._send_json(HTTPStatus.OK, json.loads(body))
             except (OSError, ValueError, json.JSONDecodeError) as error:
                 self._send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": str(error)})
         else:
@@ -951,6 +1277,59 @@ class BridgeHandler(BaseHTTPRequestHandler):
             except Exception as error:
                 self._send_json(HTTPStatus.BAD_GATEWAY, {"error": str(error)})
             return
+        if path == "/api/v1/admin/mcp":
+            if self._deny_nonlocal():
+                return
+            try:
+                payload = self._read_admin_action()
+                current = self.bridge.mcp.read()
+                candidate = {**current, **payload,
+                             "revision": current.get("revision", 0) + 1}
+                config = self.bridge.mcp.write(candidate)
+                # Cached sessions and tool lists may reference dropped servers.
+                mcp_client.drop_sessions()
+                self.bridge.mcp_tools.invalidate()
+                self._send_json(HTTPStatus.OK, {"ok": True, "mcp_config": config})
+            except (OSError, ValueError, UnicodeDecodeError, json.JSONDecodeError) as error:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
+            return
+        if path == "/api/v1/device/mcp/call":
+            if not self._authorized():
+                self._send_json(HTTPStatus.UNAUTHORIZED, {"error": "invalid bridge token"})
+                return
+            try:
+                payload = self._read_admin_action()
+                name = str(payload.get("name", "")).strip()
+                arguments = payload.get("arguments")
+                if not name:
+                    raise ValueError("missing tool name")
+                if arguments is None:
+                    arguments = {}
+                if not isinstance(arguments, dict):
+                    raise ValueError("arguments must be an object")
+                config = self.bridge.mcp.read()
+                if not config.get("enabled", True):
+                    self._send_json(HTTPStatus.SERVICE_UNAVAILABLE,
+                                    {"error": "MCP 工具功能未启用"})
+                    return
+                self.bridge.mcp_tools.refresh()
+                routed = route_device_tool(config, self.bridge.mcp_tools, name)
+                if routed is None:
+                    self._send_json(HTTPStatus.NOT_FOUND, {"error": f"未知工具 {name}"})
+                    return
+                server, tool_name = routed
+                result = mcp_client.call_tool(server, tool_name, arguments)
+                text = result["text"].strip() or "(工具没有返回文本)"
+                self._send_json(HTTPStatus.OK, {
+                    "ok": True,
+                    "text": text[:MCP_RESULT_TEXT_MAX],
+                    "is_error": result["is_error"],
+                })
+            except McpError as error:
+                self._send_json(HTTPStatus.BAD_GATEWAY, {"error": str(error)})
+            except Exception as error:  # noqa: BLE001 - relayed to the device log
+                self._send_json(HTTPStatus.BAD_GATEWAY, {"error": str(error)})
+            return
         if path == "/api/v1/admin/xiaozhi":
             if self._deny_nonlocal():
                 return
@@ -1038,6 +1417,7 @@ class BridgeServer(ThreadingHTTPServer):
         modules: ModuleConfigStore,
         display: DisplayConfigStore,
         xiaozhi: XiaozhiConfigStore,
+        mcp: McpConfigStore,
         qqmusic: QQMusicAccount,
         bluetooth: BluetoothBridge,
         firmware: FirmwareFlasher,
@@ -1051,6 +1431,8 @@ class BridgeServer(ThreadingHTTPServer):
         self.modules = modules
         self.display = display
         self.xiaozhi = xiaozhi
+        self.mcp = mcp
+        self.mcp_tools = McpToolCache(mcp)
         self.qqmusic = qqmusic
         self.bluetooth = bluetooth
         self.firmware = firmware
@@ -1065,12 +1447,28 @@ class BridgeServer(ThreadingHTTPServer):
         snapshot["character"] = dotii_config["character"]
         snapshot["display"] = self.display.read()
         snapshot["xiaozhi"] = self.xiaozhi.read()
+        mcp_config = self.mcp.read()
+        snapshot["mcp"] = {
+            "enabled": bool(mcp_config.get("enabled", True)),
+            "revision": int(mcp_config.get("revision", 0)),
+            "server_count": len([s for s in mcp_config.get("servers", [])
+                                 if s.get("enabled", True)]),
+        }
         qq = self.qqmusic.status()
         # The device stores this cookie bundle so it can search and stream on
         # its own without the management center running.
         qq["cookies"] = self.qqmusic.cookie_header()
         snapshot["qqmusic"] = qq
         return snapshot
+
+
+def _reap_mcp_sessions_loop() -> None:
+    while True:
+        time.sleep(60)
+        try:
+            mcp_client.reap_idle_sessions()
+        except Exception:  # noqa: BLE001 - the reaper must never take down main
+            logging.exception("mcp session reaper failed")
 
 
 def main() -> None:
@@ -1100,6 +1498,7 @@ def main() -> None:
         modules,
         DisplayConfigStore(writable_root / "display.json"),
         XiaozhiConfigStore(writable_root / "xiaozhi.json"),
+        McpConfigStore(writable_root / "mcp.json"),
         QQMusicAccount(writable_root),
         bluetooth,
         firmware,
@@ -1107,6 +1506,9 @@ def main() -> None:
         arguments.parent_pid,
     )
     bluetooth.start()
+    # Local stdio MCP servers only cost memory while they are being used.
+    threading.Thread(target=_reap_mcp_sessions_loop, daemon=True,
+                     name="dotii-mcp-reaper").start()
     stop = threading.Event()
     if arguments.parent_pid > 1:
         threading.Thread(

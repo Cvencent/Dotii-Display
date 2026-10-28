@@ -91,6 +91,10 @@ typedef struct {
     char xiaozhi_voice[33];
     bool xiaozhi_mcp_enabled;
     char xiaozhi_mcp_url[512];
+    /* External MCP tool registry served by the management center. The device
+       only tracks the revision; the tool list itself is fetched separately. */
+    bool mcp_tools_enabled;
+    uint32_t mcp_tools_revision;
     bool qqmusic_logged_in;
     /* The device no longer calls QQ Music directly: the management bridge
        holds the session and streams the song. The cookie text is therefore not

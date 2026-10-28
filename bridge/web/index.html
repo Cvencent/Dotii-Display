@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Dotii 管理中心</title>
   <link rel="icon" href="/assets/dotii.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="/styles.css?v=20261024a">
+  <link rel="stylesheet" href="/styles.css?v=20261029a">
   <script src="/markdown.js" defer></script>
-  <script src="/app.js?v=20261024a" defer></script>
+  <script src="/app.js?v=20261029a" defer></script>
 </head>
 <body>
   <div class="app-shell">
@@ -33,6 +33,11 @@
         <span class="nav-icon xiaozhi-icon" aria-hidden="true"></span>
         <span>小智</span>
         <span class="module-meta" id="xiaozhi-nav-state">读取中</span>
+      </button>
+      <button class="module-tab" type="button" data-panel="mcp" aria-selected="false">
+        <span class="nav-icon mcp-icon" aria-hidden="true"></span>
+        <span>MCP 工具</span>
+        <span class="module-meta" id="mcp-nav-state"></span>
       </button>
       <button class="module-tab system-tab" type="button" data-panel="system" aria-selected="false">
         <span class="nav-icon settings-icon" aria-hidden="true"></span>
@@ -117,6 +122,51 @@
             <div class="runtime-row"><span>表情</span><strong>固件原生渲染，随对话与触摸切换</strong></div>
             <div class="runtime-row"><span>形象</span><strong>固件内置 4 个形象，小智页自动轮换</strong></div>
             <div class="runtime-row"><span>Codex 数据</span><strong>由 CodexBridge 独立下发</strong></div>
+          </article>
+        </div>
+      </section>
+
+      <section class="panel" id="panel-mcp" aria-labelledby="mcp-heading" hidden>
+        <div class="section-heading">
+          <div>
+            <h2 id="mcp-heading">MCP 工具</h2>
+            <p>把外部 MCP 服务器接入小智语音。保存后设备会自动发现工具，对话里说一句话就能调用。</p>
+          </div>
+          <label class="module-switch">
+            <span>启用 MCP 工具</span>
+            <input id="mcp-enabled" type="checkbox">
+            <span class="switch-track" aria-hidden="true"></span>
+          </label>
+        </div>
+
+        <div class="module-content" id="mcp-content">
+          <form class="settings-panel" id="mcp-form">
+            <div class="card-heading">
+              <div><h3>MCP 服务器</h3><p>远程服务填 HTTP 地址；本机程序填启动命令，管理中心会替设备去调用它们。</p></div>
+              <button class="ghost-button" type="button" id="mcp-add-server">添加服务器</button>
+            </div>
+            <div id="mcp-server-list"></div>
+            <p class="network-note" id="mcp-empty-note"><strong>还没有 MCP 服务器</strong><span>点"添加服务器"开始，最多 8 个。工具名会自动加上 mcp&lt;服务器号&gt;_ 前缀注入小智。</span></p>
+            <div class="form-actions">
+              <button class="primary-button" type="submit">保存 MCP 设置</button>
+              <button class="ghost-button" type="button" id="mcp-probe">检测工具列表</button>
+              <span class="save-state" id="mcp-save-state" role="status" aria-live="polite">尚未修改</span>
+            </div>
+          </form>
+
+          <article class="settings-panel" id="mcp-tools-card" hidden>
+            <div class="card-heading">
+              <div><h3>检测到的工具</h3><p>每个服务器暴露给小智的工具。设备端最多合并 20 个工具。</p></div>
+            </div>
+            <div id="mcp-tools-output"></div>
+          </article>
+
+          <article class="settings-panel xiaozhi-info">
+            <h3>工作原理</h3>
+            <div class="runtime-row"><span>发现</span><strong>设备开机时从管理中心拉取工具表，注册进小智会话</strong></div>
+            <div class="runtime-row"><span>调用</span><strong>小智调用工具 → 设备转发管理中心 → 管理中心访问 MCP 服务器</strong></div>
+            <div class="runtime-row"><span>本机程序</span><strong>stdio 方式会在这台电脑上启动你填写的命令，空闲 5 分钟后自动退出</strong></div>
+            <div class="runtime-row"><span>安全</span><strong>配置只存在本机 mcp.json，不会上传；请只添加自己信任的服务</strong></div>
           </article>
         </div>
       </section>

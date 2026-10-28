@@ -45,6 +45,7 @@ for relative_name in firmware_files.values():
 hiddenimports = [
     *collect_submodules("pypinyin"),
     "codex_bridge",
+    "mcp_client",
     "bluetooth_bridge",
     "firmware_flasher",
     "runtime_paths",

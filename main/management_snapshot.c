@@ -107,6 +107,17 @@ static void copy_xiaozhi_config(cJSON *root, codex_snapshot_t *snapshot)
     ESP_LOGI("snapshot", "xiaozhi from json: mcp=%d mcp_url=%s",
              (int)snapshot->xiaozhi_mcp_enabled,
              snapshot->xiaozhi_mcp_url[0] ? "set" : "EMPTY");
+
+    snapshot->mcp_tools_enabled = true;
+    snapshot->mcp_tools_revision = 0;
+    cJSON *mcp_tools = cJSON_GetObjectItemCaseSensitive(root, "mcp");
+    if (!cJSON_IsObject(mcp_tools)) return;
+    cJSON *tools_enabled = cJSON_GetObjectItemCaseSensitive(mcp_tools, "enabled");
+    if (cJSON_IsBool(tools_enabled)) snapshot->mcp_tools_enabled = cJSON_IsTrue(tools_enabled);
+    cJSON *tools_revision = cJSON_GetObjectItemCaseSensitive(mcp_tools, "revision");
+    if (cJSON_IsNumber(tools_revision)) {
+        snapshot->mcp_tools_revision = (uint32_t)tools_revision->valuedouble;
+    }
 }
 
 static void copy_qqmusic_config(cJSON *root, codex_snapshot_t *snapshot)
@@ -427,6 +438,8 @@ void management_snapshot_apply(codex_snapshot_t *target, const codex_snapshot_t 
     target->xiaozhi_mcp_enabled = source->xiaozhi_mcp_enabled;
     memcpy(target->xiaozhi_mcp_url, source->xiaozhi_mcp_url,
            sizeof(target->xiaozhi_mcp_url));
+    target->mcp_tools_enabled = source->mcp_tools_enabled;
+    target->mcp_tools_revision = source->mcp_tools_revision;
     target->custom_enabled = source->custom_enabled;
     target->dotii_enabled = source->dotii_enabled;
     target->custom_image_available = source->custom_image_available;

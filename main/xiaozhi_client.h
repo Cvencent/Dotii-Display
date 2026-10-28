@@ -130,6 +130,11 @@ void xiaozhi_client_init(xiaozhi_client_t *client);
 void xiaozhi_client_configure(xiaozhi_client_t *client, const xiaozhi_config_t *config);
 bool xiaozhi_client_start(xiaozhi_client_t *client);
 
+/* Revision of the management-center MCP tool registry from the latest
+   snapshot. A change makes the client refetch the external tool table in the
+   background and notify the cloud with notifications/tools/list_changed. */
+void xiaozhi_client_set_mcp_revision(xiaozhi_client_t *client, uint32_t revision);
+
 void xiaozhi_client_stop(xiaozhi_client_t *client);
 
 xiaozhi_session_state_t xiaozhi_client_state(const xiaozhi_client_t *client);

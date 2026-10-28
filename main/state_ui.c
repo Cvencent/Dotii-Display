@@ -1546,6 +1546,9 @@ static void xiaozhi_sync_config(void)
             sizeof(config.voice));
     config.mcp_enabled = s_snapshot.xiaozhi_mcp_enabled;
     strlcpy(config.mcp_url, s_snapshot.xiaozhi_mcp_url, sizeof(config.mcp_url));
+    /* A changed registry revision makes the running session refetch the
+       external tool table without a websocket restart. */
+    xiaozhi_client_set_mcp_revision(&s_xiaozhi, s_snapshot.mcp_tools_revision);
 
     ESP_LOGI(TAG, "xiaozhi config: mcp=%d mcp_url=%s", (int)config.mcp_enabled,
              config.mcp_url[0] ? "set" : "EMPTY");

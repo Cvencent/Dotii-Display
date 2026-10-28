@@ -490,3 +490,44 @@ button:disabled { cursor: not-allowed; opacity: .55; transform: none; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; transition-duration: 0.01ms !important; }
 }
+
+/* ---- MCP 工具页 ---- */
+.mcp-icon {
+  -webkit-mask-image: url("/assets/settings.svg");
+  mask-image: url("/assets/settings.svg");
+}
+.mcp-server-row {
+  display: grid;
+  gap: 12px;
+  margin-top: 14px;
+  padding: 18px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-control);
+  background: var(--surface-soft);
+}
+.mcp-row-head { display: flex; align-items: center; gap: 10px; }
+.mcp-row-head .mcp-row-enabled { width: 18px; height: 18px; flex: 0 0 auto; accent-color: var(--blue); }
+.mcp-row-head .mcp-name { flex: 1 1 160px; min-width: 0; }
+.mcp-row-head .mcp-transport { min-height: 42px; padding: 0 10px; border: 1px solid #35413e; border-radius: 9px; background: #0d1211; color: var(--text); }
+.mcp-server-row input[type="text"], .mcp-server-row input:not([type]),
+.mcp-server-row input[type="url"], .mcp-server-row textarea {
+  width: 100%;
+  min-height: 42px;
+  padding: 10px 12px;
+  border: 1px solid #35413e;
+  border-radius: 9px;
+  background: #0d1211;
+  color: var(--text);
+}
+.mcp-server-row textarea { resize: vertical; font-size: 13px; line-height: 1.5; }
+.mcp-row-http, .mcp-row-stdio { display: grid; gap: 10px; }
+.mcp-row-http[hidden], .mcp-row-stdio[hidden] { display: none; }
+.mcp-tools-block { padding: 14px 0; border-top: 1px solid var(--line); }
+.mcp-tools-block:first-child { border-top: 0; padding-top: 0; }
+.mcp-tools-head { display: flex; align-items: baseline; gap: 10px; }
+.mcp-tools-meta { color: var(--muted); font-size: 12px; }
+.mcp-tools-error { margin: 8px 0 0; color: #f2a4a4; font-size: 13px; line-height: 1.5; }
+.mcp-tools-list { margin: 10px 0 0; padding: 0 0 0 2px; list-style: none; display: grid; gap: 6px; }
+.mcp-tools-list li { display: grid; gap: 2px; font-size: 13px; line-height: 1.5; }
+.mcp-tools-list strong { color: #a9d9c4; font-weight: 600; }
+.mcp-tools-list span { color: var(--muted); }
