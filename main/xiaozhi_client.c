@@ -847,10 +847,20 @@ static void mcp_tools_list(xiaozhi_client_t *client, cJSON *root)
         string_and_integer_properties("action", "play or stop",
                                       "song_index", "1-based confirmed candidate number"),
         "action");
+    cJSON *playlist = make_mcp_tool("play_playlist",
+        "Play songs from a QQ Music playlist of the signed-in account. Use this "
+        "when the user asks for their own music instead of a specific song, for "
+        "example \"播放我喜欢的音乐\", \"放我的歌单\" or \"来点我最爱听的\". "
+        "Pass the playlist name the user said (default 我喜欢). Playback starts "
+        "immediately; do not ask the user to choose a song.",
+        string_property("playlist",
+                        "Playlist name such as 我喜欢 / 我最爱听 / 我的音乐"),
+        "playlist");
     if (tools != NULL) {
         if (search != NULL) cJSON_AddItemToArray(tools, search);
         if (play != NULL) cJSON_AddItemToArray(tools, play);
         if (music != NULL) cJSON_AddItemToArray(tools, music);
+        if (playlist != NULL) cJSON_AddItemToArray(tools, playlist);
     }
     mcp_reply(client, root, result);
 }
@@ -928,6 +938,44 @@ static void mcp_reply_by_id(xiaozhi_client_t *client, const char *id_json,
 }
 
 static void mcp_search_task(void *argument);
+static void mcp_playlist_task(void *argument);
+
+/* Detects playlist-style requests ("播放我喜欢的音乐", "放我的歌单") and returns
+   the playlist name the user asked for, or NULL when this is a normal song
+   search/normal chat. */
+static const char *music_playlist_query(const char *text)
+{
+    if (text == NULL || text[0] == '\0') return NULL;
+    const char *play = strstr(text, "播放");
+    if (play == NULL) play = strstr(text, "放");
+    if (play == NULL) play = strstr(text, "来点");
+    if (play == NULL) return NULL;
+    if (strstr(text, "我喜欢") != NULL) return "我喜欢";
+    if (strstr(text, "最爱听") != NULL) return "我最爱听";
+    if (strstr(text, "我的音乐") != NULL) return "我的音乐";
+    if (strstr(text, "我的歌单") != NULL || strstr(text, "歌单") != NULL) {
+        return "我的歌单";
+    }
+    return NULL;
+}
+
+static void music_playlist_dispatch(xiaozhi_client_t *client, const char *playlist)
+{
+    xiaozhi_client_cancel_pending_music(client);
+    ESP_LOGI(TAG, "music playlist dispatch: %s", playlist);
+    mcp_search_job_t *job = heap_caps_calloc(1, sizeof(*job),
+                                             MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (job == NULL) return;
+    job->client = client;
+    copy_bounded(job->query, sizeof(job->query), playlist);
+    job->id_json[0] = '\0';
+    if (xTaskCreatePinnedToCoreWithCaps(mcp_playlist_task, "mcp_list", 10240, job, 3,
+                                        NULL, 0,
+                                        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {
+        heap_caps_free(job);
+    }
+}
+
 static void music_search_dispatch(xiaozhi_client_t *client, const char *query)
 {
     xiaozhi_client_cancel_pending_music(client);
@@ -943,6 +991,73 @@ static void music_search_dispatch(xiaozhi_client_t *client, const char *query)
                                         MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {
         heap_caps_free(job);
     }
+}
+
+/* Playlist request: resolve a named QQ Music playlist and start its first
+   streamable song. Runs on its own worker because the bridge call is HTTPS. */
+static void mcp_playlist_task(void *argument)
+{
+    mcp_search_job_t *job = (mcp_search_job_t *)argument;
+    const device_config_values_t *cfg = device_config_get();
+    qqmusic_song_t songs[QQMUSIC_MAX_RESULTS] = {0};
+    int count = 0;
+    char playlist_name[96] = {0};
+    if (!qqmusic_playlist(cfg->bridge_url, cfg->bridge_token, job->query, 5, 0,
+                          songs, QQMUSIC_MAX_RESULTS, &count,
+                          playlist_name, sizeof(playlist_name)) ||
+        count < 1) {
+        ESP_LOGW(TAG, "mcp play_playlist: no songs for %s", job->query);
+        mcp_reply_by_id(job->client, job->id_json,
+            "无法读取歌单。请确认 QQ 音乐已在管理中心登录。", true);
+        heap_caps_free(job);
+        vTaskDelete(NULL);
+        return;
+    }
+    const char *label_name = playlist_name[0] ? playlist_name : job->query;
+    /* Prefer the first track the account can actually stream. */
+    int chosen = -1;
+    for (int i = 0; i < count; ++i) {
+        if (songs[i].mid[0] != '\0') {
+            chosen = i;
+            break;
+        }
+    }
+    if (chosen < 0) {
+        mcp_reply_by_id(job->client, job->id_json,
+            "歌单里没有可播放的歌曲。", true);
+        heap_caps_free(job);
+        vTaskDelete(NULL);
+        return;
+    }
+    char url[512] = {0};
+    if (!qqmusic_resolve_mid(cfg->bridge_url, cfg->bridge_token,
+                             songs[chosen].mid, url, sizeof(url))) {
+        ESP_LOGW(TAG, "mcp play_playlist: resolve failed mid=%s", songs[chosen].mid);
+        mcp_reply_by_id(job->client, job->id_json,
+            "歌单里的歌曲暂时无法播放。", true);
+        heap_caps_free(job);
+        vTaskDelete(NULL);
+        return;
+    }
+    char label[320];
+    snprintf(label, sizeof(label), "%s - %s", songs[chosen].title,
+             songs[chosen].artist[0] ? songs[chosen].artist : "未知歌手");
+    ESP_LOGI(TAG, "mcp play_playlist: %s -> %s", label_name, label);
+    /* Remember the rest of the page so "下一首" can advance within the playlist
+       without another network round trip. */
+    s_music_cache.valid = true;
+    s_music_cache.stamp_ms = now_ms();
+    copy_bounded(s_music_cache.query, sizeof(s_music_cache.query), label_name);
+    memcpy(s_music_cache.songs, songs, sizeof(songs));
+    s_music_cache.count = count;
+    xiaozhi_client_queue_music(job->client, url, label);
+    char reply[512];
+    snprintf(reply, sizeof(reply),
+             "正在播放你的歌单《%s》，第一首是《%s》。请用一句话确认，不要说列表。",
+             label_name, songs[chosen].title);
+    mcp_reply_by_id(job->client, job->id_json, reply, false);
+    heap_caps_free(job);
+    vTaskDelete(NULL);
 }
 
 static void mcp_search_task(void *argument)
@@ -1083,6 +1198,36 @@ static void mcp_tool_call(xiaozhi_client_t *client, cJSON *root)
                                             MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {
             heap_caps_free(job);
             mcp_reply_tool_text(client, root, "search task failed", true);
+        }
+        return;
+    }
+
+    if (strcmp(name->valuestring, "play_playlist") == 0) {
+        const char *wanted = cJSON_IsString(query) && query->valuestring[0] != '\0'
+            ? query->valuestring : "我喜欢";
+        xiaozhi_client_cancel_pending_music(client);
+        ESP_LOGI(TAG, "mcp play_playlist=%s (async)", wanted);
+        mcp_search_job_t *job = heap_caps_calloc(1, sizeof(*job),
+                                                 MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (job == NULL) {
+            mcp_reply_tool_text(client, root, "out of memory", true);
+            return;
+        }
+        job->client = client;
+        copy_bounded(job->query, sizeof(job->query), wanted);
+        const cJSON *id = cJSON_GetObjectItemCaseSensitive(root, "id");
+        if (id != NULL) {
+            char *id_text = cJSON_PrintUnformatted((cJSON *)id);
+            if (id_text != NULL) {
+                copy_bounded(job->id_json, sizeof(job->id_json), id_text);
+                cJSON_free(id_text);
+            }
+        }
+        if (xTaskCreatePinnedToCoreWithCaps(
+                mcp_playlist_task, "mcp_list", 10240, job, 3, NULL, 0,
+                MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {
+            heap_caps_free(job);
+            mcp_reply_tool_text(client, root, "playlist task failed", true);
         }
         return;
     }
@@ -1290,6 +1435,12 @@ bool xiaozhi_client_handle_text(xiaozhi_client_t *client, const char *json)
                the model remembering the tool. */
 #if CONFIG_XIAOZHI_ENABLE
             const char *song_text = text->valuestring;
+            const char *playlist_name = music_playlist_query(song_text);
+            if (playlist_name != NULL) {
+                client->listening = false;
+                client->state = XIAOZHI_STATE_THINKING;
+                music_playlist_dispatch(client, playlist_name);
+            } else {
             const char *play_marker = strstr(song_text, "播放");
             if (play_marker != NULL) {
                 song_text = play_marker + strlen("播放");
@@ -1299,6 +1450,7 @@ bool xiaozhi_client_handle_text(xiaozhi_client_t *client, const char *json)
                     client->state = XIAOZHI_STATE_THINKING;
                     music_search_dispatch(client, song_text);
                 }
+            }
             }
 #endif
         }
@@ -1382,8 +1534,14 @@ bool xiaozhi_client_handle_text(xiaozhi_client_t *client, const char *json)
 }
 
 #if CONFIG_XIAOZHI_ENABLE
+/* One 60 ms Opus frame is well under 512 bytes even at the highest bitrate the
+   service uses. Keeping the payload inline means the websocket RX path never
+   calls malloc/free per frame: that churn fragmented internal DRAM during a
+   long conversation and made TTS playback stutter. */
+#define XIAOZHI_AUDIO_PACKET_BYTES 640
+#define XIAOZHI_AUDIO_QUEUE_DEPTH 24
 typedef struct {
-    uint8_t *data;
+    uint8_t data[XIAOZHI_AUDIO_PACKET_BYTES];
     size_t length;
 } audio_packet_t;
 typedef struct {
@@ -1392,6 +1550,13 @@ typedef struct {
     size_t length;
 } ota_body_t;
 
+/* The queue holds full 60 ms frames, so its storage must not come out of the
+   scarce internal DRAM pool the panel DMA and Wi-Fi need. A static queue keeps
+   both the control block and the payload array in PSRAM. */
+static StaticQueue_t s_audio_queue_struct;
+EXT_RAM_BSS_ATTR static uint8_t
+    s_audio_queue_storage[XIAOZHI_AUDIO_QUEUE_DEPTH * sizeof(audio_packet_t)]
+    __attribute__((aligned(4)));
 static QueueHandle_t s_audio_queue;
 static uint32_t s_audio_init_tick;
 static uint32_t s_speaker_init_tick;
@@ -1670,11 +1835,16 @@ static void ws_event_handler(void *handler_arg, esp_event_base_t base, int32_t e
                 }
             } else {
                 audio_packet_t packet = {0};
-                packet.data = malloc((size_t)data->data_len);
-                if (packet.data != NULL) {
-                    packet.length = (size_t)data->data_len;
-                    memcpy(packet.data, data->data_ptr, packet.length);
-                    if (xQueueSend(s_audio_queue, &packet, 0) != pdTRUE) free(packet.data);
+                size_t length = (size_t)data->data_len;
+                if (length > sizeof(packet.data)) length = sizeof(packet.data);
+                packet.length = length;
+                memcpy(packet.data, data->data_ptr, length);
+                /* Non-blocking: if the consumer is behind, dropping the oldest
+                   frame is better than blocking the websocket RX task. */
+                if (xQueueSend(s_audio_queue, &packet, 0) != pdTRUE) {
+                    audio_packet_t dropped = {0};
+                    (void)xQueueReceive(s_audio_queue, &dropped, 0);
+                    (void)xQueueSend(s_audio_queue, &packet, 0);
                 }
             }
         }
@@ -2839,6 +3009,17 @@ static int16_t *playback_pcm_reserve(int16_t **buffer, size_t *capacity,
 static void playback_task(void *argument)
 {
     xiaozhi_client_t *client = (xiaozhi_client_t *)argument;
+    /* Decoded TTS PCM is staged here and handed to the codec in ~180 ms
+       batches. Writing one 60 ms frame as soon as it arrives left the I2S DMA
+       ring empty whenever a network packet was even slightly late, which is
+       what made a long conversation sound "one beat, then a hiccup". */
+    const size_t stage_target =
+        (size_t)XIAOZHI_CODEC_RATE * XIAOZHI_FRAME_MS / 1000 * 3;
+    int16_t *stage = NULL;
+    size_t stage_capacity = 0;
+    size_t stage_samples = 0;
+    int idle_waits = 0;
+    bool stage_failed = false;
     while (client->running) {
         const bool chime_pending =
             atomic_load_explicit(&client->task_chime_pending, memory_order_acquire);
@@ -2861,8 +3042,21 @@ static void playback_task(void *argument)
         /* Keep this short so a wake reply deferred by music starts promptly
            after the music worker retires. */
         const TickType_t queue_wait = pdMS_TO_TICKS(20);
-        if (xQueueReceive(s_audio_queue, &packet, queue_wait) != pdTRUE) continue;
-        if (packet.data == NULL) continue;
+        if (xQueueReceive(s_audio_queue, &packet, queue_wait) != pdTRUE) {
+            /* The stream went quiet: push whatever is staged so the last words
+               are not stuck in the buffer after speaking ends. */
+            if (++idle_waits >= 3) {
+                idle_waits = 0;
+                if (stage_samples > 0 && !stage_failed) {
+                    esp_codec_dev_write((esp_codec_dev_handle_t)client->speaker,
+                                        stage, (int)(stage_samples * sizeof(int16_t)));
+                }
+                stage_samples = 0;
+            }
+            continue;
+        }
+        idle_waits = 0;
+        if (packet.length == 0) continue;
         if (audio_init(client) && ensure_decoder(client, client->server_sample_rate)) {
             static int16_t *s_play_pcm;
             static size_t s_play_pcm_capacity;
@@ -2898,18 +3092,54 @@ static void playback_task(void *argument)
                             if (esp_ae_rate_cvt_process(client->output_resampler, (esp_ae_sample_t)pcm,
                                                         (uint32_t)decoded_samples, (esp_ae_sample_t)resampled,
                                                         &produced) == ESP_AE_ERR_OK) {
-                                esp_codec_dev_write((esp_codec_dev_handle_t)client->speaker, resampled,
-                                                    (int)(produced * sizeof(int16_t)));
+                                if (stage == NULL) {
+                                    stage = heap_caps_malloc(
+                                        stage_target * 2 * sizeof(int16_t),
+                                        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+                                    stage_capacity = stage_target * 2;
+                                    if (stage == NULL) stage_failed = true;
+                                }
+                                if (stage != NULL && !stage_failed &&
+                                    stage_samples + produced <= stage_capacity) {
+                                    memcpy(stage + stage_samples, resampled,
+                                           produced * sizeof(int16_t));
+                                    stage_samples += produced;
+                                } else {
+                                    /* Fall back to an immediate write rather than
+                                       dropping audio. */
+                                    esp_codec_dev_write((esp_codec_dev_handle_t)client->speaker,
+                                                        resampled, (int)(produced * sizeof(int16_t)));
+                                }
                             }
                         }
                     } else {
-                        esp_codec_dev_write((esp_codec_dev_handle_t)client->speaker, pcm, out.decoded_size);
+                        const size_t samples = out.decoded_size / sizeof(int16_t);
+                        if (stage == NULL) {
+                            stage = heap_caps_malloc(stage_target * 2 * sizeof(int16_t),
+                                                     MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+                            stage_capacity = stage_target * 2;
+                            if (stage == NULL) stage_failed = true;
+                        }
+                        if (stage != NULL && !stage_failed &&
+                            stage_samples + samples <= stage_capacity) {
+                            memcpy(stage + stage_samples, pcm, out.decoded_size);
+                            stage_samples += samples;
+                        } else {
+                            esp_codec_dev_write((esp_codec_dev_handle_t)client->speaker,
+                                                pcm, (int)out.decoded_size);
+                        }
                     }
                 }
             }
         }
-        free(packet.data);
+
+        if (stage_samples >= stage_target) {
+            esp_codec_dev_write((esp_codec_dev_handle_t)client->speaker, stage,
+                                (int)(stage_samples * sizeof(int16_t)));
+            stage_samples = 0;
+        }
     }
+    if (stage != NULL) heap_caps_free(stage);
     if (client->playback_task == (void *)xTaskGetCurrentTaskHandle()) {
         client->playback_task = NULL;
     }
@@ -3348,7 +3578,12 @@ bool xiaozhi_client_start(xiaozhi_client_t *client)
     }
     client->running = true;
     client->state = client->activated ? XIAOZHI_STATE_CONNECTING : XIAOZHI_STATE_ACTIVATING;
-    if (s_audio_queue == NULL) s_audio_queue = xQueueCreate(12, sizeof(audio_packet_t));
+    if (s_audio_queue == NULL) {
+        s_audio_queue = xQueueCreateStatic(XIAOZHI_AUDIO_QUEUE_DEPTH,
+                                           sizeof(audio_packet_t),
+                                           s_audio_queue_storage,
+                                           &s_audio_queue_struct);
+    }
     if (client->activated && client->websocket_url[0] != '\0') {
         if (open_websocket(client)) {
             if (xiaozhi_start_workers(client) &&
@@ -3432,9 +3667,7 @@ void xiaozhi_client_stop(xiaozhi_client_t *client)
 
     if (s_audio_queue != NULL) {
         audio_packet_t packet = {0};
-        while (xQueueReceive(s_audio_queue, &packet, 0) == pdTRUE) {
-            free(packet.data);
-        }
+        while (xQueueReceive(s_audio_queue, &packet, 0) == pdTRUE) { }
     }
 
     wake_word_stop(client);

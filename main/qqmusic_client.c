@@ -106,6 +106,34 @@ static bool post_json(const char *bridge_url, const char *bridge_token,
     return body.length > 0;
 }
 
+/* Parse a compact bridge song array (mid/title/artist/album) into out. */
+static int parse_bridge_songs(cJSON *root, const char *array_key,
+                              qqmusic_song_t *out, int max)
+{
+    if (root == NULL || out == NULL || max <= 0) return 0;
+    const cJSON *results = cJSON_GetObjectItemCaseSensitive(root, array_key);
+    int count = 0;
+    if (cJSON_IsArray(results)) {
+        const cJSON *item = NULL;
+        cJSON_ArrayForEach(item, results) {
+            if (count >= max) break;
+            const cJSON *mid = cJSON_GetObjectItemCaseSensitive(item, "mid");
+            const cJSON *title = cJSON_GetObjectItemCaseSensitive(item, "title");
+            if (!cJSON_IsString(mid) || !cJSON_IsString(title)) continue;
+            qqmusic_song_t *song = &out[count];
+            memset(song, 0, sizeof(*song));
+            strlcpy(song->mid, mid->valuestring, sizeof(song->mid));
+            strlcpy(song->title, title->valuestring, sizeof(song->title));
+            const cJSON *artist = cJSON_GetObjectItemCaseSensitive(item, "artist");
+            if (cJSON_IsString(artist)) strlcpy(song->artist, artist->valuestring, sizeof(song->artist));
+            const cJSON *album = cJSON_GetObjectItemCaseSensitive(item, "album");
+            if (cJSON_IsString(album)) strlcpy(song->album, album->valuestring, sizeof(song->album));
+            count++;
+        }
+    }
+    return count;
+}
+
 bool qqmusic_search(const char *bridge_url, const char *bridge_token,
                     const char *query, qqmusic_song_t *out,
                     int max, int *out_count)
@@ -137,25 +165,50 @@ bool qqmusic_search(const char *bridge_url, const char *bridge_token,
     cJSON *root = cJSON_Parse(response);
     heap_caps_free(response);
     if (root == NULL) return false;
-    const cJSON *results = cJSON_GetObjectItemCaseSensitive(root, "results");
-    int count = 0;
-    if (cJSON_IsArray(results)) {
-        const cJSON *item = NULL;
-        cJSON_ArrayForEach(item, results) {
-            if (count >= max) break;
-            const cJSON *mid = cJSON_GetObjectItemCaseSensitive(item, "mid");
-            const cJSON *title = cJSON_GetObjectItemCaseSensitive(item, "title");
-            if (!cJSON_IsString(mid) || !cJSON_IsString(title)) continue;
-            qqmusic_song_t *song = &out[count];
-            memset(song, 0, sizeof(*song));
-            strlcpy(song->mid, mid->valuestring, sizeof(song->mid));
-            strlcpy(song->title, title->valuestring, sizeof(song->title));
-            const cJSON *artist = cJSON_GetObjectItemCaseSensitive(item, "artist");
-            if (cJSON_IsString(artist)) strlcpy(song->artist, artist->valuestring, sizeof(song->artist));
-            const cJSON *album = cJSON_GetObjectItemCaseSensitive(item, "album");
-            if (cJSON_IsString(album)) strlcpy(song->album, album->valuestring, sizeof(song->album));
-            count++;
-        }
+    const int count = parse_bridge_songs(root, "results", out, max);
+    cJSON_Delete(root);
+    if (out_count != NULL) *out_count = count;
+    return count > 0;
+}
+
+bool qqmusic_playlist(const char *bridge_url, const char *bridge_token,
+                      const char *playlist, int limit, int offset,
+                      qqmusic_song_t *out, int max, int *out_count,
+                      char *out_name, size_t name_size)
+{
+    if (out_count != NULL) *out_count = 0;
+    if (out_name != NULL && name_size > 0) out_name[0] = '\0';
+    if (out == NULL || max <= 0) return false;
+    if (max > QQMUSIC_MAX_RESULTS) max = QQMUSIC_MAX_RESULTS;
+
+    cJSON *request = cJSON_CreateObject();
+    if (request == NULL) return false;
+    cJSON_AddStringToObject(request, "playlist", playlist != NULL ? playlist : "");
+    cJSON_AddNumberToObject(request, "limit", max);
+    cJSON_AddNumberToObject(request, "offset", offset > 0 ? offset : 0);
+
+    char *response = heap_caps_calloc(1, QQMUSIC_RESPONSE_SIZE,
+                                      MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (response == NULL) {
+        cJSON_Delete(request);
+        return false;
+    }
+    const bool posted = post_json(bridge_url, bridge_token,
+                                  "/api/v1/device/music/playlist",
+                                  request, response, QQMUSIC_RESPONSE_SIZE);
+    cJSON_Delete(request);
+    if (!posted) {
+        heap_caps_free(response);
+        return false;
+    }
+
+    cJSON *root = cJSON_Parse(response);
+    heap_caps_free(response);
+    if (root == NULL) return false;
+    const int count = parse_bridge_songs(root, "songs", out, max);
+    if (out_name != NULL && name_size > 0) {
+        const cJSON *name = cJSON_GetObjectItemCaseSensitive(root, "name");
+        if (cJSON_IsString(name)) strlcpy(out_name, name->valuestring, name_size);
     }
     cJSON_Delete(root);
     if (out_count != NULL) *out_count = count;

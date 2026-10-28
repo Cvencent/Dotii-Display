@@ -26,6 +26,13 @@ bool qqmusic_search(const char *bridge_url, const char *bridge_token,
                     const char *query, qqmusic_song_t *out,
                     int max, int *out_count);
 
+/* Fetches songs from a named QQ Music playlist (for example 我喜欢). The
+   resolved playlist name is written to out_name when provided. */
+bool qqmusic_playlist(const char *bridge_url, const char *bridge_token,
+                      const char *playlist, int limit, int offset,
+                      qqmusic_song_t *out, int max, int *out_count,
+                      char *out_name, size_t name_size);
+
 bool qqmusic_resolve_mid(const char *bridge_url, const char *bridge_token,
                          const char *mid, char *out_url, size_t url_size);
 

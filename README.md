@@ -4,7 +4,7 @@ Dotii 是一套由 ESP32-S3 圆形 AMOLED 桌面屏、Dotii 管理中心与 Code
 
 ![Dotii 桌面交互屏产品渲染图](assets/dotii-product-render.png)
 
-**下载**：[管理中心 v1.1.9](https://github.com/Cvencent/Dotii-Display/releases/tag/management-center-v1.2.1) · [固件 1.1.9](https://github.com/Cvencent/Dotii-Display/releases/tag/firmware-v1.2.1) · [CodexBridge](https://github.com/Cvencent/CodexBridge/releases) · [MakerWorld 模型与打印文件](https://makerworld.com.cn/zh/models/2918764-dotii-zhuo-mian-jiao-hu-ping#profileId-3421401) · [开发指南](开发指南.md)
+**下载**：[管理中心 v1.2.2](https://github.com/Cvencent/Dotii-Display/releases/tag/management-center-v1.2.2) · [固件 1.2.2](https://github.com/Cvencent/Dotii-Display/releases/tag/firmware-v1.2.2) · [CodexBridge](https://github.com/Cvencent/CodexBridge/releases) · [MakerWorld 模型与打印文件](https://makerworld.com.cn/zh/models/2918764-dotii-zhuo-mian-jiao-hu-ping#profileId-3421401) · [开发指南](开发指南.md)
 
 ---
 
@@ -63,11 +63,11 @@ Dotii 由三个彼此独立的部分组成，可以分开升级：
 
 ### 3.1 安装 Dotii 管理中心（Windows）
 
-1. 从 [Releases](https://github.com/Cvencent/Dotii-Display/releases/tag/management-center-v1.2.1) 下载 `Dotii-Setup-1.2.1.exe`。
+1. 从 [Releases](https://github.com/Cvencent/Dotii-Display/releases/tag/management-center-v1.2.2) 下载 `Dotii-Setup-1.2.2.exe`。
 2. 双击安装。默认装在 `%LOCALAPPDATA%\Programs\Dotii Management Center`，并提供开始菜单、桌面快捷方式与卸载入口。
 3. 安装完成后从托盘或开始菜单打开。管理页地址为 `http://127.0.0.1:8787`，**只允许本机访问**。
 
-也可以使用 `DotiiManagementCenter-1.2.1-portable.zip` 便携版，解压即用。
+也可以使用 `DotiiManagementCenter-1.2.2-portable.zip` 便携版，解压即用。
 
 ### 3.2 烧录固件
 
@@ -142,6 +142,19 @@ Dotii 会根据 CodexBridge 下发的额度形态，自动在两种布局之间�
 - **聆听角标**：录音时左上角显示"聆听中"。
 - **形象轮换**：固件内置 4 个形象，在本页自动轮换。
 - **触摸**：轻点或长按屏幕会给出对应的触摸反馈表情。
+
+#### 语音点歌
+
+登录 QQ 音乐后，可以直接对小智说：
+
+| 你说 | 设备行为 |
+| --- | --- |
+| "播放陈奕迅的单车" | 搜索并播放匹配歌曲 |
+| "播放我喜欢的音乐" / "放我的歌单" | 拉取你账号的「我喜欢」歌单并播放第一首 |
+| "播放我最爱听的" | 拉取「我最爱听」歌单并播放 |
+| "停止播放" | 停止当前音乐 |
+
+歌单由 QQ 音乐账号授权读取，只读取该账号自己的歌单，不下载、不缓存歌曲文件。
 
 ### 4.4 控制中心
 
@@ -224,7 +237,7 @@ USB 供电时**只熄屏、不休眠**，这样 Wi-Fi、蓝牙与 CodexBridge �
 | --- | --- |
 | **小智连接** | 启用开关；OTA / 服务地址；最多 3 个自定义唤醒词；音色；MCP 工具调用开关与接入点地址 |
 | **首次配对** | 设备上报的设备码，以及跳转 `xiaozhi.me` 的按钮（配对完成后自动隐藏） |
-| **QQ 音乐** | 扫码登录一次，登录信息写入设备；设备之后自行搜索与播放，按账号会员权限 |
+| **QQ 音乐** | 扫码登录一次（二维码有效期 120 秒）；可搜索单曲、播放「我喜欢」等账号歌单，按账号会员权限播放 |
 | **工作原理** | 对话、表情、形象、Codex 数据各自的来源说明 |
 
 默认值：OTA 地址 `https://api.tenclass.net/xiaozhi/ota/`，唤醒词"你好小智"（可再加 2 个，例如"小土豆"、"开灯"），音色 `default`。\n\n唤醒词规则：中文、字母、数字，单个最多 24 个字符，最多 3 个；重复词会自动去重。留空的输入框会被忽略。修改保存后设备会自动重新加载唤醒模型，无需重启。
@@ -294,12 +307,12 @@ USB 供电时**只熄屏、不休眠**，这样 Wi-Fi、蓝牙与 CodexBridge �
 
 ### 手动刷写（可选）
 
-Release 中的 [固件包](https://github.com/Cvencent/Dotii-Display/releases/tag/firmware-v1.2.1) 内含 `刷机说明.txt` 与 `SHA256SUMS.txt`。
+Release 中的 [固件包](https://github.com/Cvencent/Dotii-Display/releases/tag/firmware-v1.2.2) 内含 `刷机说明.txt` 与 `SHA256SUMS.txt`。
 
 一键整包（全新安装，**会重写 NVS 与 storage**）：
 
 ```bash
-esptool --chip esp32s3 --port COM3 --baud 460800 write-flash 0x0 DotiiFirmware-1.2.1-full.bin
+esptool --chip esp32s3 --port COM3 --baud 460800 write-flash 0x0 DotiiFirmware-1.2.2-full.bin
 ```
 
 仅升级应用、保留配置：

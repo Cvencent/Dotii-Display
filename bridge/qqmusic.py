@@ -455,3 +455,113 @@ class QQMusicAccount:
         if not verdict["available"]:
             return {"available": False, "reason": verdict["reason"]}
         return {"available": True, "url": verdict["url"], "expires_in": 180}
+
+    # ---- playlists ----
+    def playlists(self) -> list[dict[str, Any]]:
+        """Return the account's playlists, including the special 我喜欢 list."""
+        body = {
+            "comm": {"ct": 24, "cv": 0, "uin": self._uin(), "format": "json"},
+            "req_0": {
+                "module": "music.musicasset.PlaylistBaseRead",
+                "method": "GetPlaylistByUin",
+                "param": {"uin": self._uin()},
+            },
+        }
+        response = self.session.post(SEARCH_URL, json=body, timeout=15)
+        data = response.json()
+        req = data.get("req_0") or {}
+        if req.get("code") not in (0, None):
+            self.logged_in = False
+            raise QQMusicNotLoggedIn(
+                "QQ Music login expired; sign in again in the management centre."
+            )
+        items = ((req.get("data") or {}).get("v_playlist") or [])
+        results = []
+        for item in items:
+            results.append({
+                "name": item.get("dirName", ""),
+                "dissid": item.get("tid", 0),
+                "dirid": item.get("dirId", 0),
+                "count": int(item.get("songNum") or 0),
+            })
+        return results
+
+    def playlist_songs(
+        self, playlist: str, limit: int = 5, offset: int = 0
+    ) -> dict[str, Any]:
+        """Resolve a playlist by name (我喜欢/我的音乐/...) and return its songs.
+
+        ``playlist`` may be a playlist name, or the literal "我喜欢" / "favorite"
+        aliases the voice assistant produces. Matching prefers an exact name,
+        then a substring, then falls back to the first playlist.
+        """
+        wanted = (playlist or "").strip()
+        aliases = {
+            "我喜欢": "我喜欢",
+            "我喜欢的": "我喜欢",
+            "我喜欢的音乐": "我喜欢",
+            "favorite": "我喜欢",
+            "favorites": "我喜欢",
+            "liked": "我喜欢",
+            "我的歌单": "",
+            "歌单": "",
+        }
+        wanted = aliases.get(wanted, wanted)
+        lists = self.playlists()
+        chosen = None
+        # Special numeric shortcuts the firmware may send.
+        for item in lists:
+            if item["name"] == wanted:
+                chosen = item
+                break
+        if chosen is None and wanted:
+            for item in lists:
+                if wanted in item["name"]:
+                    chosen = item
+                    break
+        if chosen is None:
+            chosen = next((item for item in lists if item["name"] == "我喜欢"), None)
+        if chosen is None and lists:
+            chosen = lists[0]
+        if chosen is None:
+            return {"name": "", "count": 0, "songs": []}
+
+        # 我喜欢 is a special dirId (201); the generic diss endpoint handles
+        # every entry returned by GetPlaylistByUin.
+        body = {
+            "comm": {"ct": 24, "cv": 0, "uin": self._uin(), "format": "json"},
+            "req_0": {
+                "module": "music.srfDissInfo.DissInfo",
+                "method": "CgiGetDiss",
+                "param": {
+                    "disstid": chosen["dissid"],
+                    "dirid": chosen["dirid"],
+                    "tag": 1,
+                    "song_begin": max(0, offset),
+                    "song_num": max(1, min(limit, 10)),
+                },
+            },
+        }
+        response = self.session.post(SEARCH_URL, json=body, timeout=15)
+        data = (response.json().get("req_0") or {}).get("data") or {}
+        raw_songs = data.get("songlist") or []
+        songs = []
+        for song in raw_songs:
+            singers = "/".join(s.get("name", "") for s in (song.get("singer") or []))
+            songs.append({
+                "mid": song.get("mid", ""),
+                "title": song.get("name", ""),
+                "artist": singers,
+                "album": (song.get("album") or {}).get("name", ""),
+            })
+        # Rank streamable renditions first, exactly like search().
+        verdicts = self._vkey_lookup([item["mid"] for item in songs])
+        for item in songs:
+            verdict = verdicts.get(item["mid"])
+            item["playable"] = True if verdict is None else verdict["available"]
+        songs.sort(key=lambda item: not item["playable"])
+        return {
+            "name": chosen["name"],
+            "count": chosen["count"],
+            "songs": songs,
+        }

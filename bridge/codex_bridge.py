@@ -922,6 +922,22 @@ class BridgeHandler(BaseHTTPRequestHandler):
             except Exception as error:
                 self._send_json(HTTPStatus.BAD_GATEWAY, {"error": str(error)})
             return
+        if path == "/api/v1/device/music/playlist":
+            if not self._authorized():
+                self._send_json(HTTPStatus.UNAUTHORIZED, {"error": "invalid bridge token"})
+                return
+            try:
+                payload = self._read_admin_action()
+                playlist = str(payload.get("playlist", "")).strip()
+                limit = int(payload.get("limit", 5))
+                offset = int(payload.get("offset", 0))
+                result = self.bridge.qqmusic.playlist_songs(playlist, limit, offset)
+                self._send_json(HTTPStatus.OK, {"ok": True, **result})
+            except QQMusicNotLoggedIn as error:
+                self._send_json(HTTPStatus.UNAUTHORIZED, {"error": str(error)})
+            except Exception as error:
+                self._send_json(HTTPStatus.BAD_GATEWAY, {"error": str(error)})
+            return
         if path == "/api/v1/device/music/resolve":
             if not self._authorized():
                 self._send_json(HTTPStatus.UNAUTHORIZED, {"error": "invalid bridge token"})
