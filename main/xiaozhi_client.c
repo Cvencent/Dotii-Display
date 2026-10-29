@@ -1749,7 +1749,7 @@ static bool xiaozhi_handle_mcp(xiaozhi_client_t *client, cJSON *root)
         cJSON_AddObjectToObject(caps, "tools");
         cJSON *info = cJSON_AddObjectToObject(result, "serverInfo");
         cJSON_AddStringToObject(info, "name", "dotii-face");
-        cJSON_AddStringToObject(info, "version", "1.1.9");
+        cJSON_AddStringToObject(info, "version", "1.3.0");
         mcp_reply(client, root, result);
         /* The cloud issues tools/list right after; start pulling the external
            tool table now so the first list already contains them. */
