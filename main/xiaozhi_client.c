@@ -2219,7 +2219,12 @@ static void ws_event_handler(void *handler_arg, esp_event_base_t base, int32_t e
            must not blank the singing face or abort the track. */
         if (!((client->state == XIAOZHI_STATE_MUSIC || client->music_task != NULL) &&
               !client->music_stop_requested)) {
-            client->state = XIAOZHI_STATE_ERROR;
+            /* The service drops idle sockets regularly and the library
+               reconnects within seconds; a hard error here would flash the
+               face red once a minute during normal idle. Report "connecting"
+               and only fall back to ERROR if the wake-task watchdog (30s)
+               also fails to rebuild the session. */
+            client->state = XIAOZHI_STATE_CONNECTING;
         }
         ESP_LOGW(TAG, "websocket disconnected");
         break;
@@ -4005,6 +4010,13 @@ static void wake_task(void *argument)
             ESP_LOGW(TAG, "xiaozhi offline for 30s, rebuilding session");
             if (!open_websocket(client)) {
                 ESP_LOGW(TAG, "xiaozhi session rebuild failed");
+                /* The library reconnect and the 30s watchdog both failed, so
+                   the outage is real: surface it instead of "connecting". */
+                if (!((client->state == XIAOZHI_STATE_MUSIC ||
+                       client->music_task != NULL) &&
+                      !client->music_stop_requested)) {
+                    client->state = XIAOZHI_STATE_ERROR;
+                }
             }
         }
         vTaskDelay(pdMS_TO_TICKS(5));
