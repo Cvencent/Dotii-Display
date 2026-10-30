@@ -85,6 +85,7 @@ static void send_text(xiaozhi_client_t *client, const char *text);
 static bool xiaozhi_mcp_play_mid(xiaozhi_client_t *client, const char *mid,
                                  const char *title);
 static bool audio_init(xiaozhi_client_t *client);
+static void wake_word_restart_if_needed(xiaozhi_client_t *client);
 static void wake_task(void *argument);
 static void ensure_conversation_rate(xiaozhi_client_t *client);
 
@@ -3213,8 +3214,9 @@ static bool open_websocket(xiaozhi_client_t *client)
         esp_websocket_client_destroy((esp_websocket_client_handle_t)client->transport);
         client->transport = NULL;
     }
-    ESP_LOGI(TAG, "open websocket: internal free=%u",
-             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+    ESP_LOGI(TAG, "open websocket: internal free=%u largest=%u",
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
     esp_websocket_client_handle_t handle = esp_websocket_client_init(&config);
     if (handle == NULL) {
         ESP_LOGE(TAG, "websocket init failed: internal free=%u",
@@ -3230,17 +3232,39 @@ static bool open_websocket(xiaozhi_client_t *client)
         esp_websocket_client_append_header(handle, "Authorization", authorization);
     }
     esp_websocket_register_events(handle, WEBSOCKET_EVENT_ANY, ws_event_handler, client);
+    esp_err_t start_result = ESP_FAIL;
     for (int attempt = 0; attempt < 3; ++attempt) {
-        if (esp_websocket_client_start(handle) == ESP_OK) break;
-        if (attempt == 2) {
-            esp_websocket_client_destroy(handle);
-            return false;
+        start_result = esp_websocket_client_start(handle);
+        if (start_result == ESP_OK) break;
+        if (attempt == 1) {
+            /* The task stack comes out of the fragmented internal pool (needs
+               one 4 kB block). The wake models hold the largest remaining
+               blocks there; dropping them frees a contiguous chunk. They are
+               reloaded after the session is up. */
+            ESP_LOGW(TAG, "websocket start short on memory, dropping wake models");
+            wake_word_stop(client);
         }
-        vTaskDelay(pdMS_TO_TICKS(500));
+    }
+    if (start_result != ESP_OK) {
+        esp_websocket_client_destroy(handle);
+        return false;
     }
     client->transport = handle;
     client->state = XIAOZHI_STATE_CONNECTING;
     return true;
+}
+
+/* Bring the wake engines back after open_websocket() had to drop them under
+   memory pressure. Runs on the caller's (wake) task with enough headroom. */
+static void wake_word_restart_if_needed(xiaozhi_client_t *client)
+{
+    if (client == NULL || !client->running || client->wake_ready) return;
+    ESP_LOGI(TAG, "reloading wake models after low-memory rebuild");
+    if (wake_word_start(client)) {
+        ESP_LOGI(TAG, "wake models restored");
+    } else {
+        ESP_LOGW(TAG, "wake model reload failed; voice wake disabled until restart");
+    }
 }
 
 static void activation_task(void *argument)
@@ -4008,8 +4032,14 @@ static void wake_task(void *argument)
                    connectivity_is_wifi_connected()) {
             offline_since_ms = now_ms();
             ESP_LOGW(TAG, "xiaozhi offline for 30s, rebuilding session");
-            if (!open_websocket(client)) {
+            const bool wake_was_ready = client->wake_ready;
+            if (open_websocket(client)) {
+                /* open_websocket may have dropped the wake models to free a
+                   contiguous block for the websocket task stack. */
+                wake_word_restart_if_needed(client);
+            } else {
                 ESP_LOGW(TAG, "xiaozhi session rebuild failed");
+                if (wake_was_ready) wake_word_restart_if_needed(client);
                 /* The library reconnect and the 30s watchdog both failed, so
                    the outage is real: surface it instead of "connecting". */
                 if (!((client->state == XIAOZHI_STATE_MUSIC ||
