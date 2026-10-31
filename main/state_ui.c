@@ -2468,13 +2468,25 @@ static void update_snapshot(const codex_snapshot_t *snapshot)
         lv_obj_set_width(s_xiaozhi_server, 186);
         if (xiaozhi_session == XIAOZHI_STATE_MUSIC &&
             s_xiaozhi.last_assistant_text[0] != '\0') {
+            /* A song title plus artist rarely fits 186 px, so instead of
+               cutting it off with an ellipsis, marquee-scroll it — that is
+               how the user can tell what is actually playing. */
+            if (lv_label_get_long_mode(s_xiaozhi_server) != LV_LABEL_LONG_SCROLL_CIRCULAR) {
+                lv_label_set_long_mode(s_xiaozhi_server, LV_LABEL_LONG_SCROLL_CIRCULAR);
+            }
             set_label_text_cached(s_xiaozhi_server, s_xiaozhi.last_assistant_text);
         } else {
+            if (lv_label_get_long_mode(s_xiaozhi_server) != LV_LABEL_LONG_DOT) {
+                lv_label_set_long_mode(s_xiaozhi_server, LV_LABEL_LONG_DOT);
+            }
             set_label_text_cached(s_xiaozhi_server, s_xiaozhi.connected ? "长按说话，松开发送" : "等待小智服务连接");
         }
     } else {
         lv_obj_remove_flag(s_time_xiaozhi, LV_OBJ_FLAG_HIDDEN);
         lv_obj_set_width(s_xiaozhi_server, 186);
+        if (lv_label_get_long_mode(s_xiaozhi_server) != LV_LABEL_LONG_DOT) {
+            lv_label_set_long_mode(s_xiaozhi_server, LV_LABEL_LONG_DOT);
+        }
         set_label_text_cached(s_xiaozhi_server, "长按说话");
     }
     /* Hand the desired lifecycle to the supervisor task; starting or stopping
