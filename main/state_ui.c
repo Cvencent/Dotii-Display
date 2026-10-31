@@ -1818,19 +1818,21 @@ static void render_xiaozhi_expression(void)
             /* Transport states carry their own meaning, and being spoken to
                keeps the character awake. */
             xiaozhi_face_activity();
-            /* The cloud drops idle sockets about once a minute; every such
-               blip is a CONNECTING state that resolves within seconds. Only
-               switch to the spinning reconnecting face after the reconnect
-               has clearly stalled — otherwise the face flashes a spinner
-               every minute while the user is just not talking. */
-            if (session == XIAOZHI_STATE_CONNECTING &&
-                s_xz_face_session == XIAOZHI_STATE_IDLE &&
-                s_xz_connecting_since_ms == 0) {
-                s_xz_connecting_since_ms = now;
+            /* The cloud drops idle sockets about once a minute and the whole
+               reconnect (backoff + TLS) takes up to ~10 s. Every such blip
+               would otherwise drive the face into the spinning RECONNECTING
+               expression repeatedly while the user is simply not talking.
+               A connecting state counts as real trouble only once it has
+               clearly outlived a normal reconnect: hold the previous face
+               (or neutral) until 30 s. */
+            if (session == XIAOZHI_STATE_CONNECTING) {
+                if (s_xz_connecting_since_ms == 0) s_xz_connecting_since_ms = now;
+            } else {
+                s_xz_connecting_since_ms = 0;
             }
             const bool connecting_settled =
                 session != XIAOZHI_STATE_CONNECTING ||
-                (now - s_xz_connecting_since_ms) >= 10000;
+                (now - s_xz_connecting_since_ms) >= 30000;
             if (connecting_settled) {
                 xiaozhi_emotion = xiaozhi_client_emotion_policy(
                     session, server_emotion, s_xiaozhi.last_text);
@@ -1840,7 +1842,6 @@ static void render_xiaozhi_expression(void)
             } else {
                 xiaozhi_emotion = NULL;
             }
-            if (session != XIAOZHI_STATE_CONNECTING) s_xz_connecting_since_ms = 0;
             if (session == XIAOZHI_STATE_ERROR && xiaozhi_emotion != NULL &&
                 !(xiaozhi_emotion[0] == '3' && xiaozhi_emotion[1] == '4')) {
                 xiaozhi_emotion = "34";
